@@ -15,6 +15,7 @@ import { QuiltPaths } from "./paths.js";
 import type {
   Actor,
   ActorsFile,
+  ClobbersFile,
   Config,
   LedgerEvent,
   ObservedFile,
@@ -132,6 +133,22 @@ export class Store {
     writeJson(this.paths.ownership, ownership);
   }
 
+  // --- clobbers + snapshots ---
+  readClobbers(): ClobbersFile {
+    return readJson<ClobbersFile>(this.paths.clobbers, { clobbers: [] });
+  }
+  writeClobbers(file: ClobbersFile): void {
+    writeJson(this.paths.clobbers, file);
+  }
+  /** Persist file content as a snapshot blob and return its id. */
+  preserveSnapshot(id: string, content: string): void {
+    writeFileSync(this.paths.snapshot(id), content);
+  }
+  readSnapshot(id: string): string | null {
+    const p = this.paths.snapshot(id);
+    return existsSync(p) ? readFileSync(p, "utf8") : null;
+  }
+
   // --- ledger ---
   appendLedger(event: LedgerEvent): void {
     appendFileSync(this.paths.ledger, JSON.stringify(event) + "\n");
@@ -182,7 +199,13 @@ export class Store {
           rmSync(lockPath, { force: true });
           continue;
         }
-        if (Date.now() - start > MAX_WAIT) break; // holder alive but very slow; proceed best-effort
+        if (Date.now() - start > MAX_WAIT) {
+          // A live holder has kept the lock far too long. Fail loudly rather
+          // than run unlocked and risk corrupting ownership/observed state.
+          throw new Error(
+            "quilt: timed out waiting for .quilt/lock — check for a hung process",
+          );
+        }
         sleepSync(25);
       }
     }

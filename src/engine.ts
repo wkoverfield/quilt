@@ -1,5 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { changedPaths, headBlob } from "./git.js";
 import {
   buildHunks,
@@ -7,6 +8,7 @@ import {
   lineDiff,
   looksBinary,
   splitLines,
+  MAX_LCS_CELLS,
   type Hunk,
 } from "./diff.js";
 import type { Store } from "./state.js";
@@ -45,12 +47,22 @@ export interface WorktreeModel {
 
 function readWorktree(repoRoot: string, relPath: string): string | null {
   const abs = join(repoRoot, relPath);
-  if (!existsSync(abs)) return null;
   try {
+    // lstat (not stat) so a symlink is never followed — Quilt must not read or
+    // snapshot whatever a symlink points at (could be outside the repo).
+    const st = lstatSync(abs);
+    if (st.isSymbolicLink() || !st.isFile()) return null;
     return readFileSync(abs, "utf8");
   } catch {
     return null;
   }
+}
+
+function lineCount(text: string | null): number {
+  if (!text) return 0;
+  let n = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+  return n;
 }
 
 /** The union of paths Quilt should consider this pass. */
@@ -90,26 +102,80 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   const repoRoot = store.paths.repoRoot;
   const ownership = store.readOwnership();
   const observed = store.readObserved();
+  const clobbers = store.readClobbers();
+  let clobbersChanged = false;
 
   for (const path of relevantPaths(store)) {
     const head = headBlob(repoRoot, path);
     const current = readWorktree(repoRoot, path);
 
+    // Baseline for "what changed since we last looked".
+    const observedHasKey = Object.prototype.hasOwnProperty.call(
+      observed.files,
+      path,
+    );
+    const baseline = observedHasKey ? observed.files[path] ?? null : head;
+
     const binary =
       (head !== null && looksBinary(head)) ||
       (current !== null && looksBinary(current));
+    // For files too large to diff reliably, the LCS engine falls back to a
+    // whole-file replace, which would flag every owned line as removed and fire
+    // spurious clobbers. Treat them like binary: observe but don't attribute.
+    // Guard the ACTUAL diff inputs — both the attribution diff (baseline→current,
+    // where baseline can be the much-larger observed content) and the prune diff
+    // (head→current).
+    const tooLarge =
+      lineCount(baseline) * lineCount(current) > MAX_LCS_CELLS ||
+      lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
 
-    if (!binary && activeActorId) {
-      // Baseline for "what changed since we last looked".
-      const observedHasKey = Object.prototype.hasOwnProperty.call(
-        observed.files,
-        path,
-      );
-      const baseline = observedHasKey ? observed.files[path] ?? null : head;
-
+    if (!binary && !tooLarge && activeActorId) {
       const delta = lineDiff(baseline ?? "", current ?? "");
       const file = (ownership.files[path] ??= { added: {}, removed: {} });
       const conflicts = ownership.conflicts;
+
+      // Clobber detection: the active actor is removing lines that ANOTHER actor
+      // owns (uncommitted). Preserve the victim's pre-clobber content so it can
+      // be restored — detect-and-preserve, nothing is silently lost.
+      const victims = new Map<string, string[]>();
+      for (const op of delta) {
+        if (op.type !== "del" || isTrivialLine(op.text)) continue;
+        const owner = file.added[op.text];
+        if (owner && owner !== activeActorId) {
+          const sample = victims.get(owner) ?? [];
+          if (sample.length < 3) sample.push(op.text);
+          victims.set(owner, sample);
+        }
+      }
+      if (victims.size > 0 && baseline) {
+        // One snapshot per file per clobber event: `baseline` is the whole
+        // pre-clobber file, which already contains every victim's lines, so all
+        // victims of this event share the snapshot (each restores the same full
+        // file and fishes out their own lines).
+        const snapshotId = randomUUID().slice(0, 12);
+        store.preserveSnapshot(snapshotId, baseline);
+        for (const [victim, sampleLines] of victims) {
+          clobbers.clobbers.push({
+            id: randomUUID().slice(0, 12),
+            ts: new Date().toISOString(),
+            path,
+            victimActor: victim,
+            byActor: activeActorId,
+            snapshotId,
+            sampleLines,
+            restored: false,
+          });
+          store.appendLedger({
+            ts: new Date().toISOString(),
+            type: "clobber.detected",
+            path,
+            victimActor: victim,
+            byActor: activeActorId,
+            snapshotId,
+          });
+        }
+        clobbersChanged = true;
+      }
 
       for (const op of delta) {
         if (op.type === "eq") continue;
@@ -160,6 +226,7 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
 
   store.writeOwnership(ownership);
   store.writeObserved(observed);
+  if (clobbersChanged) store.writeClobbers(clobbers);
 }
 
 function classifyHunk(
@@ -220,7 +287,8 @@ export function buildModel(
 
     const binary =
       (head !== null && looksBinary(head)) ||
-      (current !== null && looksBinary(current));
+      (current !== null && looksBinary(current)) ||
+      lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
 
     const model: FileModel = {
       path,

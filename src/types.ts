@@ -64,3 +64,27 @@ export interface LedgerEvent {
   type: string;
   [key: string]: unknown;
 }
+
+/**
+ * A recorded clobber: an actor's edit overwrote uncommitted lines that another
+ * actor owned. The victim's pre-clobber file content is preserved as a snapshot
+ * so `quilt restore` can recover it — nothing is silently lost.
+ */
+export interface ClobberRecord {
+  id: string;
+  ts: string;
+  path: string;
+  /** actor whose uncommitted work was overwritten */
+  victimActor: string;
+  /** actor who made the overwriting edit */
+  byActor: string;
+  /** id of the preserved pre-clobber snapshot blob */
+  snapshotId: string;
+  /** a few sample lines that were overwritten, for display */
+  sampleLines: string[];
+  restored: boolean;
+}
+
+export interface ClobbersFile {
+  clobbers: ClobberRecord[];
+}

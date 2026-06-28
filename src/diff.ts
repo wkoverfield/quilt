@@ -65,7 +65,7 @@ export function isTrivialLine(text: string): boolean {
   return /^[(){}\[\];,]+$/.test(t);
 }
 
-const MAX_LCS_CELLS = 6_000_000;
+export const MAX_LCS_CELLS = 6_000_000;
 
 /** Line-level diff via LCS. Falls back to full replace for very large inputs. */
 export function lineDiff(oldText: string, newText: string): DiffOp[] {
