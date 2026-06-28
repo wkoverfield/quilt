@@ -8,14 +8,14 @@
 quilt commit --mine
 ```
 
-Everyone else ran *toward* isolation — a worktree per agent, a branch per agent,
-reconcile at PR time. That trades one mess for another: `node_modules` and `.env`
-and build caches per worktree, plus a merge pile-up at the end. Quilt goes the
-other way. **Many agents, one checkout** — and it just knows who did what.
+Everyone else ran *toward* isolation: a worktree per agent, a branch per agent,
+reconcile at PR time. That trades one mess for another. You get `node_modules`,
+`.env`, and build caches per worktree, plus a merge pile-up at the end. Quilt
+goes the other way. **Many agents, one checkout**, and it just knows who did what.
 
 Git already supports partial staging (`git add -p`), but git doesn't know
 *which actor* made each hunk. Quilt adds that missing ownership layer while
-keeping Git as the source of truth: every commit it makes is an ordinary git
+keeping Git as the source of truth. Every commit it makes is an ordinary git
 commit.
 
 <!-- Demo GIF: record `./examples/demo.sh` and drop the asciinema/GIF link here. -->
@@ -36,16 +36,16 @@ everyone else's stays put.
 
 ## What it does
 
-- **Same-checkout actor ownership** — model humans, agents, and bots as actors
+- **Same-checkout actor ownership.** Model humans, agents, and bots as actors
   sharing one working tree.
-- **Hunk-level attribution** — Quilt tracks which actor produced which lines.
-- **Unclaimed / conflicted detection** — pre-existing or generated changes stay
+- **Hunk-level attribution.** Quilt tracks which actor produced which lines.
+- **Unclaimed / conflicted detection.** Pre-existing or generated changes stay
   unattributed; overlapping edits are surfaced, not silently committed.
-- **Preview-first `commit --mine`** — see the exact patch before anything moves.
-- **Preserves other actors' work** — committing yours leaves everyone else's
+- **Preview-first `commit --mine`.** See the exact patch before anything moves.
+- **Preserves other actors' work.** Committing yours leaves everyone else's
   changes untouched in the working tree.
 - **Human-readable status + stable JSON** for agents.
-- **Local-first** — all state lives under `.quilt/`. No account, no daemon, no
+- **Local-first.** All state lives under `.quilt/`. No account, no daemon, no
   hosted service.
 
 Quilt trusts Git and never rewrites it. Every commit Quilt produces is an
@@ -137,28 +137,28 @@ Run the watcher once and stop thinking about it:
 quilt watch
 ```
 
-It attributes edits to the active actor **as they happen** — no need to run
-`quilt status` to claim — and it catches collisions. When one actor's edit
+It attributes edits to the active actor **as they happen**, with no need to run
+`quilt status` to claim, and it catches collisions. When one actor's edit
 overwrites uncommitted lines another actor owns, Quilt preserves *both* versions
 and tells you:
 
 ```txt
-⚠ collision  claude-ui overwrote codex's edits in auth.ts — both saved · quilt restore auth.ts
+⚠ collision  claude-ui overwrote codex's edits in auth.ts. both saved, run: quilt restore auth.ts
 ```
 
 Nothing is silently lost. `quilt restore auth.ts` writes the overwritten version
-to a sidecar file (`auth.ts.quilt-codex`) so you can diff and merge — your
+to a sidecar file (`auth.ts.quilt-codex`) so you can diff and merge. Your
 current file is never touched.
 
 Preservation captures the victim's **last-observed** content, so keep `quilt
-watch` running while agents work — it keeps that snapshot current to each edit.
+watch` running while agents work. It keeps that snapshot current to each edit.
 Without the watcher, the preserved version is only as fresh as the last `quilt`
 command the victim ran.
 
-This is the same checkout's safety net: where two agents in one folder would
+This is the same checkout's safety net. Where two agents in one folder would
 normally clobber each other invisibly, Quilt makes the loss visible and
-recoverable. (Preventing the overwrite outright — advisory claims — arrives with
-the agent-facing MCP layer.)
+recoverable. (Preventing the overwrite outright, via advisory claims, arrives
+with the agent-facing MCP layer.)
 
 ## Agent-native: the MCP server
 
@@ -184,12 +184,12 @@ start_session  →  get_status  →  claim(files)  →  …edit…  →  commit_
 `claim` adds **advisory prevention** on top of the watcher's detect-and-preserve:
 if a file is already claimed by another actor, the call is denied and a
 well-behaved agent edits something else. Agents that ignore claims still get
-caught by collision detection — prevention for cooperators, a safety net for the
+caught by collision detection. Prevention for cooperators, a safety net for the
 rest.
 
 ## How attribution works
 
-Quilt is honest and conservative — a blocked commit beats a spooky one.
+Quilt is honest and conservative. A blocked commit beats a spooky one.
 
 Each `quilt` command runs a **reconcile** step:
 
@@ -208,17 +208,17 @@ applies that patch to a throwaway temporary index
 tree are never rewritten; other actors' changes stay exactly where they were.
 
 This means: **run a `quilt` command around your edit batch** (the intended
-agent workflow — call `status` before and after editing) so Quilt captures your
+agent workflow, calling `status` before and after editing) so Quilt captures your
 delta before another actor's.
 
 ### V0 limitations (honest)
 
 - Attribution keys on **line content** (blank lines and lone braces/punctuation
   are ignored so they don't false-conflict). Two actors adding the same
-  *substantive* line in different places can still be flagged as overlapping —
-  conservative by design. Precise per-edit attribution arrives with the watcher.
+  *substantive* line in different places can still be flagged as overlapping.
+  That's conservative by design. Precise per-edit attribution arrives with the watcher.
 - No tree-sitter/symbol ownership yet (V1).
-- No automatic conflict resolution — Quilt surfaces, it does not merge.
+- No automatic conflict resolution. Quilt surfaces, it does not merge.
 - Binary files are never attributed or committed by Quilt.
 - POSIX-first. CRLF / `core.autocrlf` repos on Windows aren't handled yet.
 
