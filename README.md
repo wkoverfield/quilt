@@ -89,15 +89,43 @@ shared pointer.
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
+| `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |
 | `quilt mine [--json]` | Summarize the changes you own. |
 | `quilt conflicts [--json]` | Show overlapping/shared changes. |
+| `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
 | `quilt whoami` | Show the active actor/session. |
 | `quilt end` | End the active session. |
 
 ---
+
+## Live attribution + collision rescue (`quilt watch`)
+
+Run the watcher once and stop thinking about it:
+
+```bash
+quilt watch
+```
+
+It attributes edits to the active actor **as they happen** — no need to run
+`quilt status` to claim — and it catches collisions. When one actor's edit
+overwrites uncommitted lines another actor owns, Quilt preserves *both* versions
+and tells you:
+
+```txt
+⚠ collision  claude-ui overwrote codex's edits in auth.ts — both saved · quilt restore auth.ts
+```
+
+Nothing is silently lost. `quilt restore auth.ts` writes the overwritten version
+to a sidecar file (`auth.ts.quilt-codex`) so you can diff and merge — your
+current file is never touched.
+
+This is the same checkout's safety net: where two agents in one folder would
+normally clobber each other invisibly, Quilt makes the loss visible and
+recoverable. (Preventing the overwrite outright — advisory claims — arrives with
+the agent-facing MCP layer.)
 
 ## How attribution works
 
@@ -146,6 +174,9 @@ delta before another actor's.
   current            # active session pointer for this checkout
   observed.json      # last-observed worktree snapshot (reconcile baseline)
   ownership.json     # per-file line ownership + conflicts
+  clobbers.json      # records of overwritten work, preserved for restore
+  snapshots/         # preserved pre-clobber file content
+  watcher.pid        # pidfile for a running `quilt watch`
   ledger.jsonl       # append-only event log
 ```
 

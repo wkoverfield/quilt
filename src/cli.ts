@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
 import { repoRoot, shortHead, headSha } from "./git.js";
@@ -9,6 +11,7 @@ import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
+import { runWatch, watcherRunning } from "./watch.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
 // Exit quietly when output is piped into a process that closes early
@@ -39,6 +42,19 @@ function requireStore(): Store {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Print any preserved (clobbered) work below a status view. */
+function printClobbers(store: Store): void {
+  const open = store.readClobbers().clobbers.filter((c) => !c.restored);
+  if (open.length === 0) return;
+  process.stdout.write(pc.red(pc.bold("  Collisions caught (work preserved):\n")));
+  for (const c of open) {
+    process.stdout.write(
+      `    ${c.path}   ${pc.dim(`${c.byActor} overwrote ${c.victimActor}`)}\n`,
+    );
+  }
+  process.stdout.write(pc.dim("    recover with: quilt restore <path>\n\n"));
 }
 
 const program = new Command();
@@ -138,6 +154,10 @@ program
       return;
     }
     process.stdout.write(renderStatus(model, shortHead(store.paths.repoRoot)));
+    if (watcherRunning(store)) {
+      process.stdout.write(pc.dim("  watching: live (quilt watch)\n\n"));
+    }
+    printClobbers(store);
   });
 
 program
@@ -297,6 +317,75 @@ program
         pc.dim(`  Left untouched in shared files: ${selection.blockedFiles.join(", ")}\n`),
       );
     }
+  });
+
+program
+  .command("watch")
+  .description("Watch the working tree: attribute edits live and catch collisions")
+  .action(() => {
+    const store = requireStore();
+    runWatch(store);
+  });
+
+program
+  .command("restore")
+  .description("List or restore work that was overwritten (clobbered) by another actor")
+  .argument("[path]", "the file whose overwritten version to restore")
+  .option("--json", "emit clobber records as JSON")
+  .action((path: string | undefined, opts: { json?: boolean }) => {
+    const store = requireStore();
+    const all = store.readClobbers().clobbers;
+    const open = all.filter((c) => !c.restored);
+
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ clobbers: open }, null, 2) + "\n");
+      return;
+    }
+
+    if (!path) {
+      if (open.length === 0) {
+        process.stdout.write(pc.green("✓ ") + "Nothing to restore — no overwritten work.\n");
+        return;
+      }
+      process.stdout.write(pc.bold("\n  Overwritten work (preserved):\n\n"));
+      for (const c of open) {
+        process.stdout.write(
+          `    ${c.path}   ${pc.dim(`${c.byActor} over ${c.victimActor}`)}\n` +
+            pc.dim(`      restore with: quilt restore ${c.path}\n`),
+        );
+      }
+      process.stdout.write("\n");
+      return;
+    }
+
+    // Restore the most recent preserved version for this path to a safe sidecar
+    // file, so the current working-tree content is never destroyed.
+    const match = [...open].reverse().find((c) => c.path === path);
+    if (!match) {
+      fail(`no preserved version found for ${path}. Run \`quilt restore\` to list.`);
+    }
+    const content = store.readSnapshot(match!.snapshotId);
+    if (content === null) fail(`snapshot for ${path} is missing.`);
+    const sidecar = `${path}.quilt-${match!.victimActor.replace(/[^\w.-]+/g, "-")}`;
+    writeFileSync(join(store.paths.repoRoot, sidecar), content!);
+
+    const clobbers = store.readClobbers();
+    for (const c of clobbers.clobbers) {
+      if (c.id === match!.id) c.restored = true;
+    }
+    store.writeClobbers(clobbers);
+    store.appendLedger({
+      ts: new Date().toISOString(),
+      type: "clobber.restored",
+      path,
+      sidecar,
+      snapshotId: match!.snapshotId,
+    });
+    process.stdout.write(
+      pc.green("✓ ") +
+        `Restored ${pc.bold(match!.victimActor)}'s overwritten version of ${path}\n` +
+        pc.dim(`  → ${sidecar} (your current file is untouched; diff and merge as needed)\n`),
+    );
   });
 
 program

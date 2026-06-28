@@ -37,4 +37,15 @@ export class QuiltPaths {
   get snapshotsDir(): string {
     return join(this.dir, "snapshots");
   }
+  snapshot(id: string): string {
+    return join(this.snapshotsDir, `${id}.blob`);
+  }
+  /** Records of overwritten work preserved for `quilt restore`. */
+  get clobbers(): string {
+    return join(this.dir, "clobbers.json");
+  }
+  /** Pidfile for a running `quilt watch` process. */
+  get watcherPid(): string {
+    return join(this.dir, "watcher.pid");
+  }
 }

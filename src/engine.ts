@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { changedPaths, headBlob } from "./git.js";
 import {
   buildHunks,
@@ -90,6 +91,8 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   const repoRoot = store.paths.repoRoot;
   const ownership = store.readOwnership();
   const observed = store.readObserved();
+  const clobbers = store.readClobbers();
+  let clobbersChanged = false;
 
   for (const path of relevantPaths(store)) {
     const head = headBlob(repoRoot, path);
@@ -110,6 +113,45 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       const delta = lineDiff(baseline ?? "", current ?? "");
       const file = (ownership.files[path] ??= { added: {}, removed: {} });
       const conflicts = ownership.conflicts;
+
+      // Clobber detection: the active actor is removing lines that ANOTHER actor
+      // owns (uncommitted). Preserve the victim's pre-clobber content so it can
+      // be restored — detect-and-preserve, nothing is silently lost.
+      const victims = new Map<string, string[]>();
+      for (const op of delta) {
+        if (op.type !== "del" || isTrivialLine(op.text)) continue;
+        const owner = file.added[op.text];
+        if (owner && owner !== activeActorId) {
+          const sample = victims.get(owner) ?? [];
+          if (sample.length < 3) sample.push(op.text);
+          victims.set(owner, sample);
+        }
+      }
+      if (victims.size > 0 && baseline) {
+        const snapshotId = randomUUID().slice(0, 12);
+        store.preserveSnapshot(snapshotId, baseline);
+        for (const [victim, sampleLines] of victims) {
+          clobbers.clobbers.push({
+            id: randomUUID().slice(0, 12),
+            ts: new Date().toISOString(),
+            path,
+            victimActor: victim,
+            byActor: activeActorId,
+            snapshotId,
+            sampleLines,
+            restored: false,
+          });
+          store.appendLedger({
+            ts: new Date().toISOString(),
+            type: "clobber.detected",
+            path,
+            victimActor: victim,
+            byActor: activeActorId,
+            snapshotId,
+          });
+        }
+        clobbersChanged = true;
+      }
 
       for (const op of delta) {
         if (op.type === "eq") continue;
@@ -160,6 +202,7 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
 
   store.writeOwnership(ownership);
   store.writeObserved(observed);
+  if (clobbersChanged) store.writeClobbers(clobbers);
 }
 
 function classifyHunk(

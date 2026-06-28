@@ -15,6 +15,7 @@ import { QuiltPaths } from "./paths.js";
 import type {
   Actor,
   ActorsFile,
+  ClobbersFile,
   Config,
   LedgerEvent,
   ObservedFile,
@@ -130,6 +131,22 @@ export class Store {
   }
   writeOwnership(ownership: OwnershipFile): void {
     writeJson(this.paths.ownership, ownership);
+  }
+
+  // --- clobbers + snapshots ---
+  readClobbers(): ClobbersFile {
+    return readJson<ClobbersFile>(this.paths.clobbers, { clobbers: [] });
+  }
+  writeClobbers(file: ClobbersFile): void {
+    writeJson(this.paths.clobbers, file);
+  }
+  /** Persist file content as a snapshot blob and return its id. */
+  preserveSnapshot(id: string, content: string): void {
+    writeFileSync(this.paths.snapshot(id), content);
+  }
+  readSnapshot(id: string): string | null {
+    const p = this.paths.snapshot(id);
+    return existsSync(p) ? readFileSync(p, "utf8") : null;
   }
 
   // --- ledger ---
