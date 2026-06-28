@@ -1,7 +1,7 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { git, headRef, headSha } from "./git.js";
+import { git, headFileMode, headRef, headSha } from "./git.js";
 import { renderPatch } from "./diff.js";
 import {
   hunkChangedLines,
@@ -36,8 +36,19 @@ const COMMITTABLE: HunkOwnership[] = ["mine"];
  * "mine" hunks are selected; pass includeMixed to also take "mixed" hunks
  * (those that sit alongside unattributed changes in the same hunk).
  */
+/** git mode for a working-tree file: 100755 if executable, else 100644. */
+function worktreeMode(repoRoot: string, relPath: string): string {
+  try {
+    const m = statSync(join(repoRoot, relPath)).mode;
+    return (m & 0o111) !== 0 ? "100755" : "100644";
+  } catch {
+    return "100644";
+  }
+}
+
 export function selectOwned(
   model: WorktreeModel,
+  repoRoot: string,
   opts: { includeMixed?: boolean } = {},
 ): Selection {
   const committable = new Set<HunkOwnership>(COMMITTABLE);
@@ -66,7 +77,15 @@ export function selectOwned(
     }
 
     const patch = renderPatch(
-      { relPath: file.path, oldText: file.oldText, newText: file.newText },
+      {
+        relPath: file.path,
+        oldText: file.oldText,
+        newText: file.newText,
+        newMode: file.isNew ? worktreeMode(repoRoot, file.path) : undefined,
+        oldMode: file.isDeleted
+          ? headFileMode(repoRoot, file.path) ?? undefined
+          : undefined,
+      },
       selected.map((h) => h.hunk),
     );
     patches.push(patch);

@@ -106,9 +106,13 @@ export function headBlob(cwd: string, relPath: string): string | null {
  * relative to the repo root. Uses NUL-delimited porcelain for safety.
  */
 export function changedPaths(cwd: string): string[] {
-  const res = git(["status", "--porcelain=1", "-z", "--untracked-files=all"], {
-    cwd,
-  });
+  // --no-renames makes a rename surface as a delete + add, which Quilt can
+  // attribute and commit independently. With rename detection on, the old path
+  // is hidden and `commit --mine` would duplicate the file instead of moving it.
+  const res = git(
+    ["status", "--porcelain=1", "-z", "--untracked-files=all", "--no-renames"],
+    { cwd },
+  );
   const out: string[] = [];
   const parts = res.stdout.split("\0");
   for (let i = 0; i < parts.length; i++) {
@@ -134,4 +138,21 @@ export function isTracked(cwd: string, relPath: string): boolean {
     check: false,
   });
   return res.status === 0;
+}
+
+/**
+ * The git file mode of a path at HEAD (e.g. "100644", "100755", "120000" for a
+ * symlink), or null if the path does not exist at HEAD. Used so `commit --mine`
+ * preserves the executable bit and symlink type when staging deletes/changes.
+ */
+export function headFileMode(cwd: string, relPath: string): string | null {
+  const sha = headSha(cwd);
+  if (!sha) return null;
+  const res = git(["ls-tree", "HEAD", "--", relPath], { cwd, check: false });
+  if (res.status !== 0) return null;
+  const line = res.stdout.trim();
+  if (!line) return null;
+  // Format: "<mode> <type> <sha>\t<path>"
+  const mode = line.split(/\s+/)[0];
+  return mode ?? null;
 }

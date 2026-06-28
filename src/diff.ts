@@ -159,7 +159,14 @@ export function buildHunks(ops: DiffOp[], context = 3): Hunk[] {
 
 const NO_NEWLINE = "\\ No newline at end of file";
 
-/** Render a single hunk's body (the @@ header plus content lines). */
+/**
+ * Render a single hunk's body (the @@ header plus content lines), correctly
+ * placing "\ No newline at end of file" markers. The tricky case: when a file
+ * has no trailing newline and the last line is a context line that the other
+ * side extends past, git splits that line into a remove + add so each side can
+ * carry its own newline status. We reproduce that exactly so `git apply` accepts
+ * the patch.
+ */
 function renderHunkBody(
   hunk: Hunk,
   oldFinalNewline: boolean,
@@ -168,16 +175,43 @@ function renderHunkBody(
 ): string {
   const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
   const lines: string[] = [header];
-  for (let k = 0; k < hunk.ops.length; k++) {
-    const op = hunk.ops[k]!;
-    const prefix = op.type === "eq" ? " " : op.type === "del" ? "-" : "+";
-    lines.push(prefix + op.text);
-    if (isLastHunk && k === hunk.ops.length - 1) {
-      // Emit the "no newline" marker for whichever side this final line belongs to.
-      if (op.type === "del" && !oldFinalNewline) lines.push(NO_NEWLINE);
-      else if (op.type === "add" && !newFinalNewline) lines.push(NO_NEWLINE);
-      else if (op.type === "eq" && (!oldFinalNewline || !newFinalNewline)) {
-        lines.push(NO_NEWLINE);
+  const ops = hunk.ops;
+
+  // The last line belonging to each side within this hunk.
+  let lastOld = -1;
+  let lastNew = -1;
+  for (let k = 0; k < ops.length; k++) {
+    const t = ops[k]!.type;
+    if (t === "eq" || t === "del") lastOld = k;
+    if (t === "eq" || t === "add") lastNew = k;
+  }
+
+  for (let k = 0; k < ops.length; k++) {
+    const op = ops[k]!;
+    const oldEnds = isLastHunk && k === lastOld && !oldFinalNewline;
+    const newEnds = isLastHunk && k === lastNew && !newFinalNewline;
+
+    if (op.type === "del") {
+      lines.push("-" + op.text);
+      if (oldEnds) lines.push(NO_NEWLINE);
+    } else if (op.type === "add") {
+      lines.push("+" + op.text);
+      if (newEnds) lines.push(NO_NEWLINE);
+    } else {
+      // Context line. If only one side ends here without a newline, the line
+      // must be split into a remove + add so the markers attach correctly.
+      const isOldEnd = isLastHunk && k === lastOld;
+      const isNewEnd = isLastHunk && k === lastNew;
+      if (isOldEnd && isNewEnd && oldEnds === newEnds) {
+        lines.push(" " + op.text);
+        if (oldEnds) lines.push(NO_NEWLINE);
+      } else if (oldEnds || newEnds) {
+        lines.push("-" + op.text);
+        if (oldEnds) lines.push(NO_NEWLINE);
+        lines.push("+" + op.text);
+        if (newEnds) lines.push(NO_NEWLINE);
+      } else {
+        lines.push(" " + op.text);
       }
     }
   }
@@ -188,6 +222,10 @@ export interface PatchOptions {
   relPath: string;
   oldText: string | null;
   newText: string | null;
+  /** git mode for a newly added file (defaults to 100644). */
+  newMode?: string;
+  /** git mode the file had at HEAD, for a deletion (defaults to 100644). */
+  oldMode?: string;
 }
 
 /**
@@ -205,8 +243,8 @@ export function renderPatch(opts: PatchOptions, hunks: Hunk[]): string {
 
   const out: string[] = [];
   out.push(`diff --git a/${relPath} b/${relPath}`);
-  if (isNew) out.push("new file mode 100644");
-  if (isDeleted) out.push("deleted file mode 100644");
+  if (isNew) out.push(`new file mode ${opts.newMode ?? "100644"}`);
+  if (isDeleted) out.push(`deleted file mode ${opts.oldMode ?? "100644"}`);
   out.push(`--- ${isNew ? "/dev/null" : "a/" + relPath}`);
   out.push(`+++ ${isDeleted ? "/dev/null" : "b/" + relPath}`);
 
