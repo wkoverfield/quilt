@@ -491,8 +491,10 @@ program
   .action(async () => {
     const store = requireStore();
     // Hand stdout to the MCP transport: drop the exit-on-EPIPE handler so a
-    // transient pipe error can't silently kill the server. The SDK shuts the
-    // server down on stdin EOF (the proper MCP disconnect signal) instead.
+    // transient pipe error can't silently kill the server, and swallow stdout
+    // errors instead. Tradeoff: a truly broken stdout would stall sends rather
+    // than crash — acceptable, since normal disconnect arrives as stdin EOF,
+    // which the SDK transport uses to shut the server down cleanly.
     process.stdout.removeListener("error", epipeExit);
     process.stdout.on("error", () => {});
     await runMcpServer(store);
