@@ -15,6 +15,7 @@ import { QuiltPaths } from "./paths.js";
 import type {
   Actor,
   ActorsFile,
+  ClaimsFile,
   ClobbersFile,
   Config,
   LedgerEvent,
@@ -147,6 +148,14 @@ export class Store {
   readSnapshot(id: string): string | null {
     const p = this.paths.snapshot(id);
     return existsSync(p) ? readFileSync(p, "utf8") : null;
+  }
+
+  // --- claims ---
+  readClaims(): ClaimsFile {
+    return readJson<ClaimsFile>(this.paths.claims, { claims: [] });
+  }
+  writeClaims(file: ClaimsFile): void {
+    writeJson(this.paths.claims, file);
   }
 
   // --- ledger ---

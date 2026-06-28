@@ -12,6 +12,8 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
+import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
+import { runMcpServer } from "./mcp.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
 // Exit quietly when output is piped into a process that closes early
@@ -42,6 +44,17 @@ function requireStore(): Store {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Print active advisory claims below a status view. */
+function printClaims(store: Store): void {
+  const claims = listClaims(store, Date.now());
+  if (claims.length === 0) return;
+  process.stdout.write(pc.dim(pc.bold("  Claimed (reserved for editing):\n")));
+  for (const c of claims) {
+    process.stdout.write(`    ${c.path}   ${pc.dim(c.actor)}\n`);
+  }
+  process.stdout.write("\n");
 }
 
 /** Print any preserved (clobbered) work below a status view. */
@@ -157,6 +170,7 @@ program
     if (watcherRunning(store)) {
       process.stdout.write(pc.dim("  watching: live (quilt watch)\n\n"));
     }
+    printClaims(store);
     printClobbers(store);
   });
 
@@ -400,6 +414,81 @@ program
         `Restored ${pc.bold(match!.victimActor)}'s overwritten version of ${match!.path}\n` +
         pc.dim(`  → ${sidecarRel} (your current file is untouched; diff and merge as needed)\n`),
     );
+  });
+
+program
+  .command("claim")
+  .description("Reserve files for editing (advisory) so other actors stay off them")
+  .argument("[paths...]", "files to claim; with none, lists active claims")
+  .option("--json", "emit JSON")
+  .action((paths: string[], opts: { json?: boolean }) => {
+    const store = requireStore();
+    const ctx = activeContext(store);
+
+    if (!paths || paths.length === 0) {
+      const claims = listClaims(store, Date.now());
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ claims }, null, 2) + "\n");
+        return;
+      }
+      if (claims.length === 0) {
+        process.stdout.write(pc.dim("No active claims.\n"));
+        return;
+      }
+      process.stdout.write(pc.bold("\n  Active claims:\n\n"));
+      for (const c of claims) {
+        process.stdout.write(`    ${c.path}   ${pc.dim(c.actor)}\n`);
+      }
+      process.stdout.write("\n");
+      return;
+    }
+
+    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>` first.");
+    const results = acquireClaims(
+      store,
+      ctx.actorId!,
+      ctx.session?.id ?? null,
+      paths,
+      Date.now(),
+    );
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ results }, null, 2) + "\n");
+    } else {
+      for (const r of results) {
+        if (r.granted) {
+          process.stdout.write(pc.green("  ✓ claimed ") + r.path + "\n");
+        } else {
+          process.stdout.write(
+            pc.red("  ✗ denied  ") + `${r.path} ${pc.dim(`(held by ${r.holder})`)}\n`,
+          );
+        }
+      }
+    }
+    if (results.some((r) => !r.granted)) process.exitCode = 1;
+  });
+
+program
+  .command("release")
+  .description("Release your claims (with no paths, releases all of yours)")
+  .argument("[paths...]", "files to release")
+  .action((paths: string[]) => {
+    const store = requireStore();
+    const ctx = activeContext(store);
+    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>` first.");
+    const n = releaseClaims(
+      store,
+      ctx.actorId!,
+      paths && paths.length > 0 ? paths : null,
+    );
+    process.stdout.write(pc.green("✓ ") + `Released ${n} claim${n === 1 ? "" : "s"}.\n`);
+  });
+
+program
+  .command("mcp")
+  .description("Run the Quilt MCP server (stdio) for agent integration")
+  .action(async () => {
+    const store = requireStore();
+    await runMcpServer(store);
   });
 
 program

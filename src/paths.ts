@@ -48,4 +48,8 @@ export class QuiltPaths {
   get watcherPid(): string {
     return join(this.dir, "watcher.pid");
   }
+  /** Advisory file claims (reservations) held by actors. */
+  get claims(): string {
+    return join(this.dir, "claims.json");
+  }
 }
