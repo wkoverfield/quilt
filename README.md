@@ -125,11 +125,14 @@ delta before another actor's.
 
 ### V0 limitations (honest)
 
-- Attribution keys on **line content**, so two actors adding an identical line
-  can be flagged as overlapping. This is conservative by design.
+- Attribution keys on **line content** (blank lines and lone braces/punctuation
+  are ignored so they don't false-conflict). Two actors adding the same
+  *substantive* line in different places can still be flagged as overlapping —
+  conservative by design. Precise per-edit attribution arrives with the watcher.
 - No tree-sitter/symbol ownership yet (V1).
 - No automatic conflict resolution — Quilt surfaces, it does not merge.
 - Binary files are never attributed or committed by Quilt.
+- POSIX-first. CRLF / `core.autocrlf` repos on Windows aren't handled yet.
 
 ---
 

@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { git, headFileMode, headRef, headSha } from "./git.js";
 import { renderPatch } from "./diff.js";
 import {
@@ -138,6 +138,14 @@ export function commitSelection(
     return { committed: false, reason: "no owned changes to commit" };
   }
 
+  const mid = inProgressOperation(repoRoot);
+  if (mid) {
+    return {
+      committed: false,
+      reason: `a git ${mid} is in progress — finish or abort it before committing`,
+    };
+  }
+
   const base = headSha(repoRoot); // null on an unborn branch
   const tmp = mkdtempSync(join(tmpdir(), "quilt-idx-"));
   const indexFile = join(tmp, "index");
@@ -171,29 +179,47 @@ export function commitSelection(
       return { committed: false, reason: "dry-run" };
     }
 
-    const authorEnv: Record<string, string> = {
+    const email = actor.email ?? `${actor.id}@quilt.local`;
+    // Author AND committer are the actor, so `git log --format='%an / %cn'`
+    // attributes the commit to the actor rather than the local git config.
+    const identityEnv: Record<string, string> = {
       GIT_AUTHOR_NAME: actor.displayName,
-      GIT_AUTHOR_EMAIL: actor.email ?? `${actor.id}@quilt.local`,
+      GIT_AUTHOR_EMAIL: email,
+      GIT_COMMITTER_NAME: actor.displayName,
+      GIT_COMMITTER_EMAIL: email,
     };
     const parentArgs = base ? ["-p", base] : [];
     const commitSha = git(
       ["commit-tree", tree, ...parentArgs, "-m", message],
-      { cwd: repoRoot, env: authorEnv },
+      { cwd: repoRoot, env: identityEnv },
     ).stdout.trim();
 
+    // Move the branch with a compare-and-swap on the old value. If another actor
+    // committed in the meantime, the CAS fails and we surface a retry instead of
+    // crashing or clobbering their commit. The commit object we wrote is simply
+    // left dangling (harmless, GC'd later).
     const ref = headRef(repoRoot) ?? "HEAD";
-    if (base) {
-      git(["update-ref", ref, commitSha, base], { cwd: repoRoot });
-    } else {
-      git(["update-ref", ref, commitSha], { cwd: repoRoot });
+    const updateArgs = base
+      ? ["update-ref", ref, commitSha, base]
+      : ["update-ref", ref, commitSha];
+    const updated = git(updateArgs, { cwd: repoRoot, check: false });
+    if (updated.status !== 0) {
+      return {
+        committed: false,
+        reason: "HEAD moved while committing — re-run `quilt commit --mine`",
+      };
     }
 
     // Sync the real index for the committed paths up to the new HEAD so git
     // doesn't show the just-committed hunks as a staged "reversal". The working
-    // tree is never touched, so other actors' uncommitted edits stay put.
+    // tree is never touched, so other actors' uncommitted edits stay put. Chunk
+    // the paths so a very large commit can't blow past the argv length limit.
     const paths = selection.files.map((f) => f.path);
-    if (paths.length) {
-      git(["reset", "-q", "--", ...paths], { cwd: repoRoot, check: false });
+    for (let i = 0; i < paths.length; i += 200) {
+      git(["reset", "-q", "--", ...paths.slice(i, i + 200)], {
+        cwd: repoRoot,
+        check: false,
+      });
     }
 
     return { committed: true, commitSha };
@@ -204,4 +230,43 @@ export function commitSelection(
 
 export function fileHunkLines(file: FileModel): number {
   return file.hunks.reduce((n, h) => n + hunkChangedLines(h.hunk), 0);
+}
+
+/**
+ * Detects an in-progress merge/rebase/cherry-pick/revert. Committing on top of a
+ * half-finished operation would produce incorrect history, so `commit --mine`
+ * refuses until it's resolved.
+ */
+function inProgressOperation(repoRoot: string): string | null {
+  const named: Array<[string, string]> = [
+    ["MERGE_HEAD", "merge"],
+    ["CHERRY_PICK_HEAD", "cherry-pick"],
+    ["REVERT_HEAD", "revert"],
+    ["BISECT_LOG", "bisect"],
+  ];
+  for (const [refName, label] of named) {
+    if (
+      git(["rev-parse", "-q", "--verify", refName], {
+        cwd: repoRoot,
+        check: false,
+      }).status === 0
+    ) {
+      return label;
+    }
+  }
+  const gitDirOut = git(["rev-parse", "--git-dir"], {
+    cwd: repoRoot,
+    check: false,
+  });
+  if (gitDirOut.status === 0) {
+    const raw = gitDirOut.stdout.trim();
+    const gitDir = isAbsolute(raw) ? raw : join(repoRoot, raw);
+    if (
+      existsSync(join(gitDir, "rebase-merge")) ||
+      existsSync(join(gitDir, "rebase-apply"))
+    ) {
+      return "rebase";
+    }
+  }
+  return null;
 }

@@ -38,13 +38,31 @@ export function splitLines(text: string): SplitResult {
   return { lines: body.split("\n"), finalNewline };
 }
 
-/** True if content looks binary (contains a NUL byte in the first 8000 chars). */
+/**
+ * True if content looks binary (contains a NUL byte). UTF-8 decoding preserves
+ * NUL bytes, so scanning the decoded string is reliable for detection; we scan
+ * up to 1 MB so a binary file whose first kilobytes happen to be NUL-free (e.g.
+ * a media file with a text header) is still caught.
+ */
 export function looksBinary(text: string): boolean {
-  const limit = Math.min(text.length, 8000);
+  const limit = Math.min(text.length, 1_000_000);
   for (let i = 0; i < limit; i++) {
     if (text.charCodeAt(i) === 0) return true;
   }
   return false;
+}
+
+/**
+ * Structural/whitespace-only lines (blank lines, lone braces/brackets/punctuation)
+ * are excluded from per-line ownership: they recur identically all over a file, so
+ * content-keyed attribution would otherwise raise false conflicts when two actors
+ * each add a `}` in unrelated places. Such lines ride along with the substantive
+ * lines in their hunk instead of being owned on their own.
+ */
+export function isTrivialLine(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0) return true;
+  return /^[(){}\[\];,]+$/.test(t);
 }
 
 const MAX_LCS_CELLS = 6_000_000;
@@ -171,11 +189,20 @@ function renderHunkBody(
   hunk: Hunk,
   oldFinalNewline: boolean,
   newFinalNewline: boolean,
-  isLastHunk: boolean,
+  totalOld: number,
+  totalNew: number,
 ): string {
   const header = `@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`;
   const lines: string[] = [header];
   const ops = hunk.ops;
+
+  // Whether THIS hunk actually reaches the final line of each side's file.
+  // Computed from line coverage, not hunk ordering, so a "no newline" marker is
+  // never emitted mid-file when committing a subset of a file's hunks.
+  const reachesOldEof =
+    hunk.oldLines > 0 && hunk.oldStart + hunk.oldLines - 1 === totalOld;
+  const reachesNewEof =
+    hunk.newLines > 0 && hunk.newStart + hunk.newLines - 1 === totalNew;
 
   // The last line belonging to each side within this hunk.
   let lastOld = -1;
@@ -188,8 +215,10 @@ function renderHunkBody(
 
   for (let k = 0; k < ops.length; k++) {
     const op = ops[k]!;
-    const oldEnds = isLastHunk && k === lastOld && !oldFinalNewline;
-    const newEnds = isLastHunk && k === lastNew && !newFinalNewline;
+    const isOldEnd = reachesOldEof && k === lastOld;
+    const isNewEnd = reachesNewEof && k === lastNew;
+    const oldEnds = isOldEnd && !oldFinalNewline;
+    const newEnds = isNewEnd && !newFinalNewline;
 
     if (op.type === "del") {
       lines.push("-" + op.text);
@@ -198,10 +227,8 @@ function renderHunkBody(
       lines.push("+" + op.text);
       if (newEnds) lines.push(NO_NEWLINE);
     } else {
-      // Context line. If only one side ends here without a newline, the line
-      // must be split into a remove + add so the markers attach correctly.
-      const isOldEnd = isLastHunk && k === lastOld;
-      const isNewEnd = isLastHunk && k === lastNew;
+      // Context line. If only one side ends here without a newline, split it
+      // into a remove + add so each side carries its own newline status.
       if (isOldEnd && isNewEnd && oldEnds === newEnds) {
         lines.push(" " + op.text);
         if (oldEnds) lines.push(NO_NEWLINE);
@@ -241,6 +268,9 @@ export function renderPatch(opts: PatchOptions, hunks: Hunk[]): string {
   const oldFinal = opts.oldText === null ? true : splitLines(opts.oldText).finalNewline;
   const newFinal = opts.newText === null ? true : splitLines(opts.newText).finalNewline;
 
+  const totalOld = opts.oldText === null ? 0 : splitLines(opts.oldText).lines.length;
+  const totalNew = opts.newText === null ? 0 : splitLines(opts.newText).lines.length;
+
   const out: string[] = [];
   out.push(`diff --git a/${relPath} b/${relPath}`);
   if (isNew) out.push(`new file mode ${opts.newMode ?? "100644"}`);
@@ -248,8 +278,8 @@ export function renderPatch(opts: PatchOptions, hunks: Hunk[]): string {
   out.push(`--- ${isNew ? "/dev/null" : "a/" + relPath}`);
   out.push(`+++ ${isDeleted ? "/dev/null" : "b/" + relPath}`);
 
-  for (let h = 0; h < hunks.length; h++) {
-    out.push(renderHunkBody(hunks[h]!, oldFinal, newFinal, h === hunks.length - 1));
+  for (const hunk of hunks) {
+    out.push(renderHunkBody(hunk, oldFinal, newFinal, totalOld, totalNew));
   }
   return out.join("\n") + "\n";
 }

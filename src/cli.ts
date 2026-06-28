@@ -329,6 +329,9 @@ program
     }
     const session = { ...ctx.session, status: "ended" as const, endedAt: nowIso() };
     store.writeSession(session);
+    // Drop the active-session pointer so the next command doesn't resolve a
+    // stale, already-ended session as the active actor.
+    if (store.readCurrentSessionId() === session.id) store.clearCurrentSessionId();
     store.appendLedger({
       ts: nowIso(),
       type: "session.ended",

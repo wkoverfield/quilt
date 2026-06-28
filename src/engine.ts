@@ -1,7 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { changedPaths, headBlob } from "./git.js";
-import { buildHunks, lineDiff, looksBinary, splitLines, type Hunk } from "./diff.js";
+import {
+  buildHunks,
+  isTrivialLine,
+  lineDiff,
+  looksBinary,
+  splitLines,
+  type Hunk,
+} from "./diff.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
 
@@ -76,6 +83,10 @@ function changedLineSets(oldText: string | null, newText: string | null): {
  * (e.g. committed or reverted). Mutates and persists ownership + observed.
  */
 export function reconcile(store: Store, activeActorId: string | null): void {
+  store.withLock(() => reconcileLocked(store, activeActorId));
+}
+
+function reconcileLocked(store: Store, activeActorId: string | null): void {
   const repoRoot = store.paths.repoRoot;
   const ownership = store.readOwnership();
   const observed = store.readObserved();
@@ -102,6 +113,7 @@ export function reconcile(store: Store, activeActorId: string | null): void {
 
       for (const op of delta) {
         if (op.type === "eq") continue;
+        if (isTrivialLine(op.text)) continue;
         const map = op.type === "add" ? file.added : file.removed;
         const existing = map[op.text];
         if (existing && existing !== activeActorId) {
@@ -164,6 +176,9 @@ function classifyHunk(
 
   for (const op of hunk.ops) {
     if (op.type === "eq") continue;
+    // Trivial lines (braces, blanks) are neither owned nor counted as
+    // unattributed — they ride along with the hunk's substantive changes.
+    if (isTrivialLine(op.text)) continue;
     const map = op.type === "add" ? file?.added : file?.removed;
     const owner = map?.[op.text];
     if (owner) owners.add(owner);

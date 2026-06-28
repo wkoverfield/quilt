@@ -5,6 +5,10 @@ import {
   readdirSync,
   writeFileSync,
   appendFileSync,
+  openSync,
+  closeSync,
+  statSync,
+  rmSync,
 } from "node:fs";
 import { join } from "node:path";
 import { QuiltPaths } from "./paths.js";
@@ -105,6 +109,9 @@ export class Store {
   writeCurrentSessionId(id: string): void {
     writeFileSync(this.paths.current, id + "\n");
   }
+  clearCurrentSessionId(): void {
+    rmSync(this.paths.current, { force: true });
+  }
 
   // --- observed snapshot ---
   readObserved(): ObservedFile {
@@ -129,4 +136,47 @@ export class Store {
   appendLedger(event: LedgerEvent): void {
     appendFileSync(this.paths.ledger, JSON.stringify(event) + "\n");
   }
+
+  /**
+   * Run `fn` while holding an exclusive lock on .quilt, so concurrent actor
+   * processes can't interleave read-modify-write of ownership/observed state
+   * and lose each other's claims. The lock auto-expires after 10s (a crashed
+   * process never wedges the repo); after ~5s of contention we proceed anyway
+   * rather than block a developer's command indefinitely.
+   */
+  withLock<T>(fn: () => T): T {
+    const lockPath = this.paths.dir + "/lock";
+    const start = Date.now();
+    let fd: number | undefined;
+    while (fd === undefined) {
+      try {
+        fd = openSync(lockPath, "wx");
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        try {
+          if (Date.now() - statSync(lockPath).mtimeMs > 10_000) {
+            rmSync(lockPath, { force: true });
+            continue;
+          }
+        } catch {
+          continue; // lock vanished between open and stat; retry
+        }
+        if (Date.now() - start > 5_000) break; // give up waiting, proceed best-effort
+        sleepSync(25);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      if (fd !== undefined) {
+        closeSync(fd);
+        rmSync(lockPath, { force: true });
+      }
+    }
+  }
+}
+
+/** Synchronous sleep that blocks without busy-spinning the CPU. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }

@@ -136,6 +136,78 @@ test("commit --mine preserves the executable bit on a new file", () => {
   }
 });
 
+test("partial commit of a no-trailing-newline file does not corrupt the patch", () => {
+  const dir = makeRepo();
+  try {
+    // 14 lines, NO trailing newline. Alice edits line 2, Bob the EOF line —
+    // far enough apart to be separate hunks.
+    const base = Array.from({ length: 14 }, (_, i) => `l${i + 1}`);
+    write(dir, "f.ts", base.join("\n")); // no trailing newline
+    commitAll(dir, "init");
+    quilt(dir, ["init"]);
+
+    quilt(dir, ["start", "--actor", "alice", "--type", "agent"]);
+    const a = [...base];
+    a[1] = "l2-alice";
+    write(dir, "f.ts", a.join("\n"));
+    quilt(dir, ["status"], "alice");
+
+    quilt(dir, ["start", "--actor", "bob", "--type", "agent"]);
+    const ab = [...a];
+    ab[13] = "l14-bob"; // EOF line, still no trailing newline
+    write(dir, "f.ts", ab.join("\n"));
+    quilt(dir, ["status"], "bob");
+
+    // Alice's hunk is NOT the file's last hunk and the file has no trailing
+    // newline — this previously emitted a stray "\ No newline" marker mid-file.
+    const r = quilt(dir, ["commit", "--mine", "-m", "alice"], "alice");
+    assert.equal(r.status, 0, r.stderr);
+    const expected = [...base];
+    expected[1] = "l2-alice";
+    assert.equal(gitOut(dir, ["show", "HEAD:f.ts"]), expected.join("\n"), "alice applied, EOF intact");
+    assert.match(read(dir, "f.ts"), /l14-bob/, "bob's EOF edit still in tree");
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("identical trivial lines (braces) in different hunks do not false-conflict", () => {
+  const dir = makeRepo();
+  try {
+    const base = Array.from({ length: 20 }, (_, i) => `l${i + 1}`);
+    write(dir, "code.ts", base.join("\n") + "\n");
+    commitAll(dir, "init");
+    quilt(dir, ["init"]);
+
+    // Alice adds a block near the top (ends in a lone "}").
+    quilt(dir, ["start", "--actor", "alice", "--type", "agent"]);
+    const a = [...base];
+    a.splice(1, 1, "if (a) {", "  doA();", "}");
+    write(dir, "code.ts", a.join("\n") + "\n");
+    quilt(dir, ["status"], "alice");
+
+    // Bob adds a block near the bottom (also ends in a lone "}") — far enough to
+    // be a separate hunk. The shared "}" must NOT register as a conflict.
+    quilt(dir, ["start", "--actor", "bob", "--type", "agent"]);
+    const ab = [...a];
+    const bottom = ab.lastIndexOf("l18");
+    ab.splice(bottom, 1, "if (b) {", "  doB();", "}");
+    write(dir, "code.ts", ab.join("\n") + "\n");
+    quilt(dir, ["status"], "bob");
+
+    const conflicts = JSON.parse(quilt(dir, ["conflicts", "--json"], "bob").stdout);
+    assert.equal(conflicts.conflicts.length, 0, "no false conflict from shared braces");
+
+    const r = quilt(dir, ["commit", "--mine", "-m", "bob block"], "bob");
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(gitOut(dir, ["show", "HEAD:code.ts"]), /doB\(\)/);
+    assert.doesNotMatch(gitOut(dir, ["show", "HEAD:code.ts"]), /doA\(\)/, "alice's block not committed");
+    assert.match(read(dir, "code.ts"), /doA\(\)/, "alice's block still in tree");
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test("a rename is committed as delete-old + add-new", () => {
   const dir = makeRepo();
   try {
