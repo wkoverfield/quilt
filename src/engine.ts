@@ -109,22 +109,27 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     const head = headBlob(repoRoot, path);
     const current = readWorktree(repoRoot, path);
 
+    // Baseline for "what changed since we last looked".
+    const observedHasKey = Object.prototype.hasOwnProperty.call(
+      observed.files,
+      path,
+    );
+    const baseline = observedHasKey ? observed.files[path] ?? null : head;
+
     const binary =
       (head !== null && looksBinary(head)) ||
       (current !== null && looksBinary(current));
     // For files too large to diff reliably, the LCS engine falls back to a
     // whole-file replace, which would flag every owned line as removed and fire
     // spurious clobbers. Treat them like binary: observe but don't attribute.
-    const tooLarge = lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
+    // Guard the ACTUAL diff inputs — both the attribution diff (baseline→current,
+    // where baseline can be the much-larger observed content) and the prune diff
+    // (head→current).
+    const tooLarge =
+      lineCount(baseline) * lineCount(current) > MAX_LCS_CELLS ||
+      lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
 
     if (!binary && !tooLarge && activeActorId) {
-      // Baseline for "what changed since we last looked".
-      const observedHasKey = Object.prototype.hasOwnProperty.call(
-        observed.files,
-        path,
-      );
-      const baseline = observedHasKey ? observed.files[path] ?? null : head;
-
       const delta = lineDiff(baseline ?? "", current ?? "");
       const file = (ownership.files[path] ??= { added: {}, removed: {} });
       const conflicts = ownership.conflicts;
@@ -143,6 +148,10 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         }
       }
       if (victims.size > 0 && baseline) {
+        // One snapshot per file per clobber event: `baseline` is the whole
+        // pre-clobber file, which already contains every victim's lines, so all
+        // victims of this event share the snapshot (each restores the same full
+        // file and fishes out their own lines).
         const snapshotId = randomUUID().slice(0, 12);
         store.preserveSnapshot(snapshotId, baseline);
         for (const [victim, sampleLines] of victims) {
