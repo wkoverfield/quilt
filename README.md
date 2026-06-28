@@ -122,6 +122,11 @@ Nothing is silently lost. `quilt restore auth.ts` writes the overwritten version
 to a sidecar file (`auth.ts.quilt-codex`) so you can diff and merge — your
 current file is never touched.
 
+Preservation captures the victim's **last-observed** content, so keep `quilt
+watch` running while agents work — it keeps that snapshot current to each edit.
+Without the watcher, the preserved version is only as fresh as the last `quilt`
+command the victim ran.
+
 This is the same checkout's safety net: where two agents in one folder would
 normally clobber each other invisibly, Quilt makes the loss visible and
 recoverable. (Preventing the overwrite outright — advisory claims — arrives with

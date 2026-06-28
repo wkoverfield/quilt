@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
   readFileSync,
   rmSync,
   existsSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
@@ -93,6 +95,49 @@ test("a same-actor edit is not a clobber", () => {
     quilt(dir, ["status"], "alice");
     const list = JSON.parse(quilt(dir, ["restore", "--json"]).stdout);
     assert.equal(list.clobbers.length, 0, "refining your own edit is not a clobber");
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("restore writes the sidecar next to a nested file, within the repo", () => {
+  const dir = makeRepo();
+  try {
+    mkdirSync(join(dir, "src", "deep"), { recursive: true });
+    write(dir, "src/deep/x.ts", "a\nb\nc\n");
+    commitAll(dir, "init");
+    quilt(dir, ["init"]);
+    quilt(dir, ["start", "--actor", "alice", "--type", "agent"]);
+    write(dir, "src/deep/x.ts", "a\nb-alice\nc\n");
+    quilt(dir, ["status"], "alice");
+    quilt(dir, ["start", "--actor", "bob", "--type", "agent"]);
+    write(dir, "src/deep/x.ts", "a\nb-bob\nc\n");
+    quilt(dir, ["status"], "bob");
+
+    const r = quilt(dir, ["restore", "src/deep/x.ts"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(read(dir, "src/deep/x.ts.quilt-alice"), "a\nb-alice\nc\n");
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("a symlink in the tree is skipped, never read or attributed", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "real.txt", "x\n");
+    commitAll(dir, "init");
+    quilt(dir, ["init"]);
+    quilt(dir, ["start", "--actor", "alice", "--type", "agent"]);
+    symlinkSync("/etc/hosts", join(dir, "link"));
+    const r = quilt(dir, ["status", "--json"], "alice");
+    assert.equal(r.status, 0, r.stderr);
+    const model = JSON.parse(r.stdout);
+    const linked = model.files.find((f: any) => f.path === "link");
+    // The symlink is either absent from the model or carries no owned hunks.
+    if (linked) assert.equal(linked.hunks.length, 0);
+    const own = JSON.parse(read(dir, join(".quilt", "ownership.json")));
+    assert.ok(!own.files?.["link"], "symlink never gains ownership");
   } finally {
     cleanup(dir);
   }

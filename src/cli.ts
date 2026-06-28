@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
 import { repoRoot, shortHead, headSha } from "./git.js";
@@ -366,25 +366,39 @@ program
     }
     const content = store.readSnapshot(match!.snapshotId);
     if (content === null) fail(`snapshot for ${path} is missing.`);
-    const sidecar = `${path}.quilt-${match!.victimActor.replace(/[^\w.-]+/g, "-")}`;
-    writeFileSync(join(store.paths.repoRoot, sidecar), content!);
+
+    // Build the sidecar from the RECORDED path (trusted, repo-relative) and
+    // refuse to write anywhere outside the repository root.
+    const safeActor = match!.victimActor.replace(/[^\w.-]+/g, "-");
+    const repoRootAbs = resolve(store.paths.repoRoot);
+    const sidecarAbs = resolve(repoRootAbs, `${match!.path}.quilt-${safeActor}`);
+    if (sidecarAbs !== repoRootAbs && !sidecarAbs.startsWith(repoRootAbs + sep)) {
+      fail(`refusing to restore outside the repository: ${match!.path}`);
+    }
+    mkdirSync(dirname(sidecarAbs), { recursive: true });
+    writeFileSync(sidecarAbs, content!);
+    const sidecarRel = sidecarAbs.slice(repoRootAbs.length + 1);
 
     const clobbers = store.readClobbers();
     for (const c of clobbers.clobbers) {
       if (c.id === match!.id) c.restored = true;
     }
     store.writeClobbers(clobbers);
+    // Drop the preserved blob once no open clobber still references it.
+    if (!clobbers.clobbers.some((c) => c.snapshotId === match!.snapshotId && !c.restored)) {
+      rmSync(store.paths.snapshot(match!.snapshotId), { force: true });
+    }
     store.appendLedger({
-      ts: new Date().toISOString(),
+      ts: nowIso(),
       type: "clobber.restored",
-      path,
-      sidecar,
+      path: match!.path,
+      sidecar: sidecarRel,
       snapshotId: match!.snapshotId,
     });
     process.stdout.write(
       pc.green("✓ ") +
-        `Restored ${pc.bold(match!.victimActor)}'s overwritten version of ${path}\n` +
-        pc.dim(`  → ${sidecar} (your current file is untouched; diff and merge as needed)\n`),
+        `Restored ${pc.bold(match!.victimActor)}'s overwritten version of ${match!.path}\n` +
+        pc.dim(`  → ${sidecarRel} (your current file is untouched; diff and merge as needed)\n`),
     );
   });
 

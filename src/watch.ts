@@ -61,7 +61,10 @@ export function runWatch(store: Store): void {
     process.exit(0);
   });
 
-  let lastClobbers = store.readClobbers().clobbers.length;
+  // Track clobbers we've already announced by id (robust to clobbers.json being
+  // rewritten by `quilt restore`); seed with the ones that already exist.
+  const printed = new Set<string>();
+  for (const c of store.readClobbers().clobbers) printed.add(c.id);
   const ctx = activeContext(store);
   process.stdout.write(
     pc.green("✓ ") + "quilt watching " + pc.bold(root) + "\n",
@@ -74,26 +77,47 @@ export function runWatch(store: Store): void {
   );
 
   let timer: NodeJS.Timeout | null = null;
+  let firstScheduled = 0;
+  const DEBOUNCE_MS = 150;
+  const MAX_DEBOUNCE_MS = 2000;
+
   const tick = () => {
     timer = null;
-    const actorId = activeContext(store).actorId;
-    reconcile(store, actorId);
-    const clobbers = store.readClobbers().clobbers;
-    if (clobbers.length > lastClobbers) {
-      for (const c of clobbers.slice(lastClobbers)) {
+    firstScheduled = 0;
+    try {
+      const actorId = activeContext(store).actorId;
+      // Without an active actor there's nobody to attribute edits to. Do NOT
+      // reconcile — that would advance the observed snapshot past unattributed
+      // work and make it impossible to claim later.
+      if (!actorId) return;
+      reconcile(store, actorId);
+      for (const c of store.readClobbers().clobbers) {
+        if (printed.has(c.id)) continue;
+        printed.add(c.id);
         process.stdout.write(
           pc.red("  ⚠ collision  ") +
             `${pc.bold(c.byActor)} overwrote ${pc.bold(c.victimActor)}'s edits in ${c.path} — ` +
             pc.dim(`both saved · quilt restore ${c.path}\n`),
         );
       }
-      lastClobbers = clobbers.length;
+    } catch (err) {
+      process.stderr.write(
+        pc.red("  watch error: ") + (err as Error).message + "\n",
+      );
     }
   };
 
+  // Debounce bursts of writes, but cap the total wait so a long run of ignored
+  // churn (e.g. git rewriting many files) can't starve attribution forever.
   const schedule = () => {
+    const now = Date.now();
+    if (!firstScheduled) firstScheduled = now;
     if (timer) clearTimeout(timer);
-    timer = setTimeout(tick, 150);
+    if (now - firstScheduled >= MAX_DEBOUNCE_MS) {
+      tick();
+      return;
+    }
+    timer = setTimeout(tick, DEBOUNCE_MS);
   };
 
   try {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { changedPaths, headBlob } from "./git.js";
@@ -8,6 +8,7 @@ import {
   lineDiff,
   looksBinary,
   splitLines,
+  MAX_LCS_CELLS,
   type Hunk,
 } from "./diff.js";
 import type { Store } from "./state.js";
@@ -46,12 +47,22 @@ export interface WorktreeModel {
 
 function readWorktree(repoRoot: string, relPath: string): string | null {
   const abs = join(repoRoot, relPath);
-  if (!existsSync(abs)) return null;
   try {
+    // lstat (not stat) so a symlink is never followed — Quilt must not read or
+    // snapshot whatever a symlink points at (could be outside the repo).
+    const st = lstatSync(abs);
+    if (st.isSymbolicLink() || !st.isFile()) return null;
     return readFileSync(abs, "utf8");
   } catch {
     return null;
   }
+}
+
+function lineCount(text: string | null): number {
+  if (!text) return 0;
+  let n = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+  return n;
 }
 
 /** The union of paths Quilt should consider this pass. */
@@ -101,8 +112,12 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     const binary =
       (head !== null && looksBinary(head)) ||
       (current !== null && looksBinary(current));
+    // For files too large to diff reliably, the LCS engine falls back to a
+    // whole-file replace, which would flag every owned line as removed and fire
+    // spurious clobbers. Treat them like binary: observe but don't attribute.
+    const tooLarge = lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
 
-    if (!binary && activeActorId) {
+    if (!binary && !tooLarge && activeActorId) {
       // Baseline for "what changed since we last looked".
       const observedHasKey = Object.prototype.hasOwnProperty.call(
         observed.files,
@@ -263,7 +278,8 @@ export function buildModel(
 
     const binary =
       (head !== null && looksBinary(head)) ||
-      (current !== null && looksBinary(current));
+      (current !== null && looksBinary(current)) ||
+      lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
 
     const model: FileModel = {
       path,
