@@ -25,7 +25,10 @@ export async function runMcpServer(store: Store): Promise<void> {
   const envActor = process.env.QUILT_ACTOR;
   if (envActor) {
     const sid = store.readCurrentSessionId();
-    active = { actorId: envActor, session: sid ? store.readSession(sid) : null };
+    const sess = sid ? store.readSession(sid) : null;
+    // Only adopt the existing session if it actually belongs to this actor —
+    // a stale QUILT_SESSION could otherwise point at someone else's session.
+    active = { actorId: envActor, session: sess?.actorId === envActor ? sess : null };
   }
 
   const requireActor = (): string => {
@@ -212,12 +215,15 @@ export async function runMcpServer(store: Store): Promise<void> {
   server.registerTool(
     "release",
     {
-      description: "Release your claims on the given paths (or all of yours if omitted).",
+      description:
+        "Release your claims on the given paths. Omit `paths` to release ALL of yours; an empty array releases none.",
       inputSchema: { paths: z.array(z.string()).optional() },
     },
     async ({ paths }) => {
       const actorId = requireActor();
-      const n = releaseClaims(store, actorId, paths && paths.length ? paths : null);
+      // Omitting `paths` releases everything; an explicit empty array is a no-op
+      // (so a programmatic empty list never accidentally drops all claims).
+      const n = releaseClaims(store, actorId, paths ?? null);
       return ok({ released: n });
     },
   );

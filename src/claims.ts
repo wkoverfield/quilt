@@ -15,6 +15,11 @@ function active(claims: Claim[], now: number): Claim[] {
   return claims.filter((c) => c.expiresAt > now);
 }
 
+/** Normalize a claim path so `./foo` and `foo` don't become separate claims. */
+function normalizePath(p: string): string {
+  return p.replace(/^\.\/+/, "").replace(/\/+$/, "");
+}
+
 /**
  * Acquire advisory claims on paths for an actor. A path already held by a
  * different (live) actor is denied; one held by the same actor (or expired) is
@@ -32,7 +37,8 @@ export function acquireClaims(
     const file = store.readClaims();
     file.claims = active(file.claims, now);
     const results: ClaimResult[] = [];
-    for (const path of paths) {
+    for (const raw of paths) {
+      const path = normalizePath(raw);
       const existing = file.claims.find((c) => c.path === path);
       if (existing && existing.actor !== actorId) {
         results.push({ path, granted: false, holder: existing.actor });
@@ -63,13 +69,14 @@ export function releaseClaims(
   actorId: string,
   paths: string[] | null,
 ): number {
+  const norm = paths === null ? null : paths.map(normalizePath);
   return store.withLock(() => {
     const file = store.readClaims();
     const before = file.claims.length;
     file.claims = file.claims.filter((c) => {
       if (c.actor !== actorId) return true;
-      if (paths === null) return false; // release all of this actor's claims
-      return !paths.includes(c.path);
+      if (norm === null) return false; // release all of this actor's claims
+      return !norm.includes(c.path);
     });
     store.writeClaims(file);
     return before - file.claims.length;

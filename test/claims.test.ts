@@ -67,6 +67,40 @@ test("claims: release all of an actor's claims", () => {
   }
 });
 
+test("claims: releasing with an empty array releases nothing", () => {
+  const { s, dir } = newStore();
+  try {
+    acquireClaims(s, "alice", null, ["a", "b"], 1000);
+    const n = releaseClaims(s, "alice", []);
+    assert.equal(n, 0, "empty array is a no-op, not release-all");
+    assert.equal(listClaims(s, 1000).length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claims: ./foo and foo are the same claim (path normalization)", () => {
+  const { s, dir } = newStore();
+  try {
+    const a = acquireClaims(s, "alice", null, ["./src/x.ts"], 1000);
+    assert.equal(a[0]!.granted, true);
+    const b = acquireClaims(s, "bob", null, ["src/x.ts"], 1000);
+    assert.equal(b[0]!.granted, false, "normalized to the same path");
+    assert.equal(b[0]!.holder, "alice");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("withLock is not reentrant (fails fast instead of self-deadlocking)", () => {
+  const { s, dir } = newStore();
+  try {
+    assert.throws(() => s.withLock(() => s.withLock(() => 1)), /not reentrant/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("claims: re-claiming your own path refreshes its expiry", () => {
   const { s, dir } = newStore();
   try {

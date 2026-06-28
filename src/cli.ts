@@ -17,11 +17,13 @@ import { runMcpServer } from "./mcp.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
 // Exit quietly when output is piped into a process that closes early
-// (e.g. `quilt preview | head`) instead of crashing with EPIPE.
-process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+// (e.g. `quilt preview | head`) instead of crashing with EPIPE. The MCP command
+// removes this so a transient pipe error can't kill a long-running server.
+const epipeExit = (err: NodeJS.ErrnoException) => {
   if (err.code === "EPIPE") process.exit(0);
   throw err;
-});
+};
+process.stdout.on("error", epipeExit);
 
 function fail(msg: string): never {
   process.stderr.write(pc.red("error: ") + msg + "\n");
@@ -488,6 +490,11 @@ program
   .description("Run the Quilt MCP server (stdio) for agent integration")
   .action(async () => {
     const store = requireStore();
+    // Hand stdout to the MCP transport: drop the exit-on-EPIPE handler so a
+    // transient pipe error can't silently kill the server. The SDK shuts the
+    // server down on stdin EOF (the proper MCP disconnect signal) instead.
+    process.stdout.removeListener("error", epipeExit);
+    process.stdout.on("error", () => {});
     await runMcpServer(store);
   });
 

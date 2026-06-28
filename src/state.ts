@@ -171,6 +171,11 @@ export class Store {
    * rather than block a developer's command indefinitely.
    */
   withLock<T>(fn: () => T): T {
+    // The lock is NOT reentrant: nesting would spin against our own pid until the
+    // timeout. Fail fast and loudly so the bug surfaces immediately in dev.
+    if (heldInProcess) {
+      throw new Error("quilt: withLock is not reentrant (nested .quilt lock)");
+    }
     const lockPath = this.paths.dir + "/lock";
     const start = Date.now();
     // The critical section runs git subprocesses per changed path and can be
@@ -218,9 +223,11 @@ export class Store {
         sleepSync(25);
       }
     }
+    heldInProcess = true;
     try {
       return fn();
     } finally {
+      heldInProcess = false;
       if (fd !== undefined) {
         closeSync(fd);
         rmSync(lockPath, { force: true });
@@ -228,6 +235,9 @@ export class Store {
     }
   }
 }
+
+/** Whether this process currently holds the .quilt lock (reentrancy guard). */
+let heldInProcess = false;
 
 /** Synchronous sleep that blocks without busy-spinning the CPU. */
 function sleepSync(ms: number): void {
