@@ -1,0 +1,165 @@
+# Quilt
+
+**Actor-owned patches for Git.** Same repo. Many agents. Clean commits.
+
+```bash
+quilt commit --mine
+```
+
+Parallel coding agents are pushing teams toward worktree sprawl and messy,
+late PR-time reconciliation. Worktrees help, but they don't solve the
+*same-checkout* problem: multiple actors — humans, coding agents, bots,
+formatters — editing **one** working tree and needing clean ownership of who
+changed what.
+
+Git already supports partial staging (`git add -p`), but git doesn't know
+*which actor* made each hunk. Quilt adds that missing ownership layer while
+keeping Git as the source of truth.
+
+---
+
+## What it does
+
+- **Same-checkout actor ownership** — model humans, agents, and bots as actors
+  sharing one working tree.
+- **Hunk-level attribution** — Quilt tracks which actor produced which lines.
+- **Unclaimed / conflicted detection** — pre-existing or generated changes stay
+  unattributed; overlapping edits are surfaced, not silently committed.
+- **Preview-first `commit --mine`** — see the exact patch before anything moves.
+- **Preserves other actors' work** — committing yours leaves everyone else's
+  changes untouched in the working tree.
+- **Human-readable status + stable JSON** for agents.
+- **Local-first** — all state lives under `.quilt/`. No account, no daemon, no
+  hosted service.
+
+Quilt trusts Git and never rewrites it. Every commit Quilt produces is an
+ordinary Git commit.
+
+---
+
+## Install
+
+```bash
+npm install        # install deps
+npm run build      # compile to dist/
+npm link           # optional: put `quilt` on your PATH
+```
+
+Requires Node 18+ and `git` on the PATH.
+
+---
+
+## Quickstart
+
+```bash
+quilt init
+quilt start --actor wilson/codex-auth --type agent
+
+# ... the agent edits files ...
+
+quilt status                       # who owns what
+quilt preview --mine               # exact patch that would be committed
+quilt commit --mine -m "fix auth redirect"
+```
+
+### Multiple actors, one checkout
+
+```bash
+quilt start --actor alice --type agent   # Alice's shell
+# alice edits src/auth.ts
+quilt status                              # claims Alice's edits
+
+quilt start --actor bob --type agent     # Bob's shell
+# bob edits src/theme.ts
+quilt status                              # claims Bob's edits
+
+quilt commit --mine -m "auth work"        # (as Alice) commits ONLY Alice's hunks
+# Bob's changes remain in the working tree, uncommitted.
+```
+
+Concurrent actors run in their own shells; set `QUILT_ACTOR=<id>` (or
+`QUILT_SESSION=<id>`) per shell so each invocation knows who "you" are without a
+shared pointer.
+
+---
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `quilt init` | Initialize `.quilt/` in the repo. |
+| `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
+| `quilt status [--json]` | Show who owns which working-tree changes. |
+| `quilt mine [--json]` | Summarize the changes you own. |
+| `quilt conflicts [--json]` | Show overlapping/shared changes. |
+| `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
+| `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
+| `quilt whoami` | Show the active actor/session. |
+| `quilt end` | End the active session. |
+
+---
+
+## How attribution works
+
+Quilt is honest and conservative — a blocked commit beats a spooky one.
+
+Each `quilt` command runs a **reconcile** step:
+
+1. Quilt keeps an *observed* snapshot of the working tree.
+2. The delta since it last looked is attributed to the actor active for this
+   command.
+3. `quilt start` seeds the observed snapshot to the current tree, so anything
+   already dirty stays **unclaimed** (e.g. formatter output, generated locks).
+4. If two actors' edits land in the same hunk, that hunk is **shared** and is
+   excluded from `commit --mine` until reviewed.
+
+`commit --mine` then diffs `HEAD → worktree`, keeps only the hunks you own,
+applies that patch to a throwaway temporary index
+(`GIT_INDEX_FILE` + `git apply --cached` + `write-tree` + `commit-tree` +
+`update-ref`), and produces a normal Git commit. Your real index and the working
+tree are never rewritten; other actors' changes stay exactly where they were.
+
+This means: **run a `quilt` command around your edit batch** (the intended
+agent workflow — call `status` before and after editing) so Quilt captures your
+delta before another actor's.
+
+### V0 limitations (honest)
+
+- Attribution keys on **line content**, so two actors adding an identical line
+  can be flagged as overlapping. This is conservative by design.
+- No tree-sitter/symbol ownership yet (V1).
+- No automatic conflict resolution — Quilt surfaces, it does not merge.
+- Binary files are never attributed or committed by Quilt.
+
+---
+
+## State layout
+
+```
+.quilt/
+  config.json        # repo config
+  actors.json        # known actors
+  sessions/*.json    # sessions
+  current            # active session pointer for this checkout
+  observed.json      # last-observed worktree snapshot (reconcile baseline)
+  ownership.json     # per-file line ownership + conflicts
+  ledger.jsonl       # append-only event log
+```
+
+`.quilt/` is git-ignored automatically.
+
+---
+
+## Development
+
+```bash
+npm run build   # tsc -> dist/
+npm test        # build + run the acceptance suite against fixture repos
+npm run dev -- status   # run the CLI from source via tsx
+```
+
+---
+
+## License
+
+MIT
