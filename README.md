@@ -96,6 +96,9 @@ shared pointer.
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
+| `quilt claim [paths...] [--json]` | Reserve files for editing (advisory); with no paths, lists claims. |
+| `quilt release [paths...]` | Release your claims (all of yours if no paths). |
+| `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt whoami` | Show the active actor/session. |
 | `quilt end` | End the active session. |
 
@@ -131,6 +134,33 @@ This is the same checkout's safety net: where two agents in one folder would
 normally clobber each other invisibly, Quilt makes the loss visible and
 recoverable. (Preventing the overwrite outright — advisory claims — arrives with
 the agent-facing MCP layer.)
+
+## Agent-native: the MCP server
+
+Coding agents drive Quilt directly over MCP. Each agent runs its own server, so
+attribution is precise per-agent.
+
+```jsonc
+// .mcp.json (or your agent's MCP config)
+{
+  "mcpServers": {
+    "quilt": { "command": "quilt", "args": ["mcp"], "env": { "QUILT_ACTOR": "codex-auth" } }
+  }
+}
+```
+
+Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
+`preview_mine`, `commit_mine`, `claim`, `release`. The intended loop:
+
+```txt
+start_session  →  get_status  →  claim(files)  →  …edit…  →  commit_mine
+```
+
+`claim` adds **advisory prevention** on top of the watcher's detect-and-preserve:
+if a file is already claimed by another actor, the call is denied and a
+well-behaved agent edits something else. Agents that ignore claims still get
+caught by collision detection — prevention for cooperators, a safety net for the
+rest.
 
 ## How attribution works
 

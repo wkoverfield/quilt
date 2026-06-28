@@ -227,6 +227,16 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   store.writeOwnership(ownership);
   store.writeObserved(observed);
   if (clobbersChanged) store.writeClobbers(clobbers);
+
+  // Prune expired advisory claims so claims.json stays bounded even on
+  // read-only workflows that never call acquire. We're already inside the lock,
+  // so touch the files directly (do NOT re-enter withLock).
+  const claimsFile = store.readClaims();
+  const now = Date.now();
+  const kept = claimsFile.claims.filter((c) => c.expiresAt > now);
+  if (kept.length !== claimsFile.claims.length) {
+    store.writeClaims({ claims: kept });
+  }
 }
 
 function classifyHunk(

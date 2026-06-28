@@ -88,3 +88,23 @@ export interface ClobberRecord {
 export interface ClobbersFile {
   clobbers: ClobberRecord[];
 }
+
+/**
+ * An advisory claim: an actor reserves a file for editing so other actors know
+ * to stay off it. Claims are cooperative (like git itself) — they prevent
+ * collisions between agents that respect them; the clobber detector is the
+ * safety net for those that don't. Claims auto-expire so a dead agent never
+ * wedges a file.
+ */
+export interface Claim {
+  path: string;
+  actor: string;
+  session: string | null;
+  acquiredAt: string;
+  /** epoch ms; the claim is ignored once now > expiresAt. */
+  expiresAt: number;
+}
+
+export interface ClaimsFile {
+  claims: Claim[];
+}

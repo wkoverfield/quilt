@@ -15,6 +15,7 @@ import { QuiltPaths } from "./paths.js";
 import type {
   Actor,
   ActorsFile,
+  ClaimsFile,
   ClobbersFile,
   Config,
   LedgerEvent,
@@ -149,6 +150,14 @@ export class Store {
     return existsSync(p) ? readFileSync(p, "utf8") : null;
   }
 
+  // --- claims ---
+  readClaims(): ClaimsFile {
+    return readJson<ClaimsFile>(this.paths.claims, { claims: [] });
+  }
+  writeClaims(file: ClaimsFile): void {
+    writeJson(this.paths.claims, file);
+  }
+
   // --- ledger ---
   appendLedger(event: LedgerEvent): void {
     appendFileSync(this.paths.ledger, JSON.stringify(event) + "\n");
@@ -162,6 +171,11 @@ export class Store {
    * rather than block a developer's command indefinitely.
    */
   withLock<T>(fn: () => T): T {
+    // The lock is NOT reentrant: nesting would spin against our own pid until the
+    // timeout. Fail fast and loudly so the bug surfaces immediately in dev.
+    if (heldInProcess) {
+      throw new Error("quilt: withLock is not reentrant (nested .quilt lock)");
+    }
     const lockPath = this.paths.dir + "/lock";
     const start = Date.now();
     // The critical section runs git subprocesses per changed path and can be
@@ -209,9 +223,11 @@ export class Store {
         sleepSync(25);
       }
     }
+    heldInProcess = true;
     try {
       return fn();
     } finally {
+      heldInProcess = false;
       if (fd !== undefined) {
         closeSync(fd);
         rmSync(lockPath, { force: true });
@@ -219,6 +235,9 @@ export class Store {
     }
   }
 }
+
+/** Whether this process currently holds the .quilt lock (reentrancy guard). */
+let heldInProcess = false;
 
 /** Synchronous sleep that blocks without busy-spinning the CPU. */
 function sleepSync(ms: number): void {
