@@ -8,10 +8,20 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
+  },
+  "author": "Wilson Overfield",
+  "homepage": "https://github.com/woverfield/quilt#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/woverfield/quilt.git"
+  },
+  "bugs": {
+    "url": "https://github.com/woverfield/quilt/issues"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,20 +1,36 @@
 # Quilt
 
+[![CI](https://github.com/woverfield/quilt/actions/workflows/ci.yml/badge.svg)](https://github.com/woverfield/quilt/actions/workflows/ci.yml)
+
 **Actor-owned patches for Git.** Same repo. Many agents. Clean commits.
 
 ```bash
 quilt commit --mine
 ```
 
-Parallel coding agents are pushing teams toward worktree sprawl and messy,
-late PR-time reconciliation. Worktrees help, but they don't solve the
-*same-checkout* problem: multiple actors — humans, coding agents, bots,
-formatters — editing **one** working tree and needing clean ownership of who
-changed what.
+Everyone else ran *toward* isolation — a worktree per agent, a branch per agent,
+reconcile at PR time. That trades one mess for another: `node_modules` and `.env`
+and build caches per worktree, plus a merge pile-up at the end. Quilt goes the
+other way. **Many agents, one checkout** — and it just knows who did what.
 
 Git already supports partial staging (`git add -p`), but git doesn't know
 *which actor* made each hunk. Quilt adds that missing ownership layer while
-keeping Git as the source of truth.
+keeping Git as the source of truth: every commit it makes is an ordinary git
+commit.
+
+<!-- Demo GIF: record `./examples/demo.sh` and drop the asciinema/GIF link here. -->
+
+### See it in 20 seconds
+
+```bash
+git clone https://github.com/woverfield/quilt && cd quilt
+npm install && npm run build
+./examples/demo.sh
+```
+
+Three actors edit one working tree; Quilt shows who owns what, leaves the
+generated lockfile unclaimed, and lands one agent's work as a clean commit while
+everyone else's stays put.
 
 ---
 
@@ -39,13 +55,22 @@ ordinary Git commit.
 
 ## Install
 
+Once published:
+
 ```bash
-npm install        # install deps
-npm run build      # compile to dist/
-npm link           # optional: put `quilt` on your PATH
+npm install -g quilt-cli      # `quilt` on your PATH
+# or run without installing:
+npx quilt-cli status
 ```
 
-Requires Node 18+ and `git` on the PATH.
+From source:
+
+```bash
+npm install && npm run build
+npm link                      # optional: put `quilt` on your PATH
+```
+
+Requires Node 20+ and `git` on the PATH (the watcher needs recursive `fs.watch`).
 
 ---
 
