@@ -5,6 +5,10 @@ import {
   readdirSync,
   writeFileSync,
   appendFileSync,
+  openSync,
+  closeSync,
+  statSync,
+  rmSync,
 } from "node:fs";
 import { join } from "node:path";
 import { QuiltPaths } from "./paths.js";
@@ -105,6 +109,9 @@ export class Store {
   writeCurrentSessionId(id: string): void {
     writeFileSync(this.paths.current, id + "\n");
   }
+  clearCurrentSessionId(): void {
+    rmSync(this.paths.current, { force: true });
+  }
 
   // --- observed snapshot ---
   readObserved(): ObservedFile {
@@ -128,5 +135,80 @@ export class Store {
   // --- ledger ---
   appendLedger(event: LedgerEvent): void {
     appendFileSync(this.paths.ledger, JSON.stringify(event) + "\n");
+  }
+
+  /**
+   * Run `fn` while holding an exclusive lock on .quilt, so concurrent actor
+   * processes can't interleave read-modify-write of ownership/observed state
+   * and lose each other's claims. The lock auto-expires after 10s (a crashed
+   * process never wedges the repo); after ~5s of contention we proceed anyway
+   * rather than block a developer's command indefinitely.
+   */
+  withLock<T>(fn: () => T): T {
+    const lockPath = this.paths.dir + "/lock";
+    const start = Date.now();
+    // The critical section runs git subprocesses per changed path and can be
+    // slow on a big repo, so we never steal a lock from a *live* holder on a
+    // timer. We only reclaim it when the holding process is gone, or as an
+    // absolute backstop against pid reuse after the lock is very old.
+    const MAX_WAIT = 30_000;
+    const ANCIENT = 120_000;
+    let fd: number | undefined;
+    while (fd === undefined) {
+      try {
+        fd = openSync(lockPath, "wx");
+        writeFileSync(fd, String(process.pid));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+        let steal = false;
+        try {
+          const holderPid = Number.parseInt(
+            readFileSync(lockPath, "utf8").trim(),
+            10,
+          );
+          const age = Date.now() - statSync(lockPath).mtimeMs;
+          if (age > ANCIENT) steal = true;
+          else if (
+            Number.isInteger(holderPid) &&
+            holderPid > 0 &&
+            !isProcessAlive(holderPid)
+          ) {
+            steal = true; // holder crashed without releasing
+          }
+        } catch {
+          continue; // lock vanished or unreadable mid-check; retry
+        }
+        if (steal) {
+          rmSync(lockPath, { force: true });
+          continue;
+        }
+        if (Date.now() - start > MAX_WAIT) break; // holder alive but very slow; proceed best-effort
+        sleepSync(25);
+      }
+    }
+    try {
+      return fn();
+    } finally {
+      if (fd !== undefined) {
+        closeSync(fd);
+        rmSync(lockPath, { force: true });
+      }
+    }
+  }
+}
+
+/** Synchronous sleep that blocks without busy-spinning the CPU. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** True if a process with this pid currently exists (signal 0 probe). */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM = the process exists but we can't signal it (still alive).
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }

@@ -11,6 +11,13 @@ import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
+// Exit quietly when output is piped into a process that closes early
+// (e.g. `quilt preview | head`) instead of crashing with EPIPE.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+  throw err;
+});
+
 function fail(msg: string): never {
   process.stderr.write(pc.red("error: ") + msg + "\n");
   process.exit(1);
@@ -143,7 +150,7 @@ program
     if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model);
+    const selection = selectOwned(model, store.paths.repoRoot);
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, false), null, 2) + "\n");
       return;
@@ -205,7 +212,9 @@ program
     if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, { includeMixed: opts.includeUnclaimed });
+    const selection = selectOwned(model, store.paths.repoRoot, {
+      includeMixed: opts.includeUnclaimed,
+    });
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, true), null, 2) + "\n");
       return;
@@ -236,7 +245,9 @@ program
     }
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, { includeMixed: opts.includeUnclaimed });
+    const selection = selectOwned(model, store.paths.repoRoot, {
+      includeMixed: opts.includeUnclaimed,
+    });
 
     if (selection.files.length === 0) {
       fail("you don't own any committable changes. See `quilt status`.");
@@ -318,6 +329,9 @@ program
     }
     const session = { ...ctx.session, status: "ended" as const, endedAt: nowIso() };
     store.writeSession(session);
+    // Drop the active-session pointer so the next command doesn't resolve a
+    // stale, already-ended session as the active actor.
+    if (store.readCurrentSessionId() === session.id) store.clearCurrentSessionId();
     store.appendLedger({
       ts: nowIso(),
       type: "session.ended",
