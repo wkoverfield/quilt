@@ -208,6 +208,33 @@ test("identical trivial lines (braces) in different hunks do not false-conflict"
   }
 });
 
+test("commit --mine refuses while a merge is in progress", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "f.txt", "base\n");
+    commitAll(dir, "init");
+    const mainBranch = gitOut(dir, ["rev-parse", "--abbrev-ref", "HEAD"]);
+    // Create two divergent branches that conflict on f.txt.
+    spawnSync("git", ["checkout", "-q", "-b", "feat"], { cwd: dir });
+    write(dir, "f.txt", "feat\n");
+    commitAll(dir, "feat change");
+    spawnSync("git", ["checkout", "-q", mainBranch], { cwd: dir });
+    write(dir, "f.txt", "main\n");
+    commitAll(dir, "main change");
+    // Start a merge that conflicts and leaves MERGE_HEAD in place.
+    spawnSync("git", ["merge", "feat"], { cwd: dir, encoding: "utf8" });
+
+    setup(dir);
+    write(dir, "g.txt", "alice work\n");
+    quilt(dir, ["status"], "alice");
+    const r = quilt(dir, ["commit", "--mine", "-m", "during merge"], "alice");
+    assert.equal(r.status, 1, "commit blocked during merge");
+    assert.match(r.stderr, /merge is in progress/i);
+  } finally {
+    cleanup(dir);
+  }
+});
+
 test("a rename is committed as delete-old + add-new", () => {
   const dir = makeRepo();
   try {

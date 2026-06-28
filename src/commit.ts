@@ -242,7 +242,6 @@ function inProgressOperation(repoRoot: string): string | null {
     ["MERGE_HEAD", "merge"],
     ["CHERRY_PICK_HEAD", "cherry-pick"],
     ["REVERT_HEAD", "revert"],
-    ["BISECT_LOG", "bisect"],
   ];
   for (const [refName, label] of named) {
     if (
@@ -267,6 +266,8 @@ function inProgressOperation(repoRoot: string): string | null {
     ) {
       return "rebase";
     }
+    // BISECT_LOG is a file in the git dir, not a ref — check it directly.
+    if (existsSync(join(gitDir, "BISECT_LOG"))) return "bisect";
   }
   return null;
 }
