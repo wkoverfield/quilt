@@ -78,7 +78,7 @@ const program = new Command();
 program
   .name("quilt")
   .description("Actor-owned patches for Git. Same repo. Many agents. Clean commits.")
-  .version("0.0.1");
+  .version("0.1.0");
 
 program
   .command("init")

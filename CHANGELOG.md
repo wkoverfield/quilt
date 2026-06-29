@@ -1,0 +1,55 @@
+# Changelog
+
+All notable changes to Quilt are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
+[Semantic Versioning](https://semver.org/).
+
+## [0.1.0] - 2026-06-29
+
+First public release. Quilt is the coordination layer for agent fleets: many
+agents share one checkout and coordinate in the open instead of each hiding in a
+worktree. Every commit Quilt makes is an ordinary Git commit.
+
+### Added
+
+- **Actor-owned commits.** `quilt commit --mine` commits only the lines you own,
+  even when they share a hunk with another actor, leaving everyone else's work
+  untouched in the working tree. Built on a temp-index patch so your real index,
+  working tree, and refs are never rewritten.
+- **Same-checkout attribution.** A reconcile step tracks which actor produced
+  which lines; pre-existing or generated changes stay unclaimed.
+- **Symbol-level claims.** Reserve `utils.js#formatPrice` instead of the whole
+  file so agents editing different functions never contend. Parsing is powered
+  by tree-sitter (JavaScript, JSX, TypeScript, TSX); other files fall back to
+  whole-file claims.
+- **Push-awareness.** When you claim a symbol that depends on a function another
+  actor is changing, Quilt warns you at claim time — surfaced in `quilt claim`,
+  `quilt status`, and the MCP `claim` / `get_conflicts` responses as
+  `dependencyWarnings`.
+- **Live watcher.** `quilt watch` attributes edits as they happen and, when one
+  actor overwrites uncommitted lines another actor owns, preserves both versions
+  and makes the loss recoverable via `quilt restore`.
+- **MCP server.** `quilt mcp` exposes `start_session`, `get_status`,
+  `get_my_changes`, `get_conflicts`, `preview_mine`, `commit_mine`, `claim`, and
+  `release` so agents (and orchestrators) drive Quilt directly. Stable JSON on
+  every read command.
+- **Eval harness.** `npm run bench` runs Quilt against a graded scenario ladder
+  (L1 disjoint work, L2 incompatible conflict, L3 dependency cascade, L4
+  refactor-underfoot, L5 emergent overlap, L6 mixed actors + noise), each WITH vs
+  WITHOUT Quilt, plus a documented live sub-agent layer. Architecture is settled
+  by evidence, not vibes.
+- Local-first: all state lives under `.quilt/`. No account, no daemon, no hosted
+  service.
+
+### Security
+
+- Claim targets are validated against the repository root: absolute paths and
+  `../` traversal are rejected before any filesystem read, with a defense-in-depth
+  containment check at the read sink.
+
+### Notes
+
+- Published on npm as `quilt-cli`, providing the `quilt` command.
+- Requires Node 20+ and `git` on the PATH.
+
+[0.1.0]: https://github.com/woverfield/quilt/releases/tag/v0.1.0
