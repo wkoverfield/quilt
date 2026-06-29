@@ -147,26 +147,31 @@ const L5: Scenario = {
   ],
 };
 
-/** L6 — mixed actors + noise: human + agents + multi-file churn; does attribution hold? */
+/** L6 — mixed actors + noise: human + agents + genuinely unrelated churn. */
 const L6: Scenario = {
   id: "L6",
   title: "Mixed actors + noise",
   description:
-    "A human and two agents each touch a different file in one shared tree — a " +
-    "feature change, a util tweak, and a config bump. No edit conflicts, so the " +
-    "only question is whether each lands under its true author once there are " +
-    "multiple actors and unrelated churn, or whether the first committer absorbs " +
-    "all of it.",
-  actors: [A, B, H],
+    "A human and an agent do real feature work (a feature change, a util tweak) " +
+    "while a second human bumps a config version and a bot does an unrelated " +
+    "dependency bump — concurrent churn that has nothing to do with the feature. " +
+    "No edit conflicts, so the question is whether each change lands under its " +
+    "true author once the substantive work is buried in noise, or whether the " +
+    "first committer absorbs all of it.",
+  actors: [A, H, { id: "H2", type: "human" }, { id: "bot", type: "agent" }],
   files: {
     "app.js": "function feature() {\n  return 0;\n}\n",
     "utils.js": "function helper() {\n  return 1;\n}\n",
     "config.json": '{\n  "version": "1.0.0"\n}\n',
+    "package.json": '{\n  "dependencies": {\n    "left-pad": "1.0.0"\n  }\n}\n',
   },
   edits: [
+    // Substantive work.
     { actor: "A", file: "app.js", claim: "app.js#feature", anchor: "return 0;", replacement: "return 42;", marker: "return 42;", desc: "feature -> 42" },
-    { actor: "B", file: "utils.js", claim: "utils.js#helper", anchor: "return 1;", replacement: "return 7;", marker: "return 7;", desc: "helper -> 7" },
-    { actor: "H", file: "config.json", claim: "config.json", anchor: '"version": "1.0.0"', replacement: '"version": "2.0.0"', marker: "2.0.0", desc: "bump version" },
+    { actor: "H", file: "utils.js", claim: "utils.js#helper", anchor: "return 1;", replacement: "return 7;", marker: "return 7;", desc: "helper -> 7" },
+    // Unrelated concurrent churn (the noise): a config bump and a dependency bump.
+    { actor: "H2", file: "config.json", claim: "config.json", anchor: '"version": "1.0.0"', replacement: '"version": "2.0.0"', marker: "2.0.0", desc: "noise: bump app version" },
+    { actor: "bot", file: "package.json", claim: "package.json", anchor: '"left-pad": "1.0.0"', replacement: '"left-pad": "1.2.0"', marker: "1.2.0", desc: "noise: bump dependency" },
   ],
 };
 

@@ -65,6 +65,7 @@ test("L4 WITH Quilt surfaces the refactor/edit collision", () => {
 test("L5 WITHOUT Quilt loses A's work when B's task drifts into it", () => {
   const m = byId["L5"]!.without.metrics;
   assert.ok(m.silentLoss > 0, "emergent overlap overwrites A's in-flight change");
+  assert.ok(m.misattributed > 0, "B's absorbed edits are also credited to A");
 });
 
 test("L5 WITH Quilt catches the overlap when it emerges", () => {
