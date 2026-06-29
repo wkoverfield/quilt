@@ -137,6 +137,37 @@ function collect(top: Parser.SyntaxNode, out: CodeSymbol[]): void {
 }
 
 /**
+ * Parse `content` and hand the root node to `fn`, then free the tree. The Tree
+ * lives in the wasm heap and is reclaimed only by an explicit delete() (JS GC
+ * won't do it), so callers MUST copy any data they need into plain objects
+ * before returning — by the time `fn` returns, the tree is freed. Returns
+ * `fallback` for unsupported extensions, unparseable input, or before
+ * initSymbols() has resolved.
+ */
+function withTree<T>(
+  path: string,
+  content: string,
+  fallback: T,
+  fn: (root: Parser.SyntaxNode) => T,
+): T {
+  if (!ready) return fallback;
+  const grammar = GRAMMAR_BY_EXT[ext(path)];
+  if (!grammar) return fallback;
+  const parser = parsers.get(grammar);
+  if (!parser) return fallback;
+
+  let tree: Parser.Tree | null = null;
+  try {
+    tree = parser.parse(content);
+    return fn(tree.rootNode);
+  } catch {
+    return fallback;
+  } finally {
+    tree?.delete();
+  }
+}
+
+/**
  * Extract top-level symbols (functions, classes, exported values, plus TS
  * interfaces / enums / type aliases) with their 1-based inclusive line ranges,
  * using tree-sitter. Returns [] for unsupported extensions, unparseable input,
@@ -145,25 +176,49 @@ function collect(top: Parser.SyntaxNode, out: CodeSymbol[]): void {
  * earlier heuristic backend.
  */
 export function parseSymbols(path: string, content: string): CodeSymbol[] {
-  if (!ready) return [];
-  const grammar = GRAMMAR_BY_EXT[ext(path)];
-  if (!grammar) return [];
-  const parser = parsers.get(grammar);
-  if (!parser) return [];
-
-  // The Tree lives in the wasm heap and is freed only by an explicit delete() —
-  // JS GC won't reclaim it. We copy everything into plain CodeSymbol objects in
-  // collect() before delete(), so the long-running `quilt watch` path (which
-  // reconciles per file event) doesn't leak a tree on every pass.
-  let tree: Parser.Tree | null = null;
-  try {
-    tree = parser.parse(content);
+  return withTree(path, content, [], (root) => {
     const symbols: CodeSymbol[] = [];
-    for (const top of tree.rootNode.namedChildren) collect(top, symbols);
+    for (const top of root.namedChildren) collect(top, symbols);
     return symbols;
-  } catch {
-    return [];
-  } finally {
-    tree?.delete();
-  }
+  });
+}
+
+/**
+ * Dependency graph: maps each top-level symbol name to the set of names it
+ * references in its body — function-call callees and type references. Targets
+ * are NOT restricted to symbols defined in this file, so an imported callee
+ * (e.g. `caller` calling `api` from another module) is recorded by name; that's
+ * what lets push-awareness catch cross-file cascades when the callee is a
+ * claimed symbol elsewhere. Returns an empty map for unsupported/unparseable
+ * input.
+ */
+export function symbolReferences(path: string, content: string): Map<string, Set<string>> {
+  return withTree(path, content, new Map<string, Set<string>>(), (root) => {
+    const symbols: CodeSymbol[] = [];
+    for (const top of root.namedChildren) collect(top, symbols);
+    const refs = new Map<string, Set<string>>();
+
+    // Find the top-level symbol whose line range encloses a given 1-based row.
+    const enclosing = (row: number): string | null => {
+      for (const s of symbols) if (row >= s.startLine && row <= s.endLine) return s.name;
+      return null;
+    };
+    const add = (owner: string | null, name: string) => {
+      if (!owner || owner === name) return; // ignore self / recursion
+      (refs.get(owner) ?? refs.set(owner, new Set()).get(owner)!).add(name);
+    };
+
+    // Call-expression callees: `foo(...)` -> reference to `foo`.
+    for (const call of root.descendantsOfType("call_expression")) {
+      const callee = call.childForFieldName("function");
+      if (callee && callee.type === "identifier") {
+        add(enclosing(callee.startPosition.row + 1), callee.text);
+      }
+    }
+    // Type references: `: Foo`, `extends Foo`, etc.
+    for (const t of root.descendantsOfType("type_identifier")) {
+      add(enclosing(t.startPosition.row + 1), t.text);
+    }
+    return refs;
+  });
 }

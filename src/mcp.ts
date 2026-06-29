@@ -8,6 +8,7 @@ import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
+import { dependencyWarnings } from "./push.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
 /**
@@ -131,6 +132,9 @@ export async function runMcpServer(store: Store): Promise<void> {
       return ok({
         ...conflictsJson(model),
         clobbers: store.readClobbers().clobbers.filter((c) => !c.restored),
+        // Push-awareness: symbols this actor claimed that depend on a symbol
+        // another actor is currently changing.
+        dependencyWarnings: actorId ? dependencyWarnings(store, actorId, Date.now()) : [],
       });
     },
   );
@@ -208,7 +212,9 @@ export async function runMcpServer(store: Store): Promise<void> {
         paths,
         Date.now(),
       );
-      return ok({ results });
+      // Push-awareness at reservation time: tell the agent if anything it just
+      // claimed depends on a symbol another actor is currently changing.
+      return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });
     },
   );
 
