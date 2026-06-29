@@ -50,3 +50,36 @@ test("L3 WITH Quilt adapts the dependent call (no break)", () => {
   const m = byId["L3"]!.with.metrics;
   assert.equal(m.broken, false, "B sees A's claim and adapts");
 });
+
+test("L4 WITHOUT Quilt bulldozes B's edit during A's refactor", () => {
+  const m = byId["L4"]!.without.metrics;
+  assert.ok(m.silentLoss > 0, "B's line edit vanishes under the refactor");
+});
+
+test("L4 WITH Quilt surfaces the refactor/edit collision", () => {
+  const m = byId["L4"]!.with.metrics;
+  assert.equal(m.silentLoss, 0);
+  assert.ok(m.surfacedConflicts > 0);
+});
+
+test("L5 WITHOUT Quilt loses A's work when B's task drifts into it", () => {
+  const m = byId["L5"]!.without.metrics;
+  assert.ok(m.silentLoss > 0, "emergent overlap overwrites A's in-flight change");
+});
+
+test("L5 WITH Quilt catches the overlap when it emerges", () => {
+  const m = byId["L5"]!.with.metrics;
+  assert.equal(m.silentLoss, 0);
+  assert.ok(m.surfacedConflicts > 0, "B's late claim on A's symbol is denied");
+});
+
+test("L6 WITHOUT Quilt misattributes under mixed actors + noise", () => {
+  const m = byId["L6"]!.without.metrics;
+  assert.ok(m.misattributed > 0, "the first committer absorbs the others' work");
+});
+
+test("L6 WITH Quilt keeps every author correct under noise", () => {
+  const m = byId["L6"]!.with.metrics;
+  assert.ok(m.attributionCorrect);
+  assert.equal(m.silentLoss, 0);
+});

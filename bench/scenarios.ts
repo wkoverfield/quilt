@@ -1,8 +1,7 @@
 /**
  * The graded scenario ladder. Each rung escalates the coordination difficulty.
- * L1–L3 are implemented as deterministic scripted scenarios; L4–L6 are
- * documented here as the roadmap and are exercised today via the live
- * sub-agent layer (see bench/README.md) until scripted versions land.
+ * L1–L6 are all implemented as deterministic scripted scenarios. The live
+ * sub-agent layer (see bench/README.md) adds breadth on top of the same ladder.
  */
 import type { Scenario } from "./harness.js";
 
@@ -99,32 +98,79 @@ const L3: Scenario = {
   brokenIfFinalContains: ["api(5);"], // a 1-arg call against the new 2-arg signature
 };
 
-export const scenarios: Scenario[] = [L1, L2, L3];
+const H = { id: "H", type: "human" as const };
 
-/** L4–L6: documented rungs, exercised live until scripted versions land. */
-export const plannedScenarios: Array<{ id: string; title: string; description: string }> = [
-  {
-    id: "L4",
-    title: "Refactor underfoot",
-    description:
-      "One agent restructures a module (renames/moves symbols) while another " +
-      "edits the old layout. Tests whether Quilt's symbol-level view keeps the " +
-      "two from silently undoing each other mid-refactor.",
+/** L4 — refactor underfoot: a refactor bulldozes a concurrent edit to the same symbol. */
+const L4: Scenario = {
+  id: "L4",
+  title: "Refactor underfoot",
+  description:
+    "Agent A restructures parse() while agent B edits a line inside it. The " +
+    "refactor rewrites the very line B is changing, so without coordination B's " +
+    "edit is bulldozed and vanishes. With Quilt, B's symbol claim collides with " +
+    "A's and the conflict is surfaced rather than silently lost.",
+  actors: [A, B],
+  redoDeferred: false, // B's edit may not even make sense post-refactor — human decides.
+  files: {
+    "utils.js":
+      "function parse(input) {\n  const raw = input.trim();\n  return raw.length;\n}\n",
   },
-  {
-    id: "L5",
-    title: "Emergent overlap",
-    description:
-      "Agents start on separate tasks but drift into the same region as the work " +
-      "expands. Tests whether overlap is caught when it emerges, not just when " +
-      "declared up front.",
+  edits: [
+    // A's refactor lands first and rewrites both lines of the body.
+    { actor: "A", file: "utils.js", claim: "utils.js#parse", anchor: "const raw = input.trim();", replacement: "const raw = String(input).trim();", marker: "String(input)", desc: "harden input coercion" },
+    { actor: "A", file: "utils.js", claim: "utils.js#parse", anchor: "return raw.length;", replacement: "return raw.length * 2;", marker: "length * 2;", desc: "double the result" },
+    // B targets the original return line — gone after the refactor (bulldozed).
+    { actor: "B", file: "utils.js", claim: "utils.js#parse", anchor: "return raw.length;", replacement: "return raw.length + 10;", marker: "length + 10;", desc: "offset the result" },
+  ],
+};
+
+/** L5 — emergent overlap: agents start disjoint, then one drifts into the other's symbol. */
+const L5: Scenario = {
+  id: "L5",
+  title: "Emergent overlap",
+  description:
+    "A and B start on different functions, but B's task expands until it also " +
+    "edits A's function. The overlap was not declared up front — it emerged. " +
+    "Without coordination B's drift overwrites A's in-flight change; with Quilt, " +
+    "B's late claim on A's symbol is denied and the overlap is caught when it appears.",
+  actors: [A, B],
+  redoDeferred: false,
+  files: {
+    "utils.js":
+      "function alpha() {\n  return 1;\n}\n\nfunction beta() {\n  return 2;\n}\n",
   },
-  {
-    id: "L6",
-    title: "Mixed actors + noise",
-    description:
-      "Humans and agents working together, plus unrelated churn (formatting, " +
-      "dependency bumps). Tests attribution and conflict detection against a " +
-      "realistic, noisy stream of edits.",
+  edits: [
+    { actor: "A", file: "utils.js", claim: "utils.js#alpha", anchor: "return 1;", replacement: "return 100;", marker: "return 100;", desc: "alpha -> 100" },
+    { actor: "B", file: "utils.js", claim: "utils.js#beta", anchor: "return 2;", replacement: "return 200;", marker: "return 200;", desc: "beta -> 200" },
+    // B's work expands into alpha — A already changed it to `return 100;`.
+    { actor: "B", file: "utils.js", claim: "utils.js#alpha", anchor: "return 100;", replacement: "return 100 + 5;", marker: "100 + 5;", desc: "(emergent) also tweak alpha" },
+  ],
+};
+
+/** L6 — mixed actors + noise: human + agents + multi-file churn; does attribution hold? */
+const L6: Scenario = {
+  id: "L6",
+  title: "Mixed actors + noise",
+  description:
+    "A human and two agents each touch a different file in one shared tree — a " +
+    "feature change, a util tweak, and a config bump. No edit conflicts, so the " +
+    "only question is whether each lands under its true author once there are " +
+    "multiple actors and unrelated churn, or whether the first committer absorbs " +
+    "all of it.",
+  actors: [A, B, H],
+  files: {
+    "app.js": "function feature() {\n  return 0;\n}\n",
+    "utils.js": "function helper() {\n  return 1;\n}\n",
+    "config.json": '{\n  "version": "1.0.0"\n}\n',
   },
-];
+  edits: [
+    { actor: "A", file: "app.js", claim: "app.js#feature", anchor: "return 0;", replacement: "return 42;", marker: "return 42;", desc: "feature -> 42" },
+    { actor: "B", file: "utils.js", claim: "utils.js#helper", anchor: "return 1;", replacement: "return 7;", marker: "return 7;", desc: "helper -> 7" },
+    { actor: "H", file: "config.json", claim: "config.json", anchor: '"version": "1.0.0"', replacement: '"version": "2.0.0"', marker: "2.0.0", desc: "bump version" },
+  ],
+};
+
+export const scenarios: Scenario[] = [L1, L2, L3, L4, L5, L6];
+
+/** All ladder rungs are scripted; the live sub-agent layer (bench/README.md) adds breadth. */
+export const plannedScenarios: Array<{ id: string; title: string; description: string }> = [];
