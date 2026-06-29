@@ -11,7 +11,9 @@
 #   Right (with Quilt): each commits only its own -> both correctly attributed.
 # The two `git log`s, side by side, are the whole point. Act 1 is real git behavior.
 
-Output /tmp/quilt-contrast-throwaway.gif
+# VHS needs an Output; we only want the two Screenshots below, so this gif is a
+# throwaway (gitignored). VHS rejects absolute paths here, so keep it relative.
+Output contrast-build.gif
 
 Set Shell bash
 Set FontSize 20

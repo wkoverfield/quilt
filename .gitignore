@@ -3,5 +3,8 @@ dist/
 *.log
 .DS_Store
 
+# Throwaway render from examples/contrast.tape (we keep the Screenshots, not this)
+contrast-build.gif
+
 # Quilt's own local state (also self-ignored via .quilt/.gitignore)
 .quilt/
