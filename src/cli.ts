@@ -8,6 +8,7 @@ import { Store } from "./state.js";
 import { repoRoot, shortHead, headSha } from "./git.js";
 import { activeContext } from "./session.js";
 import { reconcile, buildModel } from "./engine.js";
+import { initSymbols } from "./symbols.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
@@ -543,6 +544,11 @@ program
     process.stdout.write(pc.green("✓ ") + `Ended session ${session.id}.\n`);
   });
 
-program.parseAsync(process.argv).catch((err) => {
-  fail(err instanceof Error ? err.message : String(err));
-});
+// Load the tree-sitter grammars once up front (best-effort, ~20ms) so the
+// synchronous parseSymbols() used inside reconcile has them ready. If init
+// fails, symbol parsing degrades to whole-file claims rather than crashing.
+initSymbols()
+  .then(() => program.parseAsync(process.argv))
+  .catch((err) => {
+    fail(err instanceof Error ? err.message : String(err));
+  });
