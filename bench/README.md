@@ -29,13 +29,13 @@ two-agent experiments — the failure modes are real, observed ones.
 | **L1** | Disjoint at scale | N agents, different symbols, one file. Does each change get committed and **attributed** to its author, or absorbed into one entangled commit? |
 | **L2** | Incompatible conflict | Two agents want the same line to be two different things. Is one side **silently overwritten**, or is the collision **surfaced** for a human? |
 | **L3** | Dependency cascade | One agent changes a signature another depends on. Does the dependent break against the old signature, or **adapt** because it saw the change coming? |
-| **L4** | Refactor underfoot | One agent restructures a module while another edits the old layout. *(planned — live layer today)* |
-| **L5** | Emergent overlap | Agents start separate but drift into the same region. *(planned — live layer today)* |
-| **L6** | Mixed actors + noise | Humans + agents + unrelated churn. *(planned — live layer today)* |
+| **L4** | Refactor underfoot | One agent restructures a symbol while another edits a line inside it. Is the in-flight edit **bulldozed** by the refactor, or does the claim collision **surface** it? |
+| **L5** | Emergent overlap | Agents start on different symbols, but one's task **drifts** into the other's. Is the overlap caught when it *emerges*, or does the drift silently overwrite? |
+| **L6** | Mixed actors + noise | A human + agents each touch a different file under unrelated churn. Does each change land under its **true author**, or does the first committer absorb all of it? |
 
-L1–L3 are implemented as deterministic scripted scenarios. L4–L6 are documented
-here and exercised via the live sub-agent layer below until scripted versions
-land.
+All six rungs are implemented as deterministic scripted scenarios. The live
+sub-agent layer below adds breadth (real agents, real LLM-judged resolution
+quality) on top of the same ladder.
 
 ## Metrics
 
@@ -87,7 +87,9 @@ Two honest caveats:
 
 The scripted layer encodes the cooperative contract; the live layer tests
 whether real agents honor it. This is how the experiments that produced the
-ladder were actually run, written down so they're repeatable.
+ladder were actually run, written down so they're repeatable. The operational
+runbook, per-rung agent task lists, and a results template live in
+[`live/`](live/README.md); the protocol summary follows.
 
 **Setup (per condition).** Create a throwaway git repo with a seed codebase and
 a short task list whose items overlap in the way a given rung specifies.
@@ -120,5 +122,6 @@ don't protect them for free either).
 ## Files
 
 - `harness.ts` — sandbox repos, mode-aware run primitives, metrics, grading.
-- `scenarios.ts` — the L1–L3 scenarios as data, plus L4–L6 roadmap stubs.
+- `scenarios.ts` — the L1–L6 scenarios as data.
 - `run.ts` — CLI entry / report (`npm run bench`).
+- `live/` — the live sub-agent layer: runbook, per-rung task lists, results template.

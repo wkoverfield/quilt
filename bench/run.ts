@@ -93,7 +93,7 @@ function main(): void {
     if (!printResult(result)) allClean = false;
   }
 
-  if (!filter) {
+  if (!filter && plannedScenarios.length > 0) {
     console.log(`\n${BOLD}Planned rungs${RESET} ${DIM}(live sub-agent layer today — see bench/README.md)${RESET}`);
     for (const p of plannedScenarios) {
       console.log(`  ${DIM}${p.id} — ${p.title}: ${p.description.split(".")[0]}.${RESET}`);
