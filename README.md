@@ -130,10 +130,11 @@ watch` running while agents work — it keeps that snapshot current to each edit
 Without the watcher, the preserved version is only as fresh as the last `quilt`
 command the victim ran.
 
-This is the same checkout's safety net: where two agents in one folder would
-normally clobber each other invisibly, Quilt makes the loss visible and
-recoverable. (Preventing the overwrite outright — advisory claims — arrives with
-the agent-facing MCP layer.)
+This is the safety net for actors Quilt knows about: when one actor's edit
+overwrites lines another actor already owns, the loss is made visible and
+recoverable instead of silent. (Preventing the overwrite outright — advisory
+claims — arrives with the agent-facing MCP layer.) It can't referee writers that
+never identify themselves; Quilt coordinates participants, not anonymous edits.
 
 ## Agent-native: the MCP server
 
@@ -156,11 +157,17 @@ Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
 start_session  →  get_status  →  claim(files)  →  …edit…  →  commit_mine
 ```
 
-`claim` adds **advisory prevention** on top of the watcher's detect-and-preserve:
-if a file is already claimed by another actor, the call is denied and a
-well-behaved agent edits something else. Agents that ignore claims still get
-caught by collision detection — prevention for cooperators, a safety net for the
-rest.
+`claim` adds **advisory prevention** on top of detect-and-preserve: a file
+already claimed by another actor is denied, so a well-behaved agent edits
+something else. An agent that skips claiming but still drives Quilt as itself is
+still caught by collision detection.
+
+Quilt is a **cooperative protocol** — like git, it coordinates the agents that
+participate. Each agent identifies itself (its own MCP server, or `QUILT_ACTOR`).
+An agent that ignores Quilt entirely gets no protection, the same way a worktree
+gives an uncoordinated agent only isolation, not coordination. The intended path
+is to wire your agents (or your orchestrator) into the MCP server so cooperation
+is the default.
 
 ## How attribution works
 
