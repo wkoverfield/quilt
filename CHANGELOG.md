@@ -52,4 +52,4 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `quilt-cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
-[0.1.0]: https://github.com/woverfield/quilt/releases/tag/v0.1.0
+[0.1.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.1.0
