@@ -18,6 +18,7 @@
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
     "test": "npm run build && node --import tsx --test test/*.test.ts",
+    "bench": "npm run build && node --import tsx bench/run.ts",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
