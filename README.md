@@ -1,6 +1,6 @@
 # Quilt
 
-[![CI](https://github.com/woverfield/quilt/actions/workflows/ci.yml/badge.svg)](https://github.com/woverfield/quilt/actions/workflows/ci.yml)
+[![CI](https://github.com/wkoverfield/quilt/actions/workflows/ci.yml/badge.svg)](https://github.com/wkoverfield/quilt/actions/workflows/ci.yml)
 
 **The coordination layer for agent fleets.** Same repo. Many agents. Clean commits.
 
@@ -24,7 +24,7 @@ is an ordinary Git commit.
 ### See it in 20 seconds
 
 ```bash
-git clone https://github.com/woverfield/quilt && cd quilt
+git clone https://github.com/wkoverfield/quilt && cd quilt
 npm install && npm run build
 ./examples/demo.sh
 ```

@@ -15,13 +15,13 @@
     "node": ">=20"
   },
   "author": "Wilson Overfield",
-  "homepage": "https://github.com/woverfield/quilt#readme",
+  "homepage": "https://github.com/wkoverfield/quilt#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/woverfield/quilt.git"
+    "url": "git+https://github.com/wkoverfield/quilt.git"
   },
   "bugs": {
-    "url": "https://github.com/woverfield/quilt/issues"
+    "url": "https://github.com/wkoverfield/quilt/issues"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
