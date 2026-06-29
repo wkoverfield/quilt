@@ -9,6 +9,7 @@ import { repoRoot, shortHead, headSha } from "./git.js";
 import { activeContext } from "./session.js";
 import { reconcile, buildModel } from "./engine.js";
 import { initSymbols } from "./symbols.js";
+import { dependencyWarnings, formatWarning } from "./push.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
@@ -163,9 +164,16 @@ program
     const ctx = activeContext(store);
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
+    const warnings = ctx.actorId
+      ? dependencyWarnings(store, ctx.actorId, Date.now())
+      : [];
     if (opts.json) {
       process.stdout.write(
-        JSON.stringify(statusJson(model, headSha(store.paths.repoRoot)), null, 2) + "\n",
+        JSON.stringify(
+          { ...statusJson(model, headSha(store.paths.repoRoot)), dependencyWarnings: warnings },
+          null,
+          2,
+        ) + "\n",
       );
       return;
     }
@@ -174,6 +182,13 @@ program
       process.stdout.write(pc.dim("  watching: live (quilt watch)\n\n"));
     }
     printClaims(store);
+    if (warnings.length) {
+      process.stdout.write(pc.yellow(pc.bold("  Dependency heads-up:\n")));
+      for (const w of warnings) {
+        process.stdout.write("    " + pc.yellow("⚠ ") + formatWarning(w) + "\n");
+      }
+      process.stdout.write("\n");
+    }
     printClobbers(store);
   });
 
@@ -454,8 +469,11 @@ program
       paths,
       Date.now(),
     );
+    // Push-awareness: warn if anything just claimed depends on a symbol another
+    // actor is currently changing, so the actor learns at reservation time.
+    const warnings = dependencyWarnings(store, ctx.actorId!, Date.now());
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ results }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
     } else {
       for (const r of results) {
         const target = r.symbol ? `${r.path}#${r.symbol}` : r.path;
@@ -466,6 +484,9 @@ program
             pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(held by ${r.holder})`)}\n`,
           );
         }
+      }
+      for (const w of warnings) {
+        process.stdout.write(pc.yellow("  ⚠ heads-up ") + formatWarning(w) + "\n");
       }
     }
     if (results.some((r) => !r.granted)) process.exitCode = 1;
