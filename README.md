@@ -66,9 +66,15 @@ ordinary Git commit.
 ## Install
 
 ```bash
+npm install -g @quilt-dev/cli     # puts the `quilt` command on your PATH
+```
+
+Or from source:
+
+```bash
 npm install        # install deps
 npm run build      # compile to dist/
-npm link           # optional: put `quilt` on your PATH
+npm link           # put `quilt` on your PATH
 ```
 
 Requires Node 20+ and `git` on the PATH.
