@@ -10,6 +10,10 @@ quilt commit --mine
 
 ![Two coding agents share one checkout: they claim different functions without contending, one gets a heads-up that something it depends on is changing, and each commits only its own work.](examples/demo.gif)
 
+Same edits, two agents, one repo. Plain git vs Quilt:
+
+![Without Quilt, the first agent's commit absorbs the other's work and the history credits one author; with Quilt, each change is committed by the agent that made it.](examples/contrast.png)
+
 Everyone else ran *toward* isolation: a worktree per agent, a branch per agent,
 reconcile at PR time. That trades one mess for another. You get `node_modules`,
 `.env`, and build caches per worktree, agents blind to each other's in-flight
