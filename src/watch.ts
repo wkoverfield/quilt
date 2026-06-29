@@ -96,8 +96,8 @@ export function runWatch(store: Store): void {
         printed.add(c.id);
         process.stdout.write(
           pc.red("  ⚠ collision  ") +
-            `${pc.bold(c.byActor)} overwrote ${pc.bold(c.victimActor)}'s edits in ${c.path} — ` +
-            pc.dim(`both saved · quilt restore ${c.path}\n`),
+            `${pc.bold(c.byActor)} overwrote ${pc.bold(c.victimActor)}'s edits in ${c.path}. ` +
+            pc.dim(`both saved, run: quilt restore ${c.path}\n`),
         );
       }
     } catch (err) {
