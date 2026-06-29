@@ -1,18 +1,23 @@
-# Quilt contrast — LEFT panel (without Quilt). One screenshot, via VHS.
-# See examples/contrast-with.tape for the right panel and the compose step.
+# Quilt contrast — LEFT half of the split-screen GIF (without Quilt).
+# See examples/contrast-with.tape for the right half and the stack step.
 #
-#   vhs examples/contrast-without.tape   # writes examples/contrast-without.png
+#   vhs examples/contrast-without.tape    # writes examples/contrast-without.gif
 #
-# Real naive-git behavior: codex changes rate(), claude changes tax(); codex's
-# commit absorbs both, so the history shows only codex and claude committed nothing.
+# Real naive-git behavior: codex changes rate(), claude changes tax(); the same
+# two commit commands run on both sides — here codex's commit absorbs claude's
+# work, claude gets "nothing to commit", and the log shows only codex.
+#
+# Keep the Set + Sleep values identical to contrast-with.tape so the two halves
+# stay the same size and stay in sync when stacked.
 
-Output contrast-build.gif
+Output examples/contrast-without.gif
 
 Set Shell bash
-Set FontSize 20
-Set Width 760
-Set Height 320
-Set Padding 28
+Set Width 720
+Set Height 460
+Set FontSize 17
+Set Padding 22
+Set TypingSpeed 45ms
 
 Hide
 Type 'codex(){ git -c user.name=codex -c user.email=codex@quilt.local "$@"; }; claude(){ git -c user.name=claude -c user.email=claude@quilt.local "$@"; }'
@@ -21,14 +26,18 @@ Type 'D=$(mktemp -d); cd "$D"; git init -q; git config user.email demo@quilt.loc
 Enter
 Type 'printf "export function rate() {\n  return 0.05;\n}\n\nexport function tax() {\n  return 0.20;\n}\n" > billing.js; git add -A; git commit -qm init >/dev/null'
 Enter
-Type 'perl -i -pe "s/0.05/0.07/" billing.js; perl -i -pe "s/0.20/0.25/" billing.js'
+Type 'perl -i -pe "s/0.05/0.07/" billing.js; perl -i -pe "s/0.20/0.25/" billing.js; clear'
 Enter
-Type 'codex commit -am "raise rate" >/dev/null; claude commit -am "raise tax" >/dev/null 2>&1'
-Enter
-Sleep 1.5s
 Show
-Type 'clear; echo "  ❌  WITHOUT QUILT"; echo; git log --pretty="  %an: %s"; echo; echo "  claude committed nothing -- its work folded into codex"'
+Type "#  ❌  WITHOUT QUILT"
 Enter
 Sleep 1.5s
-Screenshot examples/contrast-without.png
-Sleep 1s
+Type 'codex commit -am "raise rate"'
+Enter
+Sleep 2s
+Type 'claude commit -am "raise tax"'
+Enter
+Sleep 2.8s
+Type 'git log --pretty="  %an: %s"'
+Enter
+Sleep 3.5s

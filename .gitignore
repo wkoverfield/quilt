@@ -3,8 +3,9 @@ dist/
 *.log
 .DS_Store
 
-# Throwaway render from examples/contrast.tape (we keep the Screenshots, not this)
-contrast-build.gif
+# Intermediate halves of the split-screen contrast GIF (we commit examples/contrast.gif)
+examples/contrast-without.gif
+examples/contrast-with.gif
 
 # Quilt's own local state (also self-ignored via .quilt/.gitignore)
 .quilt/

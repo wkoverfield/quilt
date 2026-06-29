@@ -1,22 +1,25 @@
-# Quilt contrast — RIGHT panel (with Quilt). One screenshot, via VHS.
+# Quilt contrast — RIGHT half of the split-screen GIF (with Quilt).
 #
-# Generate BOTH panels and compose the side-by-side image:
-#   brew install vhs imagemagick
-#   vhs examples/contrast-without.tape    # writes examples/contrast-without.png
-#   vhs examples/contrast-with.tape       # writes examples/contrast-with.png
-#   magick examples/contrast-without.png examples/contrast-with.png +append examples/contrast.png
-#   #  (ImageMagick v6: use `convert` instead of `magick`)
+# Build the side-by-side, simultaneous split-screen GIF:
+#   brew install vhs ffmpeg
+#   vhs examples/contrast-without.tape    # writes examples/contrast-without.gif
+#   vhs examples/contrast-with.tape       # writes examples/contrast-with.gif
+#   ffmpeg -i examples/contrast-without.gif -i examples/contrast-with.gif \
+#     -filter_complex "[0:v][1:v]hstack=inputs=2,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
+#     -y examples/contrast.gif
 #
-# Same scenario as the left panel, but each agent claims its function and commits
-# only its own, so both land correctly attributed.
+# Same scenario and the same two commit commands as the left half — but each
+# agent claimed its function (off-screen), so both commits land and the log shows
+# both, correctly attributed. Keep Set + Sleep values identical to the left half.
 
-Output contrast-build.gif
+Output examples/contrast-with.gif
 
 Set Shell bash
-Set FontSize 20
-Set Width 760
-Set Height 320
-Set Padding 28
+Set Width 720
+Set Height 460
+Set FontSize 17
+Set Padding 22
+Set TypingSpeed 45ms
 
 Hide
 Type 'Q="$PWD/dist/cli.js"; npm run build >/dev/null 2>&1'
@@ -34,14 +37,19 @@ Sleep 2s
 Type 'codex claim billing.js#rate >/dev/null; claude claim billing.js#tax >/dev/null'
 Enter
 Sleep 1.5s
-Type 'perl -i -pe "s/0.05/0.07/" billing.js; perl -i -pe "s/0.20/0.25/" billing.js'
-Enter
-Type 'codex commit --mine -m "raise rate" >/dev/null; claude commit --mine -m "raise tax" >/dev/null'
-Enter
-Sleep 3s
-Show
-Type 'clear; echo "  ✅  WITH QUILT"; echo; git log --pretty="  %an: %s"; echo; echo "  each change attributed to the agent that made it"'
+Type 'perl -i -pe "s/0.05/0.07/" billing.js; perl -i -pe "s/0.20/0.25/" billing.js; clear'
 Enter
 Sleep 1.5s
-Screenshot examples/contrast-with.png
-Sleep 1s
+Show
+Type "#  ✅  WITH QUILT"
+Enter
+Sleep 1.5s
+Type 'codex commit --mine -m "raise rate"'
+Enter
+Sleep 2s
+Type 'claude commit --mine -m "raise tax"'
+Enter
+Sleep 2.8s
+Type 'git log --pretty="  %an: %s"'
+Enter
+Sleep 3.5s
