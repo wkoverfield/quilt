@@ -94,11 +94,3 @@ export function parseSymbols(path: string, content: string): CodeSymbol[] {
 
   return symbols;
 }
-
-/** The symbol whose range contains a given 1-based line, if any. */
-export function symbolAtLine(symbols: CodeSymbol[], line: number): CodeSymbol | null {
-  for (const s of symbols) {
-    if (line >= s.startLine && line <= s.endLine) return s;
-  }
-  return null;
-}
