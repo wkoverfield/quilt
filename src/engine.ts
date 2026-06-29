@@ -105,7 +105,20 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   const clobbers = store.readClobbers();
   let clobbersChanged = false;
 
+  // Files reserved by OTHER actors. We skip them entirely this pass: don't
+  // attribute, don't advance the observed snapshot, don't prune. A claim
+  // reserves not just editing but attribution, so one actor's reconcile can
+  // never absorb or mis-credit another actor's in-flight work on a claimed file.
+  const nowMs = Date.now();
+  const claimedByOther = new Map<string, string>();
+  for (const c of store.readClaims().claims) {
+    if (c.expiresAt > nowMs && c.actor !== activeActorId) {
+      claimedByOther.set(c.path, c.actor);
+    }
+  }
+
   for (const path of relevantPaths(store)) {
+    if (claimedByOther.has(path)) continue;
     const head = headBlob(repoRoot, path);
     const current = readWorktree(repoRoot, path);
 
