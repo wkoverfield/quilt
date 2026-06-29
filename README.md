@@ -63,6 +63,33 @@ ordinary Git commit.
 
 ---
 
+## Why not worktrees?
+
+A worktree (or branch, or clone) per agent is the usual answer, and for fully
+independent tasks it works. But isolation has costs that grow with the number of
+agents:
+
+- **Setup tax.** Every worktree needs its own install, build, and environment —
+  `node_modules`, `.env`, build caches — duplicated N times.
+- **Blindness.** Agents can't see each other's uncommitted work, so they find
+  out they collided or broke a shared dependency at merge time, after the work
+  is already done.
+- **Merge tax.** Reconciliation happens at the end, when the branches have
+  diverged the most.
+
+The deeper issue is that worktrees isolate; they don't coordinate. When agents
+are working in the same codebase, you usually want the opposite — for them to
+see each other and account for each other as they go. Quilt keeps everyone in
+one checkout and coordinates continuously: claims stop collisions before they
+happen, shared visibility lets an agent adapt to what another is doing, and
+`commit --mine` keeps each actor's history clean without a checkout per agent.
+
+Worktrees still make sense for genuinely independent, long-running work, or when
+you want hard OS-level isolation. Quilt is for agents working the same code at
+the same time. The two aren't mutually exclusive.
+
+---
+
 ## Install
 
 ```bash
