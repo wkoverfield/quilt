@@ -14,12 +14,12 @@ reconcile at PR time. That trades one mess for another. You get `node_modules`,
 work, and a merge pile-up at the end. Quilt goes the other way: **many agents,
 one checkout**, coordinating in the open.
 
-The bet is that parallelism comes from **coordination and visibility**, not
-isolation and blindness. Agents claim the symbols they're about to touch, see
-each other's uncommitted work, get a heads-up when a function they depend on is
-changing, and each commits only its own hunks. Quilt is a cooperative protocol,
-like Git itself, and it keeps Git as the source of truth: every commit it makes
-is an ordinary Git commit.
+Parallelism comes from **coordination and visibility**, not isolation and
+blindness. Agents claim the code they're about to touch, see each other's
+uncommitted work, get a heads-up when something they depend on is changing, and
+each commits only its own changes. Quilt is a cooperative protocol, like Git
+itself, and it keeps Git as the source of truth: every commit it makes is an
+ordinary Git commit.
 
 ### See it in 20 seconds
 
