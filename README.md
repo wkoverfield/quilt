@@ -12,7 +12,7 @@ quilt commit --mine
 
 Same edits, two agents, one repo. Plain git vs Quilt:
 
-![Without Quilt, the first agent's commit absorbs the other's work and the history credits one author; with Quilt, each change is committed by the agent that made it.](examples/contrast.png)
+![Without Quilt, the first agent's commit absorbs the other's work and the history credits one author; with Quilt, each change is committed by the agent that made it.](examples/contrast.gif)
 
 Everyone else ran *toward* isolation: a worktree per agent, a branch per agent,
 reconcile at PR time. That trades one mess for another. You get `node_modules`,
