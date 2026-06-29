@@ -11,8 +11,8 @@
 #   Right (with Quilt): each commits only its own -> both correctly attributed.
 # The two `git log`s, side by side, are the whole point. Act 1 is real git behavior.
 
-# VHS needs an Output; we only want the two Screenshots below, so this gif is a
-# throwaway (gitignored). VHS rejects absolute paths here, so keep it relative.
+# VHS needs an Output and at least some visible frames; this gif is a throwaway
+# (gitignored). VHS rejects absolute paths here, so keep it relative.
 Output contrast-build.gif
 
 Set Shell bash
@@ -21,7 +21,7 @@ Set Width 760
 Set Height 320
 Set Padding 28
 
-# everything is hidden; we only want the two Screenshots
+# ----- hidden: build + helpers -----
 Hide
 Type 'Q="$PWD/dist/cli.js"; npm run build >/dev/null 2>&1'
 Enter
@@ -30,19 +30,21 @@ Enter
 Type 'seed(){ git init -q; git config user.email demo@quilt.local; git config user.name demo; git config commit.gpgsign false; printf "export function rate() {\n  return 0.05;\n}\n\nexport function tax() {\n  return 0.20;\n}\n" > billing.js; git add -A; git commit -qm init >/dev/null; }'
 Enter
 
-# ----- LEFT: without Quilt (plain git, two identities) -----
+# ----- LEFT: without Quilt (hidden setup, shown panel) -----
 Type 'codex(){ git -c user.name=codex -c user.email=codex@quilt.local "$@"; }; claude(){ git -c user.name=claude -c user.email=claude@quilt.local "$@"; }'
 Enter
 Type 'D1=$(mktemp -d); cd "$D1"; seed; bump_rate; bump_tax'
 Enter
 Type 'codex commit -am "raise rate" >/dev/null; claude commit -am "raise tax" >/dev/null 2>&1'
 Enter
+Show
 Type 'clear; echo "  ❌  WITHOUT QUILT"; echo; git log --pretty="  %an: %s"; echo; echo "  claude committed nothing -- its work folded into codex"'
 Enter
-Sleep 800ms
+Sleep 1.2s
 Screenshot examples/contrast-without.png
 
-# ----- RIGHT: with Quilt -----
+# ----- RIGHT: with Quilt (hidden setup, shown panel) -----
+Hide
 Type 'unset -f codex claude; codex(){ QUILT_ACTOR=codex node "$Q" "$@"; }; claude(){ QUILT_ACTOR=claude node "$Q" "$@"; }'
 Enter
 Type 'D2=$(mktemp -d); cd "$D2"; seed; node "$Q" init >/dev/null; codex start --actor codex --type agent >/dev/null; claude start --actor claude --type agent >/dev/null'
@@ -51,7 +53,8 @@ Type 'codex claim billing.js#rate >/dev/null; claude claim billing.js#tax >/dev/
 Enter
 Type 'codex commit --mine -m "raise rate" >/dev/null; claude commit --mine -m "raise tax" >/dev/null'
 Enter
+Show
 Type 'clear; echo "  ✅  WITH QUILT"; echo; git log --pretty="  %an: %s"; echo; echo "  each change attributed to the agent that made it"'
 Enter
-Sleep 800ms
+Sleep 1.2s
 Screenshot examples/contrast-with.png
