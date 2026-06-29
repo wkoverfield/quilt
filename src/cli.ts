@@ -12,7 +12,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
+import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
 import { runMcpServer } from "./mcp.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -54,7 +54,7 @@ function printClaims(store: Store): void {
   if (claims.length === 0) return;
   process.stdout.write(pc.dim(pc.bold("  Claimed (reserved for editing):\n")));
   for (const c of claims) {
-    process.stdout.write(`    ${c.path}   ${pc.dim(c.actor)}\n`);
+    process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}\n`);
   }
   process.stdout.write("\n");
 }
@@ -420,7 +420,7 @@ program
 
 program
   .command("claim")
-  .description("Reserve files for editing (advisory) so other actors stay off them")
+  .description("Reserve files (or file#symbol) for editing; with none, lists claims")
   .argument("[paths...]", "files to claim; with none, lists active claims")
   .option("--json", "emit JSON")
   .action((paths: string[], opts: { json?: boolean }) => {
@@ -439,7 +439,7 @@ program
       }
       process.stdout.write(pc.bold("\n  Active claims:\n\n"));
       for (const c of claims) {
-        process.stdout.write(`    ${c.path}   ${pc.dim(c.actor)}\n`);
+        process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}\n`);
       }
       process.stdout.write("\n");
       return;
@@ -457,11 +457,12 @@ program
       process.stdout.write(JSON.stringify({ results }, null, 2) + "\n");
     } else {
       for (const r of results) {
+        const target = r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
-          process.stdout.write(pc.green("  ✓ claimed ") + r.path + "\n");
+          process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
         } else {
           process.stdout.write(
-            pc.red("  ✗ denied  ") + `${r.path} ${pc.dim(`(held by ${r.holder})`)}\n`,
+            pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(held by ${r.holder})`)}\n`,
           );
         }
       }

@@ -94,3 +94,54 @@ test("a file claimed by B is NOT absorbed by A's reconcile or commit", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("two actors editing DIFFERENT symbols in one file: parallel, no contention, no absorb, clean commits", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-sym-"));
+  const g = (a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+  g(["init", "-q"]);
+  g(["config", "user.email", "t@t.io"]);
+  g(["config", "user.name", "t"]);
+  g(["config", "commit.gpgsign", "false"]);
+  // foo and bar are well separated (padding) so their edits land in distinct hunks.
+  const file = (a: string, b: string) =>
+    `function foo() {\n  return ${a};\n}\n\n// ----\n// ----\n// ----\n// ----\n// ----\n// ----\n// ----\n\nfunction bar() {\n  return ${b};\n}\n`;
+  writeFileSync(join(dir, "utils.js"), file("1", "2"));
+  g(["add", "-A"]);
+  g(["commit", "-q", "-m", "init"]);
+  spawnSync("node", [CLI, "init"], { cwd: dir });
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    quilt(dir, ["start", "--actor", "B", "--type", "agent"]);
+
+    // Symbol claims on different functions both granted (no false contention).
+    assert.equal(quilt(dir, ["claim", "utils.js#foo"], "A").status, 0);
+    assert.equal(
+      quilt(dir, ["claim", "utils.js#bar"], "B").status,
+      0,
+      "B is NOT blocked by A's claim on a different symbol",
+    );
+
+    // Both edit their own function in the shared file (no waiting).
+    writeFileSync(join(dir, "utils.js"), file("10", "20"));
+
+    // Attribution stays separated: A owns only foo, B owns only bar.
+    assert.match(quilt(dir, ["preview", "--mine"], "A").stdout, /return 10/);
+    assert.doesNotMatch(quilt(dir, ["preview", "--mine"], "A").stdout, /return 20/);
+    assert.match(quilt(dir, ["preview", "--mine"], "B").stdout, /return 20/);
+    assert.doesNotMatch(quilt(dir, ["preview", "--mine"], "B").stdout, /return 10/);
+
+    // Each commits its own symbol cleanly; the other's change stays in the tree.
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "A: foo"], "A").status, 0);
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "B: bar"], "B").status, 0);
+    const head = spawnSync("git", ["show", "HEAD:utils.js"], { cwd: dir, encoding: "utf8" }).stdout;
+    assert.match(head, /return 10/, "foo change committed");
+    assert.match(head, /return 20/, "bar change committed");
+    assert.equal(
+      spawnSync("git", ["log", "--pretty=%an", "-2"], { cwd: dir, encoding: "utf8" }).stdout.trim(),
+      "B\nA",
+      "two commits, correctly attributed to B then A",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

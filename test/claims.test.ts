@@ -92,6 +92,26 @@ test("claims: ./foo and foo are the same claim (path normalization)", () => {
   }
 });
 
+test("claims: different symbols in one file don't contend; same symbol does", () => {
+  const { s, dir } = newStore();
+  try {
+    const t = 1000;
+    assert.equal(acquireClaims(s, "a1", null, ["utils.js#foo"], t)[0]!.granted, true);
+    // Different symbol, same file → granted.
+    const bar = acquireClaims(s, "a2", null, ["utils.js#bar"], t)[0]!;
+    assert.equal(bar.granted, true);
+    assert.equal(bar.symbol, "bar");
+    // Same symbol → denied.
+    const foo2 = acquireClaims(s, "a2", null, ["utils.js#foo"], t)[0]!;
+    assert.equal(foo2.granted, false);
+    assert.equal(foo2.holder, "a1");
+    // A whole-file claim overlaps any symbol claim → denied.
+    assert.equal(acquireClaims(s, "a3", null, ["utils.js"], t)[0]!.granted, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("withLock is not reentrant (fails fast instead of self-deadlocking)", () => {
   const { s, dir } = newStore();
   try {
