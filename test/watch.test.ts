@@ -48,6 +48,17 @@ function cleanup(dir: string): void {
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+/** Poll `fn` until it returns true or the timeout elapses. Avoids fixed-sleep
+ *  races: a fresh `node` watcher process can take well over half a second to
+ *  boot under parallel test load, so we wait for the condition, not the clock. */
+async function waitUntil(fn: () => boolean, timeoutMs = 8000, stepMs = 100): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (fn()) return true;
+    await sleep(stepMs);
+  }
+  return fn();
+}
 
 test("clobber is detected and restore recovers the overwritten version", () => {
   const dir = makeRepo();
@@ -157,18 +168,21 @@ test("quilt watch attributes a live edit to the active actor without a manual st
       env: { ...process.env, QUILT_ACTOR: "alice" },
       stdio: "ignore",
     });
-    await sleep(600); // let the watcher boot and register its pidfile
-    assert.ok(existsSync(join(dir, ".quilt", "watcher.pid")), "watcher pidfile written");
+    // Wait for the watcher to boot and register its pidfile (poll, don't guess).
+    const booted = await waitUntil(() => existsSync(join(dir, ".quilt", "watcher.pid")));
+    assert.ok(booted, "watcher pidfile written");
 
     // Edit WITHOUT running any quilt command — the watcher should attribute it.
     write(dir, "live.txt", "alice-live-edit\n");
 
-    let owned = false;
-    for (let i = 0; i < 30 && !owned; i++) {
-      await sleep(150);
-      const own = JSON.parse(read(dir, join(".quilt", "ownership.json")));
-      owned = own.files?.["live.txt"]?.added?.["alice-live-edit"] === "alice";
-    }
+    const owned = await waitUntil(() => {
+      try {
+        const own = JSON.parse(read(dir, join(".quilt", "ownership.json")));
+        return own.files?.["live.txt"]?.added?.["alice-live-edit"] === "alice";
+      } catch {
+        return false; // file missing or mid-write — keep polling
+      }
+    });
     assert.ok(owned, "watcher attributed the live edit to alice");
   } finally {
     if (watcher) watcher.kill("SIGTERM");
