@@ -151,14 +151,19 @@ export function parseSymbols(path: string, content: string): CodeSymbol[] {
   const parser = parsers.get(grammar);
   if (!parser) return [];
 
-  let root: Parser.SyntaxNode;
+  // The Tree lives in the wasm heap and is freed only by an explicit delete() —
+  // JS GC won't reclaim it. We copy everything into plain CodeSymbol objects in
+  // collect() before delete(), so the long-running `quilt watch` path (which
+  // reconciles per file event) doesn't leak a tree on every pass.
+  let tree: Parser.Tree | null = null;
   try {
-    root = parser.parse(content).rootNode;
+    tree = parser.parse(content);
+    const symbols: CodeSymbol[] = [];
+    for (const top of tree.rootNode.namedChildren) collect(top, symbols);
+    return symbols;
   } catch {
     return [];
+  } finally {
+    tree?.delete();
   }
-
-  const symbols: CodeSymbol[] = [];
-  for (const top of root.namedChildren) collect(top, symbols);
-  return symbols;
 }
