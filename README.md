@@ -8,6 +8,8 @@
 quilt commit --mine
 ```
 
+![Two coding agents share one checkout: they claim different functions without contending, one gets a heads-up that something it depends on is changing, and each commits only its own work.](examples/demo.gif)
+
 Everyone else ran *toward* isolation: a worktree per agent, a branch per agent,
 reconcile at PR time. That trades one mess for another. You get `node_modules`,
 `.env`, and build caches per worktree, agents blind to each other's in-flight
