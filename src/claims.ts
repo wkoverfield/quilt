@@ -1,3 +1,4 @@
+import { resolve, sep } from "node:path";
 import type { Store } from "./state.js";
 import type { Claim } from "./types.js";
 
@@ -15,6 +16,20 @@ export interface ClaimResult {
   granted: boolean;
   /** when denied, the actor currently holding the conflicting reservation */
   holder?: string;
+  /** when denied for a non-conflict reason (e.g. a path outside the repo) */
+  reason?: "outside-repo";
+}
+
+/**
+ * True if `p` resolves outside `repoRoot` (absolute path or `../` traversal).
+ * Claim targets are actor-controlled, so this gates them before any filesystem
+ * read keyed on a claim path (push-awareness reads claimed files) can escape the
+ * repository. Mirrors the guard the restore path already applies to writes.
+ */
+function escapesRepo(repoRoot: string, p: string): boolean {
+  const root = resolve(repoRoot);
+  const abs = resolve(root, p);
+  return abs !== root && !abs.startsWith(root + sep);
 }
 
 function active(claims: Claim[], now: number): Claim[] {
@@ -71,6 +86,13 @@ export function acquireClaims(
     const results: ClaimResult[] = [];
     for (const raw of rawPaths) {
       const target = parseTarget(raw);
+
+      // Never let an actor reserve (and thereby cause a read of) a path outside
+      // the repo. Absolute paths and `../` traversal are rejected outright.
+      if (escapesRepo(store.paths.repoRoot, target.path)) {
+        results.push({ ...target, granted: false, reason: "outside-repo" });
+        continue;
+      }
 
       const conflict = file.claims.find(
         (c) => c.actor !== actorId && overlaps(target, c),

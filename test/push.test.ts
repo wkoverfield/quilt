@@ -101,3 +101,20 @@ test("no warning when the dependency is not claimed by anyone else", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("claim targets that escape the repo are rejected, never read", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"], "A");
+    for (const bad of ["../../../../etc/passwd#root", "/etc/passwd#root", "../secret.txt"]) {
+      const r = quilt(dir, ["claim", bad], "A");
+      assert.notEqual(r.status, 0, `${bad} must be denied (non-zero exit)`);
+      assert.match(r.stdout, /outside the repository/, `${bad} reason surfaced`);
+    }
+    // The rejected targets are not persisted as claims.
+    const claims = JSON.parse(quilt(dir, ["claim", "--json"], "A").stdout).claims;
+    assert.equal(claims.length, 0, "no out-of-repo claim was stored");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

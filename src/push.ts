@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { resolve, sep } from "node:path";
 import { lstatSync, readFileSync } from "node:fs";
 import type { Store } from "./state.js";
 import type { Claim } from "./types.js";
@@ -30,7 +30,12 @@ export interface DependencyWarning {
 }
 
 function readWorktree(repoRoot: string, relPath: string): string | null {
-  const abs = join(repoRoot, relPath);
+  // Defense in depth: claim paths are validated when acquired, but never read a
+  // path that resolves outside the repo (e.g. from a hand-edited claims file)
+  // and never follow a symlink out of it.
+  const root = resolve(repoRoot);
+  const abs = resolve(root, relPath);
+  if (abs !== root && !abs.startsWith(root + sep)) return null;
   try {
     const st = lstatSync(abs);
     if (st.isSymbolicLink() || !st.isFile()) return null;

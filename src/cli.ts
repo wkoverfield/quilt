@@ -480,9 +480,9 @@ program
         if (r.granted) {
           process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
         } else {
-          process.stdout.write(
-            pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(held by ${r.holder})`)}\n`,
-          );
+          const why =
+            r.reason === "outside-repo" ? "outside the repository" : `held by ${r.holder}`;
+          process.stdout.write(pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(${why})`)}\n`);
         }
       }
       for (const w of warnings) {
