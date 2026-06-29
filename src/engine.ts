@@ -11,6 +11,7 @@ import {
   MAX_LCS_CELLS,
   type Hunk,
 } from "./diff.js";
+import { parseSymbols } from "./symbols.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
 
@@ -56,6 +57,26 @@ function readWorktree(repoRoot: string, relPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+function setIn(map: Map<string, Set<string>>, key: string): Set<string> {
+  const s = new Set<string>();
+  map.set(key, s);
+  return s;
+}
+
+/** Line numbers (1-based) covered by symbols whose names are in `claimed`. */
+function linesInClaimedSymbols(
+  path: string,
+  content: string,
+  claimed: Set<string>,
+): Set<number> {
+  const lines = new Set<number>();
+  for (const sym of parseSymbols(path, content)) {
+    if (!claimed.has(sym.name)) continue;
+    for (let ln = sym.startLine; ln <= sym.endLine; ln++) lines.add(ln);
+  }
+  return lines;
 }
 
 function lineCount(text: string | null): number {
@@ -115,18 +136,32 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   // TTL elapses to keep ownership of in-flight edits — if the holder's process
   // dies after editing but before reconciling and the claim expires, the next
   // actor to reconcile will absorb that work (the same exposure as no claim).
+  // A whole-file claim by another actor means skip the whole file. A *symbol*
+  // claim means only that symbol's lines are off-limits — so two actors editing
+  // different functions in one file proceed in parallel without either absorbing
+  // the other's work.
   const nowMs = Date.now();
-  const claimedByOther = new Map<string, string>();
+  const wholeFileClaimed = new Set<string>();
+  const symbolClaimed = new Map<string, Set<string>>();
   for (const c of store.readClaims().claims) {
-    if (c.expiresAt > nowMs && c.actor !== activeActorId) {
-      claimedByOther.set(c.path, c.actor);
-    }
+    if (c.expiresAt <= nowMs || c.actor === activeActorId) continue;
+    if (c.symbol === undefined) wholeFileClaimed.add(c.path);
+    else (symbolClaimed.get(c.path) ?? setIn(symbolClaimed, c.path)).add(c.symbol);
   }
 
   for (const path of relevantPaths(store)) {
-    if (claimedByOther.has(path)) continue;
+    if (wholeFileClaimed.has(path)) continue;
     const head = headBlob(repoRoot, path);
     const current = readWorktree(repoRoot, path);
+
+    // Lines inside symbols another actor has claimed are off-limits for
+    // attribution by this actor. Added lines are gated by the symbol's range in
+    // the CURRENT file; removed lines by its range in the BASELINE.
+    const claimedHere = symbolClaimed.get(path) ?? null;
+    const offLimitAdd =
+      claimedHere && current !== null
+        ? linesInClaimedSymbols(path, current, claimedHere)
+        : null;
 
     // Baseline for "what changed since we last looked".
     const observedHasKey = Object.prototype.hasOwnProperty.call(
@@ -134,6 +169,10 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       path,
     );
     const baseline = observedHasKey ? observed.files[path] ?? null : head;
+    const offLimitDel =
+      claimedHere && baseline !== null
+        ? linesInClaimedSymbols(path, baseline, claimedHere)
+        : null;
 
     const binary =
       (head !== null && looksBinary(head)) ||
@@ -155,10 +194,20 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
 
       // Clobber detection: the active actor is removing lines that ANOTHER actor
       // owns (uncommitted). Preserve the victim's pre-clobber content so it can
-      // be restored — detect-and-preserve, nothing is silently lost.
+      // be restored — detect-and-preserve, nothing is silently lost. Removals
+      // inside a symbol another actor claimed are skipped (that's their edit to
+      // make, not a clobber by us).
       const victims = new Map<string, string[]>();
+      let bLine = 0; // 1-based line in baseline; advances on eq + del
       for (const op of delta) {
-        if (op.type !== "del" || isTrivialLine(op.text)) continue;
+        if (op.type === "eq") {
+          bLine++;
+          continue;
+        }
+        if (op.type !== "del") continue;
+        bLine++;
+        if (offLimitDel && offLimitDel.has(bLine)) continue;
+        if (isTrivialLine(op.text)) continue;
         const owner = file.added[op.text];
         if (owner && owner !== activeActorId) {
           const sample = victims.get(owner) ?? [];
@@ -196,8 +245,21 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         clobbersChanged = true;
       }
 
+      let curLine = 0; // 1-based line in `current`; advances on eq + add
+      let baseLine = 0; // 1-based line in baseline; advances on eq + del
       for (const op of delta) {
-        if (op.type === "eq") continue;
+        if (op.type === "eq") {
+          curLine++;
+          baseLine++;
+          continue;
+        }
+        if (op.type === "add") {
+          curLine++;
+          if (offLimitAdd && offLimitAdd.has(curLine)) continue; // in another's claimed symbol
+        } else {
+          baseLine++;
+          if (offLimitDel && offLimitDel.has(baseLine)) continue;
+        }
         if (isTrivialLine(op.text)) continue;
         const map = op.type === "add" ? file.added : file.removed;
         const existing = map[op.text];
@@ -212,8 +274,11 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       }
     }
 
-    // Advance the observed snapshot for this path.
-    observed.files[path] = current;
+    // Advance the observed snapshot for this path — UNLESS another actor holds a
+    // symbol claim here. While a file is under symbol contention we freeze its
+    // baseline so every contending actor diffs from the same point and can
+    // attribute its own symbol (advancing would consume the others' deltas).
+    if (!claimedHere) observed.files[path] = current;
 
     // Prune ownership/conflicts for lines no longer in the working diff.
     const { added, removed } = changedLineSets(head, current);

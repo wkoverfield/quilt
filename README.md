@@ -96,7 +96,7 @@ shared pointer.
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
-| `quilt claim [paths...] [--json]` | Reserve files for editing (advisory); with no paths, lists claims. |
+| `quilt claim [targets...] [--json]` | Reserve files, or `file#symbol`, for editing; with none, lists claims. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt whoami` | Show the active actor/session. |

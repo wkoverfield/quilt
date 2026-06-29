@@ -98,6 +98,12 @@ export interface ClobbersFile {
  */
 export interface Claim {
   path: string;
+  /**
+   * Optional symbol within the file (e.g. a function or class name). A claim
+   * with no symbol reserves the whole file; symbol claims let multiple actors
+   * reserve different symbols in the same file without contending.
+   */
+  symbol?: string;
   actor: string;
   session: string | null;
   acquiredAt: string;

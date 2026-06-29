@@ -196,7 +196,7 @@ export async function runMcpServer(store: Store): Promise<void> {
     "claim",
     {
       description:
-        "Reserve files for editing (advisory) BEFORE you write them. If a path is denied, another actor holds it — edit something else or coordinate.",
+        "Reserve files BEFORE you edit them. Use `path#symbol` (e.g. utils.js#formatPrice) to reserve just one function/class so others can edit other parts of the same file in parallel; use a bare path to reserve the whole file. A denied target is held by another actor — edit something else or coordinate.",
       inputSchema: { paths: z.array(z.string()) },
     },
     async ({ paths }) => {
