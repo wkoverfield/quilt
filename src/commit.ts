@@ -2,14 +2,19 @@ import { existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { git, headFileMode, headRef, headSha } from "./git.js";
-import { renderPatch } from "./diff.js";
+import {
+  buildHunks,
+  isTrivialLine,
+  lineDiff,
+  renderPatch,
+  splitLines,
+} from "./diff.js";
 import {
   hunkChangedLines,
   type FileModel,
-  type HunkOwnership,
   type WorktreeModel,
 } from "./engine.js";
-import type { Actor } from "./types.js";
+import type { Actor, FileOwnership, OwnershipFile } from "./types.js";
 
 export interface SelectedFile {
   path: string;
@@ -29,13 +34,6 @@ export interface Selection {
   totalRemoved: number;
 }
 
-const COMMITTABLE: HunkOwnership[] = ["mine"];
-
-/**
- * Build the patch of the active actor's owned hunks. By default only pure
- * "mine" hunks are selected; pass includeMixed to also take "mixed" hunks
- * (those that sit alongside unattributed changes in the same hunk).
- */
 /** git mode for a working-tree file: 100755 if executable, else 100644. */
 function worktreeMode(repoRoot: string, relPath: string): string {
   try {
@@ -46,14 +44,107 @@ function worktreeMode(repoRoot: string, relPath: string): string {
   }
 }
 
+interface OwnedBuild {
+  /** the file as it would be with ONLY the actor's owned line-changes applied,
+   *  or null when the actor's changes delete the file. undefined = no change. */
+  text?: string | null;
+  added: number;
+  removed: number;
+  /** a changed line is owned by a DIFFERENT actor (left in the working tree) */
+  hasOther: boolean;
+  /** an unattributed changed line was skipped (committable with --include-unclaimed) */
+  hasUnclaimed: boolean;
+}
+
+/**
+ * Reconstruct a file containing only the active actor's owned line-changes,
+ * line by line: keep context, apply the actor's owned adds/removes, OMIT other
+ * actors' adds, and KEEP (as context) other actors' removals. Lone structural
+ * lines (braces) inherit the ownership of their surrounding change run so a
+ * function commits with its own closing brace. This lets two actors commit
+ * different changes that happen to share one diff hunk.
+ */
+function buildOwnedText(
+  headText: string | null,
+  worktreeText: string | null,
+  owned: FileOwnership | undefined,
+  actor: string,
+  includeUnclaimed: boolean,
+): OwnedBuild {
+  const ops = lineDiff(headText ?? "", worktreeText ?? "");
+  const out: string[] = [];
+  let added = 0;
+  let removed = 0;
+  let changed = false;
+  let hasOther = false;
+  let hasUnclaimed = false;
+  let lastFromWorktree = false; // for the committed file's trailing newline
+  let blockInclude = false; // trivial lines inherit their change run's decision
+
+  for (const op of ops) {
+    if (op.type === "eq") {
+      out.push(op.text);
+      lastFromWorktree = false;
+      blockInclude = false;
+      continue;
+    }
+    let include: boolean;
+    if (isTrivialLine(op.text)) {
+      include = blockInclude;
+    } else {
+      const owner = op.type === "add" ? owned?.added[op.text] : owned?.removed[op.text];
+      if (owner === actor) include = true;
+      else if (owner == null) {
+        include = includeUnclaimed;
+        hasUnclaimed = hasUnclaimed || !includeUnclaimed;
+      } else {
+        include = false;
+        hasOther = true;
+      }
+      blockInclude = include;
+    }
+    if (op.type === "add") {
+      if (include) {
+        out.push(op.text);
+        added++;
+        changed = true;
+        lastFromWorktree = true;
+      }
+    } else {
+      if (include) {
+        removed++;
+        changed = true;
+      } else {
+        out.push(op.text); // keep the head line (another actor's removal, or unclaimed)
+        lastFromWorktree = false;
+      }
+    }
+  }
+
+  if (!changed) return { added: 0, removed: 0, hasOther, hasUnclaimed };
+  // The actor's changes delete the file entirely.
+  if (worktreeText === null && out.length === 0) {
+    return { text: null, added, removed, hasOther, hasUnclaimed };
+  }
+  const headFinal = headText === null ? true : splitLines(headText).finalNewline;
+  const wtFinal = worktreeText === null ? true : splitLines(worktreeText).finalNewline;
+  const finalNL = lastFromWorktree ? wtFinal : headFinal;
+  const text = out.length === 0 ? "" : out.join("\n") + (finalNL ? "\n" : "");
+  return { text, added, removed, hasOther, hasUnclaimed };
+}
+
+/**
+ * Build the patch of the active actor's owned changes at LINE granularity, so an
+ * actor can commit just their lines even when those lines share a diff hunk with
+ * another actor's. Pass includeMixed to also commit unattributed changed lines.
+ */
 export function selectOwned(
   model: WorktreeModel,
   repoRoot: string,
+  ownership: OwnershipFile,
   opts: { includeMixed?: boolean } = {},
 ): Selection {
-  const committable = new Set<HunkOwnership>(COMMITTABLE);
-  if (opts.includeMixed) committable.add("mixed");
-
+  const actor = model.activeActorId;
   const patches: string[] = [];
   const files: SelectedFile[] = [];
   const blockedFiles: string[] = [];
@@ -62,57 +153,48 @@ export function selectOwned(
   let totalRemoved = 0;
 
   for (const file of model.files) {
-    if (file.binary) continue;
-    const selected = file.hunks.filter((h) => committable.has(h.ownership));
-    if (file.hunks.some((h) => h.ownership === "mixed")) hasMixed = true;
-    if (selected.length === 0) continue;
-
-    let added = 0;
-    let removed = 0;
-    for (const oh of selected) {
-      for (const op of oh.hunk.ops) {
-        if (op.type === "add") added++;
-        else if (op.type === "del") removed++;
-      }
+    if (file.binary || actor === null) continue;
+    const built = buildOwnedText(
+      file.oldText,
+      file.newText,
+      ownership.files[file.path],
+      actor,
+      opts.includeMixed ?? false,
+    );
+    if (built.hasUnclaimed) hasMixed = true;
+    if (built.added === 0 && built.removed === 0) {
+      if (built.hasOther) blockedFiles.push(file.path);
+      continue;
     }
+
+    const committed = built.text ?? null; // null => the actor deletes the file
+    const hunks = buildHunks(lineDiff(file.oldText ?? "", committed ?? ""));
+    if (hunks.length === 0) continue;
 
     const patch = renderPatch(
       {
         relPath: file.path,
         oldText: file.oldText,
-        newText: file.newText,
-        newMode: file.isNew ? worktreeMode(repoRoot, file.path) : undefined,
-        oldMode: file.isDeleted
-          ? headFileMode(repoRoot, file.path) ?? undefined
-          : undefined,
+        newText: committed,
+        newMode: file.oldText === null ? worktreeMode(repoRoot, file.path) : undefined,
+        oldMode:
+          committed === null ? headFileMode(repoRoot, file.path) ?? undefined : undefined,
       },
-      selected.map((h) => h.hunk),
+      hunks,
     );
     patches.push(patch);
     files.push({
       path: file.path,
-      hunkCount: selected.length,
-      addedLines: added,
-      removedLines: removed,
+      hunkCount: hunks.length,
+      addedLines: built.added,
+      removedLines: built.removed,
     });
-    totalAdded += added;
-    totalRemoved += removed;
-
-    // A file is "blocked" if, in addition to mine hunks, it carries hunks owned
-    // by others or conflicted — we still commit only mine, but flag for review.
-    if (file.hunks.some((h) => h.ownership === "other" || h.ownership === "shared")) {
-      blockedFiles.push(file.path);
-    }
+    totalAdded += built.added;
+    totalRemoved += built.removed;
+    if (built.hasOther) blockedFiles.push(file.path);
   }
 
-  return {
-    patch: patches.join(""),
-    files,
-    blockedFiles,
-    hasMixed,
-    totalAdded,
-    totalRemoved,
-  };
+  return { patch: patches.join(""), files, blockedFiles, hasMixed, totalAdded, totalRemoved };
 }
 
 export interface CommitResult {

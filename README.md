@@ -180,11 +180,12 @@ Each `quilt` command runs a **reconcile** step:
    command.
 3. `quilt start` seeds the observed snapshot to the current tree, so anything
    already dirty stays **unclaimed** (e.g. formatter output, generated locks).
-4. If two actors' edits land in the same hunk, that hunk is **shared** and is
-   excluded from `commit --mine` until reviewed.
+4. Reservations and attribution are **symbol-aware**: claim `utils.js#formatPrice`
+   so two actors editing different functions in one file never contend.
 
-`commit --mine` then diffs `HEAD → worktree`, keeps only the hunks you own,
-applies that patch to a throwaway temporary index
+`commit --mine` then diffs `HEAD → worktree`, keeps only the **lines you own**
+(even when they share a hunk with another actor's changes — your lines commit,
+theirs stay in the tree), applies that patch to a throwaway temporary index
 (`GIT_INDEX_FILE` + `git apply --cached` + `write-tree` + `commit-tree` +
 `update-ref`), and produces a normal Git commit. Your real index and the working
 tree are never rewritten; other actors' changes stay exactly where they were.

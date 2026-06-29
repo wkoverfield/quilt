@@ -95,6 +95,47 @@ test("a file claimed by B is NOT absorbed by A's reconcile or commit", () => {
   }
 });
 
+test("per-line commit: two actors APPEND functions to one file (same hunk) and both commit cleanly", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-append-"));
+  const g = (a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+  g(["init", "-q"]);
+  g(["config", "user.email", "t@t.io"]);
+  g(["config", "user.name", "t"]);
+  g(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(dir, "helpers.js"), "module.exports = {};\n");
+  g(["add", "-A"]);
+  g(["commit", "-q", "-m", "init"]);
+  spawnSync("node", [CLI, "init"], { cwd: dir });
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    quilt(dir, ["start", "--actor", "B", "--type", "agent"]);
+    quilt(dir, ["claim", "helpers.js#alpha"], "A");
+    quilt(dir, ["claim", "helpers.js#beta"], "B");
+
+    // Both append their function — adjacent, so they land in ONE diff hunk.
+    writeFileSync(
+      join(dir, "helpers.js"),
+      'module.exports = {};\nfunction alpha() {\n  return "a";\n}\nfunction beta() {\n  return "b";\n}\n',
+    );
+
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "A: alpha"], "A").status, 0);
+    let head = spawnSync("git", ["show", "HEAD:helpers.js"], { cwd: dir, encoding: "utf8" }).stdout;
+    assert.match(head, /function alpha/, "A committed alpha");
+    assert.doesNotMatch(head, /function beta/, "A did NOT commit B's beta");
+
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "B: beta"], "B").status, 0);
+    head = spawnSync("git", ["show", "HEAD:helpers.js"], { cwd: dir, encoding: "utf8" }).stdout;
+    assert.match(head, /function alpha/);
+    assert.match(head, /function beta/, "both functions committed");
+    assert.equal(
+      spawnSync("git", ["log", "--pretty=%an", "-2"], { cwd: dir, encoding: "utf8" }).stdout.trim(),
+      "B\nA",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("two actors editing DIFFERENT symbols in one file: parallel, no contention, no absorb, clean commits", () => {
   const dir = mkdtempSync(join(tmpdir(), "quilt-sym-"));
   const g = (a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });

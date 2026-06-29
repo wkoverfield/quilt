@@ -186,7 +186,7 @@ program
     if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, store.paths.repoRoot);
+    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership());
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, false), null, 2) + "\n");
       return;
@@ -248,7 +248,7 @@ program
     if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, store.paths.repoRoot, {
+    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
     });
     if (opts.json) {
@@ -281,7 +281,7 @@ program
     }
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, store.paths.repoRoot, {
+    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
     });
 
