@@ -1,6 +1,6 @@
 # Quilt contrast demo — terminal GIF script for VHS (https://github.com/charmbracelet/vhs).
 #
-#   brew install vhs               # one-time
+#   brew install vhs                  # one-time
 #   vhs examples/demo-contrast.tape   # run from REPO ROOT -> writes examples/demo-contrast.gif
 #
 # Two acts, same scenario: codex changes rate(), claude changes tax() in one file.
@@ -21,27 +21,23 @@ Set Height 800
 Set Padding 24
 Set TypingSpeed 50ms
 
-# ---------- shared build ----------
+# ---------- shared build + helpers (hidden) ----------
 Hide
-Type 'Q="$PWD/dist/cli.js"; npm run build >/dev/null 2>&1; clear'
+Type 'Q="$PWD/dist/cli.js"; npm run build >/dev/null 2>&1'
+Enter
+Type 'bump_rate(){ perl -i -pe "s/0.05/0.07/" billing.js; }; bump_tax(){ perl -i -pe "s/0.20/0.25/" billing.js; }'
+Enter
+Type 'seed(){ git init -q; git config user.email demo@quilt.local; git config user.name demo; git config commit.gpgsign false; printf "export function rate() {\n  return 0.05;\n}\n\nexport function tax() {\n  return 0.20;\n}\n" > billing.js; git add -A; git commit -qm init >/dev/null; }'
 Enter
 
 # ========== ACT 1 — WITHOUT QUILT ==========
-# hidden: two agents = git with their identity; seed repo; apply BOTH edits
+# two agents = git with their own identity; seed a repo; apply BOTH edits up front
 Type 'codex(){ git -c user.name=codex -c user.email=codex@quilt.local "$@"; }; claude(){ git -c user.name=claude -c user.email=claude@quilt.local "$@"; }'
 Enter
-Type 'D1=$(mktemp -d); cd "$D1"; git init -q; git config user.email demo@quilt.local; git config user.name demo; git config commit.gpgsign false'
-Enter
-Type 'printf "export function rate() {\n  return 0.05;\n}\n\nexport function tax() {\n  return 0.07;\n}\n" > billing.js; git add -A; git commit -qm init >/dev/null'
-Enter
-Type 'perl -i -pe "s/0.05;/0.07;/" billing.js'
-Enter
-Type 'perl -0pi -e "s/(tax\(\) \{\n  return )0.07;/\${1}0.09;/" billing.js'
-Enter
-Type 'clear'
+Type 'D1=$(mktemp -d); cd "$D1"; seed; bump_rate; bump_tax; clear'
 Enter
 Show
-Type 'echo; echo "  ❌  WITHOUT QUILT   two agents, one checkout, plain git"; echo'
+Type "#  ❌  WITHOUT QUILT      two agents, one checkout, plain git"
 Enter
 Sleep 1.8s
 Type "# codex changed rate(), claude changed tax() -- two different functions"
@@ -67,14 +63,12 @@ Sleep 3.4s
 Hide
 Type 'unset -f codex claude; codex(){ QUILT_ACTOR=codex node "$Q" "$@"; }; claude(){ QUILT_ACTOR=claude node "$Q" "$@"; }'
 Enter
-Type 'D2=$(mktemp -d); cd "$D2"; git init -q; git config user.email demo@quilt.local; git config user.name demo; git config commit.gpgsign false'
-Enter
-Type 'printf "export function rate() {\n  return 0.05;\n}\n\nexport function tax() {\n  return 0.07;\n}\n" > billing.js; git add -A; git commit -qm init >/dev/null'
+Type 'D2=$(mktemp -d); cd "$D2"; seed'
 Enter
 Type 'node "$Q" init >/dev/null; codex start --actor codex --type agent >/dev/null; claude start --actor claude --type agent >/dev/null; clear'
 Enter
 Show
-Type 'echo; echo "  ✅  WITH QUILT   same edits, same checkout"; echo'
+Type "#  ✅  WITH QUILT        same edits, same checkout"
 Enter
 Sleep 1.8s
 Type "# each agent claims the function it is about to change:"
@@ -86,13 +80,18 @@ Sleep 1.6s
 Type 'claude claim billing.js#tax'
 Enter
 Sleep 2s
-Hide
-Type 'perl -i -pe "s/0.05;/0.07;/" billing.js; perl -0pi -e "s/(tax\(\) \{\n  return )0.07;/\${1}0.09;/" billing.js'
+Type "# each agent edits its own function:"
 Enter
-Show
+Sleep 1.2s
+Type 'bump_rate'
+Enter
+Sleep 0.8s
+Type 'bump_tax'
+Enter
+Sleep 1.3s
 Type "# each commits ONLY its own function:"
 Enter
-Sleep 1.4s
+Sleep 1.2s
 Type 'codex commit --mine -m "raise rate"'
 Enter
 Sleep 2s
