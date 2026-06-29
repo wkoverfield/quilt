@@ -240,7 +240,7 @@ test("pre-existing dirty changes are marked unclaimed", () => {
   }
 });
 
-test("overlapping edits in one hunk are shared and excluded from commit --mine", () => {
+test("per-line commit: two actors editing different lines of one hunk each commit their own", () => {
   const dir = makeRepo();
   try {
     write(dir, "shared.ts", "l1\nl2\nl3\nl4\nl5\n");
@@ -255,17 +255,20 @@ test("overlapping edits in one hunk are shared and excluded from commit --mine",
     write(dir, "shared.ts", "l1\nl2-alice\nl3\nl4-bob\nl5\n");
     quilt(dir, ["status"], "bob");
 
-    const conflicts = quilt(dir, ["conflicts", "--json"], "bob");
-    const data = JSON.parse(conflicts.stdout);
-    assert.equal(data.conflicts.length, 1, "shared file reported as conflict");
-    assert.equal(data.conflicts[0].path, "shared.ts");
+    // alice and bob edited DIFFERENT lines that happen to share one diff hunk.
+    // bob can commit his line; alice's stays in the working tree.
+    const r = quilt(dir, ["commit", "--mine", "-m", "bob l4"], "bob");
+    assert.equal(r.status, 0, r.stderr);
+    const head = gitOut(dir, ["show", "HEAD:shared.ts"]);
+    assert.match(head, /l4-bob/, "bob's line committed");
+    assert.doesNotMatch(head, /l2-alice/, "bob did NOT commit alice's line");
+    assert.match(read(dir, "shared.ts"), /l2-alice/, "alice's line still in the tree");
 
-    // Bob tries to commit his — the shared hunk is not committable.
-    const r = quilt(dir, ["commit", "--mine", "-m", "bob"], "bob");
-    assert.equal(r.status, 1, "commit blocked: nothing purely owned");
-    assert.match(r.stderr, /don't own any committable changes/);
-    // HEAD unchanged.
-    assert.equal(read(dir, "shared.ts"), "l1\nl2-alice\nl3\nl4-bob\nl5\n");
+    // alice can then commit hers on top.
+    const r2 = quilt(dir, ["commit", "--mine", "-m", "alice l2"], "alice");
+    assert.equal(r2.status, 0, r2.stderr);
+    assert.match(gitOut(dir, ["show", "HEAD:shared.ts"]), /l2-alice/);
+    assert.match(gitOut(dir, ["show", "HEAD:shared.ts"]), /l4-bob/);
   } finally {
     cleanup(dir);
   }

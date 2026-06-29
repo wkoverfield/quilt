@@ -114,7 +114,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = requireActor();
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok(mineJson(selectOwned(model, repoRoot), false));
+      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership()), false));
     },
   );
 
@@ -145,7 +145,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = requireActor();
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      const sel = selectOwned(model, repoRoot, { includeMixed: includeUnclaimed });
+      const sel = selectOwned(model, repoRoot, store.readOwnership(), { includeMixed: includeUnclaimed });
       return ok({
         patch: sel.patch,
         files: sel.files,
@@ -171,7 +171,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       if (!actor) throw new Error(`unknown actor ${actorId}`);
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      const sel = selectOwned(model, repoRoot, { includeMixed: includeUnclaimed });
+      const sel = selectOwned(model, repoRoot, store.readOwnership(), { includeMixed: includeUnclaimed });
       if (sel.files.length === 0) {
         return ok({ committed: false, reason: "no owned changes to commit" });
       }
