@@ -109,6 +109,12 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   // attribute, don't advance the observed snapshot, don't prune. A claim
   // reserves not just editing but attribution, so one actor's reconcile can
   // never absorb or mis-credit another actor's in-flight work on a claimed file.
+  //
+  // Liveness invariant: this protection lasts only while the claim is live. An
+  // actor must reconcile (run any quilt command, or commit) before its claim's
+  // TTL elapses to keep ownership of in-flight edits — if the holder's process
+  // dies after editing but before reconciling and the claim expires, the next
+  // actor to reconcile will absorb that work (the same exposure as no claim).
   const nowMs = Date.now();
   const claimedByOther = new Map<string, string>();
   for (const c of store.readClaims().claims) {

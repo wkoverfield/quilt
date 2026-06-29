@@ -80,6 +80,16 @@ test("a file claimed by B is NOT absorbed by A's reconcile or commit", () => {
       "B",
       "shared.js attributed to B, not A",
     );
+
+    // Post-release cleanup: B released its claim on commit. A's next reconcile
+    // should now see shared.js as fully committed (no diff) and carry no phantom
+    // ownership of it — confirming the earlier skip left no stale baseline.
+    quilt(dir, ["release", "shared.js"], "B");
+    const aMineAfter = JSON.parse(quilt(dir, ["mine", "--json"], "A").stdout);
+    assert.ok(
+      !aMineAfter.files.some((f: any) => f.path === "shared.js"),
+      "A has no phantom ownership of shared.js after B committed + released",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
