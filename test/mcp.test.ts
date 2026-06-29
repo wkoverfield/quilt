@@ -127,3 +127,32 @@ test("MCP: claim is granted to one actor and denied to another", async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("MCP: claim returns push-awareness warnings at reservation time", async () => {
+  const dir = makeRepo();
+  write(dir, "api.js", "export function api(x) {\n  return x;\n}\n");
+  write(
+    dir,
+    "main.js",
+    'import { api } from "./api.js";\nexport function caller() {\n  return api(2);\n}\n',
+  );
+  const a = await connect(dir);
+  const b = await connect(dir);
+  try {
+    await a.callTool({ name: "start_session", arguments: { actor: "alice", type: "agent" } });
+    await b.callTool({ name: "start_session", arguments: { actor: "bob", type: "agent" } });
+
+    await a.callTool({ name: "claim", arguments: { paths: ["api.js#api"] } });
+    const bClaim = parse(
+      await b.callTool({ name: "claim", arguments: { paths: ["main.js#caller"] } }),
+    );
+    assert.equal(bClaim.results[0].granted, true);
+    assert.equal(bClaim.dependencyWarnings.length, 1, "bob is warned at claim time");
+    assert.equal(bClaim.dependencyWarnings[0].dependency, "api");
+    assert.equal(bClaim.dependencyWarnings[0].heldBy, "alice");
+  } finally {
+    await a.close();
+    await b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -212,7 +212,9 @@ export async function runMcpServer(store: Store): Promise<void> {
         paths,
         Date.now(),
       );
-      return ok({ results });
+      // Push-awareness at reservation time: tell the agent if anything it just
+      // claimed depends on a symbol another actor is currently changing.
+      return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });
     },
   );
 
