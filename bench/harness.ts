@@ -177,7 +177,11 @@ function inHeadTree(dir: string, rel: string, needle: string): boolean {
 
 /** Author name of the commit that first introduced `needle` into history. */
 function authorOf(dir: string, needle: string): string | null {
-  // -S<string> finds commits that changed the count of the string; newest first.
+  // -S<string> (pickaxe) lists every commit where the occurrence count of the
+  // exact string changed, newest first. Our markers are added once and never
+  // removed, so the oldest entry is the introducing commit. (Note: --diff-filter
+  // here would filter on FILE add/mod/del status, not the pickaxe match, so it
+  // must NOT be used — it would only ever match the commit that created the file.)
   const r = git(["log", "-S", needle, "--format=%an", "--", "."], dir);
   if (r.status !== 0) return null;
   const lines = r.stdout.split("\n").filter(Boolean);
@@ -300,7 +304,7 @@ function runWith(scn: Scenario): RunResult {
     // wasted work, not loss). Skipped for incompatible conflicts, which stay
     // surfaced for a human rather than auto-clobbering the winner.
     for (const edit of scn.redoDeferred === false ? [] : deferredEdits) {
-      quilt(["release", edit.claim!], dir).status; // best-effort: free stale claims
+      quilt(["release", edit.claim!], dir, edit.actor); // free this actor's stale claim
       const c = quilt(["claim", edit.claim!], dir, edit.actor);
       if (c.status === 0) {
         const oc = outcomes.find((o) => o.edit === edit)!;
@@ -344,14 +348,19 @@ function grade(dir: string, scn: Scenario, outcomes: EditOutcome[], wallClockMs:
       silentLoss++;
     }
     if (oc.deferred) {
-      // A claim denial Quilt surfaced for a human; the work waits, never vanishes.
+      // A claim denial Quilt raised for a human — the actor got a signal (not
+      // silent). The intended content was never written, so there's nothing to
+      // recover; the human re-issues the work. This is a surfaced conflict, the
+      // opposite of the baseline's silent overwrite — but it is not zero-cost.
       surfacedConflicts++;
       wastedWork++;
     }
   }
 
+  // Coherence is a property of committed history, not the working tree, so probe
+  // HEAD — a deferred/uncommitted edit must never count as a broken final state.
   const broken = (scn.brokenIfFinalContains ?? []).some((needle) =>
-    Object.keys(scn.files).some((f) => read(dir, f).includes(needle)),
+    Object.keys(scn.files).some((f) => inHeadTree(dir, f, needle)),
   );
 
   return {

@@ -87,6 +87,11 @@ const L3: Scenario = {
       adaptedReplacement: "api(5, 0)", // adapted: B saw A claim api.js and added the arg
       adaptsToClaimBy: "A",
       adaptsToClaimOnFile: "api.js",
+      // The marker proves B's edit is PRESENT (it lands in both modes — B always
+      // edits the call site). It deliberately does not encode correctness: that
+      // is `broken`'s job below. So L3's discriminator is `broken` (WITHOUT) vs
+      // not-broken (WITH), while features-landed/silent-loss stay honest (B's
+      // work is never lost in either mode — WITHOUT it lands *wrong*, not gone).
       marker: "api(5",
       desc: "update the api() call site",
     },

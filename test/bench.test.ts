@@ -1,6 +1,6 @@
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { runScenario } from "../bench/harness.js";
+import { runScenario, type ScenarioResult } from "../bench/harness.js";
 import { scenarios } from "../bench/scenarios.js";
 
 // The eval harness is both a regression guard for Quilt and an instrument that
@@ -9,7 +9,12 @@ import { scenarios } from "../bench/scenarios.js";
 //   2. WITHOUT Quilt: the harness genuinely detects the failure it's meant to —
 //      otherwise a "clean WITH" result would be meaningless.
 
-const byId = Object.fromEntries(scenarios.map((s) => [s.id, runScenario(s)]));
+// Run the scenarios once in a before() hook (not at import time) so a failure to
+// spawn the CLI surfaces as one hook error rather than poisoning every test.
+const byId: Record<string, ScenarioResult> = {};
+before(() => {
+  for (const s of scenarios) byId[s.id] = runScenario(s);
+});
 
 for (const s of scenarios) {
   test(`${s.id} WITH Quilt: no loss, correct attribution, not broken`, () => {
