@@ -4,6 +4,40 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+The orchestration release: drop a whole fleet of agents into one checkout with a
+single command, and coordinate them through one shared server.
+
+### Added
+
+- **`quilt setup`** — one command wires Quilt into the repo's agent orchestrator:
+  it detects the orchestrator (Claude Code, Cursor, AGENTS.md), adds the shared
+  `quilt` MCP server to `.mcp.json` (merging, never clobbering existing config),
+  and appends a coordination snippet to `CLAUDE.md`. Idempotent; `--dry-run`
+  previews. `quilt init` now hints toward it when an orchestrator is detected.
+- **Per-call-actor MCP** — one `quilt mcp` server attributes a whole fleet of
+  subagents: every tool takes an optional `actor`, so there's no single active
+  identity for the others to clobber. No `start_session` needed.
+- **`quilt fleet`** — mission control: every actor, their claims, overlapping
+  work, blocked claims, dependency heads-up, and collisions in one view.
+  `--json` and `--watch`.
+- **`quilt undo <actor>`** — surgically back out one actor's uncommitted changes
+  from the shared tree, leaving everyone else's work in place (`--dry-run`).
+- **More languages for symbol claims** — symbol-level claims and attribution now
+  cover Python, Go, Rust, Java, Ruby, C, and C++ in addition to the JS/TS family
+  (ten languages total), via tree-sitter.
+
+### Changed
+
+- **Collision detection tells a real clash from benign adjacency.** A shared
+  hunk is now classified `contended` (two actors changed the same line — review)
+  or `adjacent` (different lines that merely share a hunk — commits cleanly), so
+  the alarm means something. Surfaced in `quilt fleet`, `quilt status`, and
+  `quilt conflicts`; full overwrites surface as preserved, restorable overwrites.
+- Push-awareness (`dependencyWarnings`) now also rides on `get_status` and works
+  across the newly supported languages.
+
 ## [0.1.0] - 2026-06-29
 
 First public release. Quilt is the coordination layer for agent fleets: many
@@ -52,4 +86,5 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `@quilt-dev/cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
+[Unreleased]: https://github.com/wkoverfield/quilt/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.1.0

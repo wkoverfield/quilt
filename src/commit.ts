@@ -10,7 +10,6 @@ import {
   splitLines,
 } from "./diff.js";
 import {
-  hunkChangedLines,
   type FileModel,
   type WorktreeModel,
 } from "./engine.js";
@@ -308,10 +307,6 @@ export function commitSelection(
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
-}
-
-export function fileHunkLines(file: FileModel): number {
-  return file.hunks.reduce((n, h) => n + hunkChangedLines(h.hunk), 0);
 }
 
 /**

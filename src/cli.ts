@@ -91,7 +91,7 @@ function printClaims(store: Store): void {
 function printClobbers(store: Store): void {
   const open = store.readClobbers().clobbers.filter((c) => !c.restored);
   if (open.length === 0) return;
-  process.stdout.write(pc.red(pc.bold("  Collisions caught (work preserved):\n")));
+  process.stdout.write(pc.red(pc.bold("  Overwrite preserved (work saved):\n")));
   for (const c of open) {
     process.stdout.write(
       `    ${c.path}   ${pc.dim(`${c.byActor} overwrote ${c.victimActor}`)}\n`,
@@ -405,7 +405,7 @@ program
 
 program
   .command("conflicts")
-  .description("Show overlapping changes claimed by multiple actors")
+  .description("Show shared changes: same-line clashes (contended) vs adjacent edits that commit cleanly")
   .option("--json", "emit stable JSON for agents")
   .action((opts) => {
     const store = requireStore();

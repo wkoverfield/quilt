@@ -159,9 +159,11 @@ shared pointer.
 | `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: add the shared MCP server to `.mcp.json` and the coordination snippet to `CLAUDE.md` (idempotent). |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
+| `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |
 | `quilt mine [--json]` | Summarize the changes you own. |
-| `quilt conflicts [--json]` | Show overlapping/shared changes. |
+| `quilt conflicts [--json]` | Show shared changes: same-line clashes vs adjacent edits that commit cleanly. |
+| `quilt undo <actor> [--dry-run]` | Back out one actor's uncommitted changes, leaving everyone else's untouched. |
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
@@ -224,16 +226,22 @@ Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
 `preview_mine`, `commit_mine`, `claim`, `release`. The intended loop:
 
 ```txt
+# fleet (per-call actor — no session needed):
+claim(actor, symbols)  →  …edit…  →  commit_mine(actor)
+
+# single agent (pinned session):
 start_session  →  get_status  →  claim(symbols)  →  …edit…  →  commit_mine
 ```
 
-`claim` adds **advisory prevention** on top of detect-and-preserve: a symbol
-already claimed by another actor is denied, so a well-behaved agent edits
-something else. The `claim` and `get_conflicts` responses also carry
+A fleet of subagents shares one server and passes its own `actor` on each call,
+so no `start_session` is needed — an id registers on first use. `claim` adds
+**advisory prevention** on top of detect-and-preserve: a symbol already claimed
+by another actor is denied, so a well-behaved agent edits something else. The
+`claim`, `get_status`, and `get_conflicts` responses all carry
 **`dependencyWarnings`**: push-awareness, so the moment an agent reserves a
-symbol it learns whether a function it depends on is being changed by someone
-else (see below). An agent that skips claiming but still drives Quilt as itself
-is still caught by collision detection.
+symbol — or just orients with `get_status` — it learns whether a function it
+depends on is being changed by someone else (see below). An agent that skips
+claiming but still drives Quilt as itself is still caught by collision detection.
 
 Quilt is a **cooperative protocol**, like Git: it coordinates the agents that
 participate. Each agent identifies itself (its own MCP server, or `QUILT_ACTOR`).

@@ -1,6 +1,5 @@
 import pc from "picocolors";
 import {
-  hunkChangedLines,
   type FileModel,
   type HunkOwnership,
   type WorktreeModel,
@@ -166,5 +165,3 @@ export function renderPreview(patch: string): string {
   }
   return out.join("\n");
 }
-
-export { hunkChangedLines };

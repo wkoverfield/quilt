@@ -138,6 +138,9 @@ export async function runMcpServer(store: Store): Promise<void> {
         ...statusJson(model, headSha(repoRoot)),
         clobbers: store.readClobbers().clobbers.filter((c) => !c.restored),
         claims: listClaims(store, Date.now()),
+        // Push-awareness at the orient step: a symbol this actor already claimed
+        // depends on one another actor is changing. Mirrors `quilt status --json`.
+        dependencyWarnings: actorId ? dependencyWarnings(store, actorId, Date.now()) : [],
       });
     },
   );
