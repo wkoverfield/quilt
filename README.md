@@ -59,6 +59,12 @@ commit.
   and Quilt tells a real same-line clash apart from two agents working on
   different lines that merely share a hunk — so the alarm means something.
   Pre-existing or generated changes stay unattributed.
+- **Self-sewing collisions.** A claim carries a short `intent`; a blocked agent
+  gets the holder's intent and resolves most collisions itself — dropping a
+  redundant change or adapting. Only genuinely opposed work is `escalate`d to a
+  human. `quilt fleet` splits it into **Needs you** and **Sewn by agents**. Quilt
+  never calls an LLM — it hands your agents the context and records what they
+  decide.
 - **Preview-first `commit --mine`.** See the exact patch before anything moves.
 - **Preserves other actors' work.** Committing yours leaves everyone else's
   changes untouched in the working tree.

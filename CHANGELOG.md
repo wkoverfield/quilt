@@ -27,6 +27,14 @@ single command, and coordinate them through one shared server.
 - **More languages for symbol claims** — symbol-level claims and attribution now
   cover Python, Go, Rust, Java, Ruby, C, and C++ in addition to the JS/TS family
   (ten languages total), via tree-sitter.
+- **Self-sewing collisions** — agents resolve most collisions themselves and
+  surface only the genuine conflicts to you. A claim carries a short `intent`;
+  when it's denied, the blocked agent receives the holder's intent and can drop a
+  redundant change, adapt, or — if the goals are truly opposed — `escalate` it
+  instead of overwriting. `quilt escalate` / `quilt resolve` record the outcome,
+  and `quilt fleet` splits it into **Needs you** (a human's call) and **Sewn by
+  agents** (the audit trail). Quilt never calls an LLM or spawns agents — it hands
+  your existing agents the context and records what they decide.
 
 ### Changed
 
