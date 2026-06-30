@@ -18,6 +18,7 @@ import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
 import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
 import { runMcpServer } from "./mcp.js";
+import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
 // Exit quietly when output is piped into a process that closes early
@@ -50,6 +51,29 @@ function requireStore(): Store {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Initialize Quilt's .quilt/ store. Returns false if it already existed. */
+function doInit(root: string): boolean {
+  const store = new Store(root);
+  if (store.initialized) return false;
+  store.ensureDirs();
+  const config: Config = { version: 1, createdAt: nowIso() };
+  store.writeConfig(config);
+  store.writeObserved({ files: {} });
+  store.writeOwnership({ files: {}, conflicts: {} });
+  store.appendLedger({ ts: nowIso(), type: "repo.initialized", repoRoot: root });
+  return true;
+}
+
+/** Print one setup step (create/update/skip) for `quilt setup`. */
+function printSetupStep(step: SetupStep, dryRun: boolean): void {
+  if (step.action === "skip") {
+    process.stdout.write(pc.dim(`  • ${step.file}: ${step.detail}\n`));
+    return;
+  }
+  const verb = dryRun ? pc.cyan("  would ") : pc.green("  ✓ ");
+  process.stdout.write(verb + `${step.action} ${step.file} — ${step.detail}\n`);
 }
 
 /** Print active advisory claims below a status view. */
@@ -87,21 +111,77 @@ program
   .description("Initialize Quilt in this repository")
   .action(() => {
     const root = findRepo();
-    const store = new Store(root);
-    if (store.initialized) {
+    const created = doInit(root);
+    if (!created) {
       process.stdout.write(pc.dim("Quilt already initialized at .quilt/\n"));
+    } else {
+      process.stdout.write(
+        pc.green("✓ ") + "Quilt initialized.\n" +
+          pc.dim("  Next: quilt start --actor <id> --type agent\n"),
+      );
+    }
+    // If this looks like an agent-orchestrated repo, point at one-step wiring.
+    const d = detect(root);
+    if (d.orchestrator && !(d.quiltWired && d.coordinationPresent)) {
+      process.stdout.write(
+        "\n" +
+          pc.cyan("→ ") +
+          `${d.orchestrator} detected. Wire the fleet up with ` +
+          pc.bold("quilt setup") +
+          pc.dim(" (adds the shared MCP server + coordination snippet).\n"),
+      );
+    }
+  });
+
+program
+  .command("setup")
+  .description("Wire Quilt into this repo's agent orchestrator (.mcp.json + CLAUDE.md)")
+  .option("--dry-run", "show what would change without writing")
+  .action((opts) => {
+    const root = findRepo();
+    const store = new Store(root);
+    const dryRun = Boolean(opts.dryRun);
+
+    const initNeeded = !store.initialized;
+    if (initNeeded && !dryRun) doInit(root);
+
+    const d = detect(root);
+    const steps = planSetup(root);
+    const willChange = steps.some((s) => s.action !== "skip");
+
+    if (d.orchestrator) {
+      process.stdout.write(pc.dim(`Detected ${d.orchestrator}.\n`));
+    } else {
+      process.stdout.write(
+        pc.dim("No orchestrator config detected — wiring up for Claude Code (.mcp.json + CLAUDE.md).\n"),
+      );
+    }
+
+    if (dryRun) {
+      if (initNeeded) {
+        process.stdout.write(pc.cyan("  would ") + "initialize Quilt (.quilt/)\n");
+      }
+      for (const s of steps) printSetupStep(s, true);
+      process.stdout.write(
+        "\n" + pc.dim(willChange || initNeeded ? "Run `quilt setup` to apply.\n" : "Already wired — nothing to do.\n"),
+      );
       return;
     }
-    store.ensureDirs();
-    const config: Config = { version: 1, createdAt: nowIso() };
-    store.writeConfig(config);
-    store.writeObserved({ files: {} });
-    store.writeOwnership({ files: {}, conflicts: {} });
-    store.appendLedger({ ts: nowIso(), type: "repo.initialized", repoRoot: root });
-    process.stdout.write(
-      pc.green("✓ ") + "Quilt initialized.\n" +
-        pc.dim("  Next: quilt start --actor <id> --type agent\n"),
-    );
+
+    const written = applySetup(steps);
+    if (initNeeded) process.stdout.write(pc.green("✓ ") + "initialized Quilt (.quilt/)\n");
+    for (const s of steps) printSetupStep(s, false);
+
+    if (written.length === 0 && !initNeeded) {
+      process.stdout.write("\n" + pc.green("✓ ") + "Already wired up. Your fleet is ready.\n");
+    } else {
+      process.stdout.write(
+        "\n" +
+          pc.green("✓ ") +
+          "Quilt is wired in. Each agent: claim before editing, commit_mine when done.\n" +
+          pc.dim("  Details: see CLAUDE.md, or docs/orchestrators.md.\n"),
+      );
+    }
   });
 
 program

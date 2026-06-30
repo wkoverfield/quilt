@@ -9,6 +9,20 @@ commit swallowing everyone else's work.
 The whole integration is: **one shared Quilt MCP server, and each agent names
 itself on every call.**
 
+## Quick start: `quilt setup`
+
+In an agent repo, one command wires everything below up for you:
+
+```sh
+quilt setup          # initializes Quilt, adds the MCP server, drops the snippet
+quilt setup --dry-run  # preview the changes first
+```
+
+It detects your orchestrator (Claude Code, Cursor, …), adds the `quilt` server to
+`.mcp.json` (merging, never clobbering), and appends the coordination snippet to
+`CLAUDE.md`. It's idempotent — safe to re-run. The manual steps below are what it
+does, if you'd rather wire it by hand.
+
 ## 1. Add the shared server
 
 One `quilt mcp` process serves the whole fleet. Don't pin it to an identity

@@ -154,6 +154,7 @@ shared pointer.
 | Command | Purpose |
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
+| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: add the shared MCP server to `.mcp.json` and the coordination snippet to `CLAUDE.md` (idempotent). |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |
@@ -239,10 +240,12 @@ gives an uncoordinated agent only isolation, not coordination. The intended path
 is to wire your agents (or your orchestrator) into the MCP server so cooperation
 is the default.
 
-**Running a fleet of subagents?** One shared `quilt mcp` server can attribute a
-whole fleet — each subagent passes its own `actor` per call, so there's no single
-identity to clobber. See [docs/orchestrators.md](docs/orchestrators.md) for the
-paste-in Claude Code (and Codex / Cursor / Aider) setup.
+**Running a fleet of subagents?** Run `quilt setup` — it detects your
+orchestrator and wires in the shared MCP server plus the coordination snippet in
+one step. One shared `quilt mcp` server then attributes the whole fleet — each
+subagent passes its own `actor` per call, so there's no single identity to
+clobber. See [docs/orchestrators.md](docs/orchestrators.md) for the details and
+the Codex / Cursor / Aider variants.
 
 ## Push-awareness: dependents hear about changes
 
