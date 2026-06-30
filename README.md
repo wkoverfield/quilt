@@ -238,6 +238,11 @@ gives an uncoordinated agent only isolation, not coordination. The intended path
 is to wire your agents (or your orchestrator) into the MCP server so cooperation
 is the default.
 
+**Running a fleet of subagents?** One shared `quilt mcp` server can attribute a
+whole fleet — each subagent passes its own `actor` per call, so there's no single
+identity to clobber. See [docs/orchestrators.md](docs/orchestrators.md) for the
+paste-in Claude Code (and Codex / Cursor / Aider) setup.
+
 ## Push-awareness: dependents hear about changes
 
 The hardest multi-agent failure is the silent cascade: agent A changes a
