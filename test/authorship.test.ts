@@ -1,9 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/state.js";
+import { reconcile } from "../src/engine.js";
 import {
   computeDelta,
   recordAuthorship,
@@ -119,6 +121,30 @@ test("edit/write refuse to escape the repo (actor-controlled path)", () => {
     const e = applyAndRecordEdit(s, { actor: "a", path: "../../escape.js", oldString: "a", newString: "b" });
     assert.equal(e.ok, false);
     assert.equal(readAuthorship(s).length, 0, "no event recorded for an escaping path");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ledger overrides inference in reconcile: a captured edit keeps its author even when another actor reconciles first (the misattribution hole, closed)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-auth-recon-"));
+  const g = (a: string[]) => execFileSync("git", a, { cwd: dir });
+  g(["init", "-q"]); g(["config", "user.email", "t@t.io"]); g(["config", "user.name", "t"]); g(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(dir, "m.js"), "export const limit = 100;\n");
+  g(["add", "-A"]); g(["commit", "-qm", "i"]);
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    // X edits through quilt_edit (captured), and does NOT run any quilt command.
+    applyAndRecordEdit(s, { actor: "X", path: "m.js", oldString: "limit = 100", newString: "limit = 500", intent: "PERF" });
+    // Y reconciles first — under pure inference this would credit X's line to Y.
+    reconcile(s, "Y");
+    const own = s.readOwnership();
+    assert.equal(
+      own.files["m.js"]?.added["export const limit = 500;"],
+      "X",
+      "the ledger keeps X as the author despite Y reconciling first",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
