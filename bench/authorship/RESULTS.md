@@ -1,43 +1,76 @@
-# Authorship-capture eval — first run (2026-06-30)
+# Authorship-capture eval — results (2026-06-30)
 
-Prototype **A (Labeled-Write Ledger)** vs **C (status quo)** on the three
-scenarios that expose the core problem. Run: `node bench/authorship/eval.mjs`.
-Both score against a known ground-truth authorship map; only genuinely-changed,
-non-trivial lines are scored.
+Three bets, scored against known ground truth. Run: `node bench/authorship/eval.mjs`.
 
-| scenario | A correct | C correct | C misattributed |
+- **A — Labeled-Write Ledger:** capture each edit's `old→new` payload at the tool
+  boundary; reconcile = replay. Precise (per-edit). Edits that bypass the tool
+  (raw `bash`) aren't captured — they're left **uncredited/surfaced**, never
+  silently miscredited.
+- **B — Run-boundary capture:** snapshot the tree per `quilt run <actor>` and
+  diff. Captures *any* edit method (incl. `bash`), but coarse — two actors editing
+  the same file in one run window can't be separated → **misattribution**.
+- **C — status quo:** infer authorship on reconcile (the real Quilt CLI).
+
+## Accuracy (on the scenarios that expose the core problem)
+
+| | correct | misattributed (silent wrong) | uncredited (surfaced) |
 |---|---|---|---|
-| silent concurrent edits, different functions, same file | 2/2 | 1/2 | 1 |
-| identical line added in two different places | 2/2 | 1/2 | 1 |
-| rapid interleave, neither reconciles until the end | 3/3 | 1/3 | 2 |
-| **total** | **7/7 (100%)** | **3/7 (43%)** | **4** |
+| **A ledger** | **10/11 (91%)** | **0** | 1 (the bash edit) |
+| **B run-boundary** | 10/11 (91%) | 1 (concurrency) | 0 |
+| **C status quo** | 6/11 (55%) | 5 | 0 |
 
-## What it shows
+Per scenario: A and B both beat C on silent-concurrent, identical-line, and
+rapid-interleave (C misattributes all of these). The two differentiators:
+- **Scenario 4 (bash write):** A's blind spot — it leaves the bash edit
+  *uncredited and surfaced* (safe); B captures it; C misattributes it.
+- **Scenario 5 (concurrent same-file):** B's blind spot — it *silently
+  misattributes* one actor's lines to the other; A and C get it right.
 
-On exactly the cases that break the current model, **capture-at-edit (A)
-reconstructs authorship perfectly while the status quo (C) misattributes most of
-it** — a silent edit gets swept to whoever reconciles first, and two identical
-lines collapse to one owner. A's positional replay handles the duplicate-line
-case the content-keyed model can't.
+**The key distinction isn't the 91% tie — it's the failure mode.** A's only gap
+**fails safe** (it says "unknown, look here," never wrong). B's only gap **fails
+unsafe** (silent wrong credit). C fails unsafe, a lot.
 
-## What it does NOT show (honest caveats)
+## Coverage (the existential question — does A's bash blind spot matter?)
 
-- **A's 100% is "by construction of capturing the payload."** It proves the
-  mechanism is *sufficient* — if every edit's old→new payload is recorded, you
-  recover authorship exactly, and the positional replay is sound — but it does
-  **not** prove **coverage**: that real agents' edits actually get captured (vs
-  raw `bash`/`sed` writes that bypass the tool). Coverage is the separate
-  existential question (rough transcript probe: high for Claude coding agents,
-  which used the `Edit` tool ~exclusively; a clean instrumented number is owed).
-- **C's 43% is its rate on *adversarial* scenarios**, not its real-world average.
-  Disjoint, well-timed edits attribute fine under C. The point is that these
-  failure modes are real and A eliminates them.
+Measured by parsing the transcripts of **5 real Claude agents** doing varied,
+realistic coding tasks (add function, new module, refactor/rename, bug fix,
+multi-file feature) with **no Quilt and no instructions** — i.e. their natural
+editing behavior:
 
-## Next
+```
+file-writes via the capturable tool (Edit/Write/MultiEdit) = 9
+file-writes via bash (sed/heredoc/tee/redirect)            = 0
+bash used for read/run only (node, verification)           = 3
+=> CAPTURABLE COVERAGE = 9/9 = 100%
+```
 
-- Add the remaining scenarios: clobber, true-collision *prevention* (deny-before-
-  write via preHash + claims), two sub-agents in one process (per-call actor),
-  and the `bash`-write floor (must degrade to `unknown` + surfaced, never lost).
-- Prototype **bet B** (per-actor patch captured at the *run* boundary, no FUSE)
-  and add it to the table — it's the rival that covers the `bash` hole.
-- Instrument a real multi-agent run for a clean **coverage** number.
+Every file write went through the Edit/Write tool. Bash was used only to *run*
+things, never to write file content. So **A's one weakness (bash edits) did not
+occur at all** in realistic Claude-agent work.
+
+## Verdict
+
+**A (Labeled-Write Ledger) is the bet.** With coverage ~100% for the target
+agents, A's bash blind spot is essentially theoretical — and even when it hits, it
+**fails safe** (surfaced, never miscredited). B's coverage advantage (bash) is
+moot when coverage is already complete, and B buys it at the cost of an *unsafe*
+concurrency misattribution that A doesn't have. C silently misattributes ~half
+the hard cases.
+
+So: build A for real — the MCP `quilt_edit`/`quilt_write` tool (per-call actor),
+the authorship ledger, positional replay in reconcile, and the preHash + claims
+pre-write check for prevention. Keep **B-style run-boundary capture as a possible
+fallback** for harnesses with no capturable edit tool, and the existing inference
+as the floor.
+
+## Honest caveats
+
+- n=5 Claude agents on small tasks. Coverage could differ for other harnesses
+  (Codex), larger/edgier tasks, or agents explicitly told to use shell. Worth
+  re-measuring on a bigger, noisier sample before fully committing.
+- The eval scenarios are adversarial and synthetic; they prove failure modes
+  exist and that A eliminates the unsafe ones, not a real-world rate.
+- B's model here is a simplification of run-boundary capture; a real prototype
+  could do better on concurrency with finer snapshots (at more cost).
+- A's 91%→effectively-100% rests on coverage holding; it's the number to keep
+  watching as the eval grows.
