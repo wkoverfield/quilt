@@ -164,15 +164,21 @@ export function releaseClaims(
   return store.withLock(() => {
     const file = store.readClaims();
     const before = file.claims.length;
+    const matchesTarget = (path: string, symbol: string | undefined): boolean =>
+      targets === null ||
+      targets.some((t) => t.path === path && (t.symbol === undefined || t.symbol === symbol));
     file.claims = file.claims.filter((c) => {
       if (c.actor !== actorId) return true;
-      if (targets === null) return false; // release all of this actor's claims
-      return !targets.some(
-        (t) =>
-          t.path === c.path &&
-          (t.symbol === undefined || t.symbol === c.symbol),
-      );
+      return !matchesTarget(c.path, c.symbol);
     });
+    // Releasing a claim resolves any block where this actor was the holder, so
+    // drop those now rather than waiting for them to time out (a re-acquire
+    // inside the TTL would otherwise make a resolved block reappear).
+    if (file.blocks?.length) {
+      file.blocks = file.blocks.filter(
+        (b) => !(b.holder === actorId && matchesTarget(b.path, b.symbol)),
+      );
+    }
     store.writeClaims(file);
     return before - file.claims.length;
   });

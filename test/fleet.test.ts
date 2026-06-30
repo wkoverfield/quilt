@@ -101,6 +101,10 @@ test("fleet view: shows who's blocked and cross-actor dependency heads-up", () =
       ),
       "claude#total depends on rate, which codex holds — surfaced fleet-wide",
     );
+
+    // When the holder releases, the block is resolved — it must not linger.
+    q(dir, ["release", "billing.js#rate"], "codex");
+    assert.equal(fleet(dir).blocked.length, 0, "block clears once the holder releases");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
