@@ -134,6 +134,32 @@ test("fleet view: a real same-line collision is never hidden", () => {
   }
 });
 
+test("fleet view: a full overwrite surfaces as a preserved clobber", () => {
+  const dir = repo();
+  try {
+    // alice adds a 2-line block; bob collapses it to one line, fully replacing
+    // alice's lines. The hunk ends up single-owner (not a shared overlap), so the
+    // clash only shows if the fleet surfaces the preserved clobber.
+    write(dir, "f.js", "const head = 0;\nconst tail = 9;\n");
+    commit(dir, "init");
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "alice", "--type", "agent"], "alice");
+    q(dir, ["start", "--actor", "bob", "--type", "agent"], "bob");
+    write(dir, "f.js", "const head = 0;\nconst a1 = 1;\nconst a2 = 2;\nconst tail = 9;\n");
+    q(dir, ["status"], "alice");
+    write(dir, "f.js", "const head = 0;\nconst b1 = 1;\nconst tail = 9;\n");
+    q(dir, ["status"], "bob");
+
+    const v = fleet(dir);
+    assert.equal(v.clobbers.length, 1, "the overwrite is surfaced even though the hunk is single-owner now");
+    assert.equal(v.clobbers[0].path, "f.js");
+    assert.equal(v.clobbers[0].byActor, "bob");
+    assert.equal(v.clobbers[0].victimActor, "alice");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("status --json and conflicts --json expose the overlap kind", () => {
   const dir = repo();
   try {

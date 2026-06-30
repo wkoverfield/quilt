@@ -49,11 +49,25 @@ export interface FleetBlock {
   holder: string;
 }
 
+/**
+ * A recorded overwrite whose victim's work is preserved and not yet restored.
+ * This is the "full overwrite" sibling of a contended overlap: one actor
+ * replaced lines another owned, so the hunk has a single owner now and wouldn't
+ * show as a shared overlap — but it's a real clash, so the fleet surfaces it.
+ */
+export interface FleetClobber {
+  path: string;
+  byActor: string;
+  victimActor: string;
+}
+
 export interface FleetView {
   actors: FleetActorView[];
   overlaps: FleetOverlap[];
   /** Who's blocked on whom (denied claims still held by the holder). */
   blocked: FleetBlock[];
+  /** Preserved overwrites not yet restored — full-overwrite clashes. */
+  clobbers: FleetClobber[];
   /** Cross-actor dependency heads-up: a claimed symbol depends on one being changed. */
   dependencyWarnings: DependencyWarning[];
   /** Files with changes attributed to no one (pre-existing, generated, etc.). */
@@ -141,10 +155,16 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
     }
   }
 
+  const clobbers: FleetClobber[] = store
+    .readClobbers()
+    .clobbers.filter((c) => !c.restored)
+    .map((c) => ({ path: c.path, byActor: c.byActor, victimActor: c.victimActor }));
+
   return {
     actors,
     overlaps,
     blocked,
+    clobbers,
     dependencyWarnings: warnings,
     unattributed: [...unattributed].sort(),
   };
@@ -153,7 +173,7 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
 /** Render the fleet view as a glanceable terminal dashboard. */
 export function renderFleet(view: FleetView, headLabel: string): string {
   const out: string[] = [];
-  const clashes = view.overlaps.filter((o) => o.kind === "contended").length;
+  const clashes = view.overlaps.filter((o) => o.kind === "contended").length + view.clobbers.length;
   const counts =
     `${view.actors.length} actor${view.actors.length === 1 ? "" : "s"}` +
     `, ${clashes} clash${clashes === 1 ? "" : "es"}` +
@@ -196,8 +216,17 @@ export function renderFleet(view: FleetView, headLabel: string): string {
   const adjacent = view.overlaps.filter((o) => o.kind === "adjacent");
   const fmtOverlap = (c: FleetOverlap) =>
     `${c.path}   ${pc.dim(c.actors.join(", "))}   ${pc.dim(`(${c.lines} line${c.lines === 1 ? "" : "s"})`)}`;
+  if (view.clobbers.length) {
+    out.push(pc.bold(pc.red("  Overwrite preserved")) + pc.dim("  (one actor replaced another's lines — both saved)"));
+    for (const c of view.clobbers) {
+      out.push("    " + pc.red("⚠ ") + `${c.path}   ${pc.dim(`${c.byActor} overwrote ${c.victimActor}`)}`);
+    }
+    out.push(pc.dim("    recover with: quilt restore <path>"));
+    out.push("");
+  }
+
   if (!view.overlaps.length) {
-    out.push(pc.dim("  Overlaps: none\n"));
+    if (!view.clobbers.length) out.push(pc.dim("  Overlaps: none\n"));
   } else {
     if (contended.length) {
       out.push(pc.bold(pc.red("  Same-line clash")) + pc.dim("  (two actors changed the same line — review)"));
