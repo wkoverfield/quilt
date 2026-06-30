@@ -4,7 +4,7 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-06-30
 
 The orchestration release: drop a whole fleet of agents into one checkout with a
 single command, and coordinate them through one shared server.
@@ -86,5 +86,5 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `@quilt-dev/cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
-[Unreleased]: https://github.com/wkoverfield/quilt/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/wkoverfield/quilt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.1.0
