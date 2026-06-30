@@ -206,8 +206,8 @@ export async function runMcpServer(store: Store): Promise<void> {
     },
     async ({ actor: actorIn, message, includeUnclaimed }) => {
       const actorId = resolveActor(actorIn, true)!;
-      const actor = store.findActor(actorId);
-      if (!actor) throw new Error(`unknown actor ${actorId}`);
+      // resolveActor registered the actor if it was first-seen, so it exists.
+      const actor = store.findActor(actorId)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), { includeMixed: includeUnclaimed });
