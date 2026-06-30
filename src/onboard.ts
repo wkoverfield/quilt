@@ -22,8 +22,17 @@ You share this checkout with other agents. Coordinate through Quilt:
 - Pick a stable id for yourself — your role or task name (e.g. \`auth-agent\`).
   Use that exact id as \`actor\` on every Quilt call.
 - Before you edit a file, \`claim\` what you're about to change
-  (\`path#symbol\`, e.g. \`src/auth.ts#login\`). If it's denied, someone else holds
-  it — edit something else or coordinate.
+  (\`path#symbol\`, e.g. \`src/auth.ts#login\`). Pass a short
+  intent too — the why (your ticket/task) — which is shown to anyone you block.
+- If your claim is denied, another agent holds that code and is mid-change. The
+  response carries their holderIntent (what they are doing). Use it instead of
+  forcing your change through: if they are already doing your change, drop yours;
+  if it is compatible, adapt around it; if your goals are genuinely opposed (you
+  each need the same line to be different things), do NOT overwrite them —
+  escalate the target with a reason naming both intents, and move on. A human
+  decides.
+- When you reconcile a clash yourself (merge both intents, or adapt), resolve the
+  target with a short note so the decision is recorded.
 - The claim response may include \`dependencyWarnings\`: a function you depend on
   is being changed by another agent. Account for it.
 - When your change is ready, \`commit_mine\` with your id. It commits only your

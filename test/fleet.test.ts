@@ -153,10 +153,12 @@ test("fleet view: an escalated collision surfaces as 'Needs you' until resolved"
     assert.equal(v.needsYou[0].actor, "safety");
     assert.match(v.needsYou[0].note, /opposed/);
 
-    // The human (or a resolver) marks it handled — it clears.
+    // The human (or a resolver) marks it handled — it clears and joins the audit.
     q(dir, ["resolve", "pool.js#maxConnections", "--note", "made it env-configurable"]);
     v = fleet(dir);
     assert.equal(v.needsYou.length, 0, "resolving clears the Needs-you flag");
+    assert.equal(v.sewn.length, 1, "the resolution shows under Sewn by agents (audit)");
+    assert.equal(v.sewn[0].target, "pool.js#maxConnections");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

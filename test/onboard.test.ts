@@ -68,6 +68,10 @@ test("appendCoordination creates content with the marker when none exists", () =
   const r = appendCoordination(null);
   assert.equal(r.changed, true);
   assert.ok(r.content.includes(COORDINATION_MARKER));
+  // The snippet teaches the full sew loop, not just claim/commit.
+  for (const term of ["intent", "holderIntent", "escalate", "resolve"]) {
+    assert.ok(r.content.includes(term), `coordination snippet should mention ${term}`);
+  }
 });
 
 test("appendCoordination appends to existing CLAUDE.md exactly once", () => {

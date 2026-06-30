@@ -51,13 +51,22 @@ You share this checkout with other agents. Coordinate through Quilt:
 - Pick a stable id for yourself — your role or task name (e.g. `auth-agent`).
   Use that exact id as `actor` on every Quilt call.
 - Before you edit a file, `claim` what you're about to change
-  (`path#symbol`, e.g. `src/auth.ts#login`). If it's denied, someone else holds
-  it — edit something else or coordinate.
-- The claim response may include `dependencyWarnings`: a function you depend on
-  is being changed by another agent. Account for it.
+  (`path#symbol`, e.g. `src/auth.ts#login`), and pass a short `intent` — the why
+  (your ticket/task). It's shown to anyone you block, so they can reconcile.
+- If your claim is denied, another agent holds that code and is mid-change. The
+  response carries their `holderIntent`. Use it instead of forcing your change
+  through: if they're already doing your change, drop yours; if it's compatible,
+  adapt; if your goals are genuinely opposed, do NOT overwrite — `escalate` the
+  target (with a `reason` naming both intents) and a human decides.
+- When you reconcile a clash yourself, `resolve` the target with a `note` so the
+  decision is recorded.
+- The claim response may also include `dependencyWarnings`: a function you depend
+  on is being changed by another agent. Account for it.
 - When your change is ready, `commit_mine` with your id. It commits only your
   lines and leaves everyone else's work untouched.
 ```
+
+`quilt setup` writes this block for you.
 
 ## 3. The loop
 
@@ -69,6 +78,26 @@ commit_mine(actor: "auth-agent", message: "fix login redirect")
 
 Each agent runs this independently against the same server. No `start_session`
 needed — an id is registered the first time it's used.
+
+## When two agents collide
+
+Most collisions are a context gap, not a real conflict — one agent just didn't
+know what the other was doing. The `intent` on a claim closes that gap: when a
+claim is denied, the blocked agent gets the holder's `holderIntent` and resolves
+it itself:
+
+```txt
+claim(actor: "safety", paths: ["pool.js#maxConnections"], intent: "SAFETY-87: cap to protect DB")
+  → denied: held by "perf"  ·  holderIntent: "PERF-412: raise for peak load"
+  → opposed intents on the same line → escalate(target: "pool.js#maxConnections",
+       reason: "PERF-412 wants it higher, SAFETY-87 lower")
+```
+
+The genuine conflicts surface to a human (`quilt fleet` → **Needs you**); the
+rest the agents sew themselves and record with `resolve` (**Sewn by agents**). So
+your loops keep running and you only weigh in on the calls that are actually
+yours to make. Quilt never resolves anything itself — it hands your agents the
+context and records what they decided.
 
 ## Why it works
 

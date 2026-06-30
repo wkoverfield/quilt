@@ -2,7 +2,7 @@ import pc from "picocolors";
 import type { Store } from "./state.js";
 import { buildModel } from "./engine.js";
 import { listClaims, listBlocks, claimLabel } from "./claims.js";
-import { openEscalations } from "./outcomes.js";
+import { openEscalations, resolutions } from "./outcomes.js";
 import { dependencyWarnings, formatWarning, type DependencyWarning } from "./push.js";
 import type { Outcome } from "./types.js";
 
@@ -74,6 +74,8 @@ export interface FleetView {
   clobbers: FleetClobber[];
   /** Genuine conflicts an agent kicked up for a human — the "Needs you" list. */
   needsYou: Outcome[];
+  /** Recent collisions the agents sewed themselves — the audit glance. */
+  sewn: Outcome[];
   /** Cross-actor dependency heads-up: a claimed symbol depends on one being changed. */
   dependencyWarnings: DependencyWarning[];
   /** Files with changes attributed to no one (pre-existing, generated, etc.). */
@@ -173,6 +175,7 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
     blocked,
     clobbers,
     needsYou: openEscalations(store),
+    sewn: resolutions(store).slice(0, 5),
     dependencyWarnings: warnings,
     unattributed: [...unattributed].sort(),
   };
@@ -262,6 +265,14 @@ export function renderFleet(view: FleetView, headLabel: string): string {
       for (const c of adjacent) out.push("    " + pc.dim("· " + fmtOverlap(c)));
       out.push("");
     }
+  }
+
+  if (view.sewn.length) {
+    out.push(pc.dim(pc.bold("  Sewn by agents")) + pc.dim("  (recent — agents reconciled these themselves)"));
+    for (const o of view.sewn) {
+      out.push(pc.dim(`    ✓ ${o.target}${o.note ? `  ${o.note}` : ""}  (${o.actor})`));
+    }
+    out.push("");
   }
 
   if (view.unattributed.length) {
