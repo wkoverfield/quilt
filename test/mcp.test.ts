@@ -103,6 +103,64 @@ test("MCP: start_session → edit → get_my_changes → commit_mine", async () 
   }
 });
 
+test("MCP: ONE shared server attributes two subagents via per-call actor", async () => {
+  const dir = makeRepo();
+  // foo and bar are well separated so their edits land in distinct hunks.
+  write(
+    dir,
+    "utils.ts",
+    "export function foo() {\n  return 1;\n}\n\n// ----\n// ----\n// ----\n\nexport function bar() {\n  return 2;\n}\n",
+  );
+  spawnSync("git", ["add", "-A"], { cwd: dir });
+  spawnSync("git", ["commit", "-q", "-m", "seed"], { cwd: dir });
+
+  // A single client = a single shared `quilt mcp` process (no start_session,
+  // no QUILT_ACTOR) — exactly the Claude Code / Codex shared-server case.
+  const c = await connect(dir);
+  try {
+    // Two subagents claim different symbols through the same server, each naming
+    // itself per call. Both granted: distinct actors, no clobbering.
+    const claimA = parse(
+      await c.callTool({ name: "claim", arguments: { actor: "agent-a", paths: ["utils.ts#foo"] } }),
+    );
+    assert.equal(claimA.results[0].granted, true);
+    const claimB = parse(
+      await c.callTool({ name: "claim", arguments: { actor: "agent-b", paths: ["utils.ts#bar"] } }),
+    );
+    assert.equal(claimB.results[0].granted, true, "agent-b is a distinct actor, not blocked by agent-a");
+
+    // Both edit their own symbol in the shared file.
+    write(
+      dir,
+      "utils.ts",
+      "export function foo() {\n  return 10;\n}\n\n// ----\n// ----\n// ----\n\nexport function bar() {\n  return 20;\n}\n",
+    );
+
+    // Each commits its own through the shared server.
+    const commitA = parse(
+      await c.callTool({ name: "commit_mine", arguments: { actor: "agent-a", message: "a: foo" } }),
+    );
+    assert.equal(commitA.committed, true);
+    const commitB = parse(
+      await c.callTool({ name: "commit_mine", arguments: { actor: "agent-b", message: "b: bar" } }),
+    );
+    assert.equal(commitB.committed, true);
+
+    // Two commits, each correctly attributed — the keystone for orchestration.
+    assert.equal(
+      gitOut(dir, ["log", "--pretty=%an", "-2"]),
+      "agent-b\nagent-a",
+      "the shared server attributed each subagent to itself",
+    );
+    const head = gitOut(dir, ["show", "HEAD:utils.ts"]);
+    assert.match(head, /return 10/, "foo change committed");
+    assert.match(head, /return 20/, "bar change committed");
+  } finally {
+    await c.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("MCP: claim is granted to one actor and denied to another", async () => {
   const dir = makeRepo();
   const a = await connect(dir);
