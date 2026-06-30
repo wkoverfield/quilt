@@ -229,7 +229,11 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         bLine++;
         if (offLimitDel && offLimitDel.has(bLine)) continue;
         if (isTrivialLine(op.text)) continue;
-        const owner = file.added[op.text];
+        // Whose line is being deleted? Prefer the authoritative ledger author —
+        // it knows the true author even when this actor's reconcile hasn't yet
+        // overlaid it onto file.added, so a captured-but-unreconciled line still
+        // names the right clobber victim.
+        const owner = ledgerOwn.get(path)?.get(op.text) ?? file.added[op.text];
         if (owner && owner !== activeActorId) {
           const sample = victims.get(owner) ?? [];
           if (sample.length < 3) sample.push(op.text);
