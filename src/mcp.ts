@@ -8,6 +8,7 @@ import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
+import { recordOutcome, openEscalations } from "./outcomes.js";
 import { dependencyWarnings } from "./push.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
@@ -141,6 +142,8 @@ export async function runMcpServer(store: Store): Promise<void> {
         // Push-awareness at the orient step: a symbol this actor already claimed
         // depends on one another actor is changing. Mirrors `quilt status --json`.
         dependencyWarnings: actorId ? dependencyWarnings(store, actorId, Date.now()) : [],
+        // Collisions an agent kicked up for a human and not yet resolved.
+        needsYou: openEscalations(store),
       });
     },
   );
@@ -268,6 +271,44 @@ export async function runMcpServer(store: Store): Promise<void> {
       // (so a programmatic empty list never accidentally drops all claims).
       const n = releaseClaims(store, actorId, paths ?? null);
       return ok({ released: n });
+    },
+  );
+
+  server.registerTool(
+    "escalate",
+    {
+      description:
+        "Flag a collision you CANNOT reconcile (e.g. two opposed intents on the same line) for a human. Use this instead of forcing a change through when a denied claim's holderIntent conflicts with yours. It shows up under 'Needs you' until resolved.",
+      inputSchema: {
+        actor: actorArg,
+        target: z.string().describe("the clash, e.g. pool.js#maxConnections"),
+        reason: z.string().optional().describe("why it needs a human — name the opposed intents"),
+      },
+    },
+    async ({ actor, target, reason }) => {
+      const actorId = resolveActor(actor, false) ?? "unknown";
+      const o = recordOutcome(store, "escalated", actorId, target, reason, new Date().toISOString());
+      store.appendLedger({ ts: o.ts, type: "collision.escalated", target: o.target, actorId });
+      return ok({ escalated: o });
+    },
+  );
+
+  server.registerTool(
+    "resolve",
+    {
+      description:
+        "Mark a collision as sewn/handled after you reconciled it — closes its 'Needs you' flag and records the audit trail. Use after you've merged or adapted so the work accounts for both intents.",
+      inputSchema: {
+        actor: actorArg,
+        target: z.string().describe("the clash that was resolved, e.g. pool.js#maxConnections"),
+        note: z.string().optional().describe("what you did to reconcile it"),
+      },
+    },
+    async ({ actor, target, note }) => {
+      const actorId = resolveActor(actor, false) ?? "unknown";
+      const o = recordOutcome(store, "resolved", actorId, target, note, new Date().toISOString());
+      store.appendLedger({ ts: o.ts, type: "collision.resolved", target: o.target, actorId });
+      return ok({ resolved: o });
     },
   );
 

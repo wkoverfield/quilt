@@ -55,11 +55,13 @@ test("MCP server lists all the Quilt tools", async () => {
     assert.deepEqual(names, [
       "claim",
       "commit_mine",
+      "escalate",
       "get_conflicts",
       "get_my_changes",
       "get_status",
       "preview_mine",
       "release",
+      "resolve",
       "start_session",
     ]);
   } finally {
@@ -245,6 +247,39 @@ test("MCP orchestration eval: per-call actor keeps a 4-subagent fleet attributed
   } finally {
     await c2.close();
     rmSync(d2, { recursive: true, force: true });
+  }
+});
+
+test("MCP: escalate flags a collision and resolve clears it", async () => {
+  const dir = makeRepo();
+  const a = await connect(dir);
+  try {
+    await a.callTool({ name: "start_session", arguments: { actor: "safety", type: "agent" } });
+    const esc = parse(
+      await a.callTool({
+        name: "escalate",
+        arguments: { actor: "safety", target: "pool.js#maxConnections", reason: "500 vs 25" },
+      }),
+    );
+    assert.equal(esc.escalated.target, "pool.js#maxConnections");
+    assert.equal(esc.escalated.kind, "escalated");
+
+    // It shows under get_status's needsYou until resolved.
+    let status = parse(await a.callTool({ name: "get_status", arguments: { actor: "safety" } }));
+    assert.equal(status.needsYou.length, 1);
+
+    const res = parse(
+      await a.callTool({
+        name: "resolve",
+        arguments: { actor: "safety", target: "pool.js#maxConnections", note: "env-configurable" },
+      }),
+    );
+    assert.equal(res.resolved.kind, "resolved");
+    status = parse(await a.callTool({ name: "get_status", arguments: { actor: "safety" } }));
+    assert.equal(status.needsYou.length, 0, "resolve clears the Needs-you flag");
+  } finally {
+    await a.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

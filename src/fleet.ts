@@ -2,7 +2,9 @@ import pc from "picocolors";
 import type { Store } from "./state.js";
 import { buildModel } from "./engine.js";
 import { listClaims, listBlocks, claimLabel } from "./claims.js";
+import { openEscalations } from "./outcomes.js";
 import { dependencyWarnings, formatWarning, type DependencyWarning } from "./push.js";
+import type { Outcome } from "./types.js";
 
 /**
  * Mission control: a read-only view of the fleet — who's in it, what each actor
@@ -70,6 +72,8 @@ export interface FleetView {
   blocked: FleetBlock[];
   /** Preserved overwrites not yet restored — full-overwrite clashes. */
   clobbers: FleetClobber[];
+  /** Genuine conflicts an agent kicked up for a human — the "Needs you" list. */
+  needsYou: Outcome[];
   /** Cross-actor dependency heads-up: a claimed symbol depends on one being changed. */
   dependencyWarnings: DependencyWarning[];
   /** Files with changes attributed to no one (pre-existing, generated, etc.). */
@@ -168,6 +172,7 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
     overlaps,
     blocked,
     clobbers,
+    needsYou: openEscalations(store),
     dependencyWarnings: warnings,
     unattributed: [...unattributed].sort(),
   };
@@ -179,9 +184,23 @@ export function renderFleet(view: FleetView, headLabel: string): string {
   const clashes = view.overlaps.filter((o) => o.kind === "contended").length + view.clobbers.length;
   const counts =
     `${view.actors.length} actor${view.actors.length === 1 ? "" : "s"}` +
+    `, ${view.needsYou.length} needs-you` +
     `, ${clashes} clash${clashes === 1 ? "" : "es"}` +
     `, ${view.blocked.length} blocked`;
   out.push(`${pc.bold("Quilt")} ${pc.dim("· fleet")}   ${pc.dim(headLabel)}   ${pc.dim(counts)}\n`);
+
+  // The engineer's action list goes first: clashes the agents couldn't sew.
+  if (view.needsYou.length) {
+    out.push(pc.bold(pc.yellow("  Needs you")) + pc.dim("  (agents couldn't reconcile these — your call)"));
+    for (const o of view.needsYou) {
+      out.push(
+        "    " + pc.yellow("⚑ ") + pc.bold(o.target) +
+          (o.note ? pc.dim(`  ${o.note}`) : "") + pc.dim(`   (raised by ${o.actor})`),
+      );
+    }
+    out.push(pc.dim("    clear with: quilt resolve <target>"));
+    out.push("");
+  }
 
   out.push(pc.bold("  Actors"));
   if (view.actors.length === 0) {

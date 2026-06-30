@@ -52,4 +52,8 @@ export class QuiltPaths {
   get claims(): string {
     return join(this.dir, "claims.json");
   }
+  /** Collision outcomes: escalations (needs a human) and resolutions (audit). */
+  get outcomes(): string {
+    return join(this.dir, "outcomes.json");
+  }
 }

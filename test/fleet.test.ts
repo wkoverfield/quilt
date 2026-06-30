@@ -135,6 +135,33 @@ test("fleet view: a real same-line collision is never hidden", () => {
   }
 });
 
+test("fleet view: an escalated collision surfaces as 'Needs you' until resolved", () => {
+  const dir = repo();
+  try {
+    write(dir, "pool.js", "export function maxConnections() {\n  return 100;\n}\n");
+    commit(dir, "init");
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "safety", "--type", "agent"], "safety");
+
+    // An agent hits a clash it can't reconcile and kicks it up for a human.
+    const esc = q(dir, ["escalate", "pool.js#maxConnections", "--reason", "500 vs 25 — opposed"], "safety");
+    assert.equal(esc.status, 0, esc.stderr);
+
+    let v = fleet(dir);
+    assert.equal(v.needsYou.length, 1, "the escalation shows under Needs you");
+    assert.equal(v.needsYou[0].target, "pool.js#maxConnections");
+    assert.equal(v.needsYou[0].actor, "safety");
+    assert.match(v.needsYou[0].note, /opposed/);
+
+    // The human (or a resolver) marks it handled — it clears.
+    q(dir, ["resolve", "pool.js#maxConnections", "--note", "made it env-configurable"]);
+    v = fleet(dir);
+    assert.equal(v.needsYou.length, 0, "resolving clears the Needs-you flag");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("fleet view: a full overwrite surfaces as a preserved clobber", () => {
   const dir = repo();
   try {
