@@ -12,7 +12,17 @@ export interface CodeSymbol {
 
 const require = createRequire(import.meta.url);
 
-type Grammar = "javascript" | "typescript" | "tsx" | "python" | "go" | "rust";
+type Grammar =
+  | "javascript"
+  | "typescript"
+  | "tsx"
+  | "python"
+  | "go"
+  | "rust"
+  | "java"
+  | "ruby"
+  | "c"
+  | "cpp";
 const isJsFamily = (g: Grammar): boolean =>
   g === "javascript" || g === "typescript" || g === "tsx";
 
@@ -30,6 +40,15 @@ const GRAMMAR_BY_EXT: Record<string, Grammar> = {
   py: "python",
   go: "go",
   rs: "rust",
+  java: "java",
+  rb: "ruby",
+  c: "c",
+  h: "c",
+  cpp: "cpp",
+  cc: "cpp",
+  cxx: "cpp",
+  hpp: "cpp",
+  hh: "cpp",
 };
 
 /** Loaded parsers, one per grammar, populated by initSymbols(). */
@@ -154,7 +173,44 @@ const LANG_KINDS: Partial<Record<Grammar, Record<string, CodeSymbol["kind"]>>> =
     enum_item: "class",
     trait_item: "class",
   },
+  java: {
+    class_declaration: "class",
+    interface_declaration: "class",
+    enum_declaration: "class",
+    record_declaration: "class",
+    annotation_type_declaration: "class",
+  },
+  ruby: {
+    method: "function",
+    singleton_method: "function",
+    class: "class",
+    module: "class",
+  },
+  // C/C++ function_definition is handled specially (name lives in the declarator).
+  c: { struct_specifier: "class", union_specifier: "class", enum_specifier: "class", type_definition: "value" },
+  cpp: {
+    class_specifier: "class",
+    struct_specifier: "class",
+    union_specifier: "class",
+    enum_specifier: "class",
+    type_definition: "value",
+  },
 };
+
+/**
+ * Extract a C/C++ function name from a `function_definition`. The name lives
+ * inside the declarator, possibly wrapped in pointer/reference/parenthesized
+ * declarators (`int *foo()`), so dig down to the innermost named declarator.
+ */
+function cFunctionName(node: Parser.SyntaxNode): string | null {
+  let d: Parser.SyntaxNode | null = node.childForFieldName("declarator");
+  while (d && d.type !== "function_declarator") d = d.childForFieldName("declarator");
+  let name: Parser.SyntaxNode | null = d?.childForFieldName("declarator") ?? null;
+  while (name && name.childForFieldName("declarator")) name = name.childForFieldName("declarator");
+  if (!name) return null;
+  // identifier / field_identifier / qualified_identifier all carry usable text.
+  return name.text.includes("\n") ? null : name.text;
+}
 
 function lineRange(node: Parser.SyntaxNode): { startLine: number; endLine: number } {
   return { startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1 };
@@ -193,10 +249,19 @@ function collectLang(top: Parser.SyntaxNode, out: CodeSymbol[], grammar: Grammar
     }
     return;
   }
+  // C / C++ free functions and methods: the name is buried in the declarator.
+  if ((grammar === "c" || grammar === "cpp") && top.type === "function_definition") {
+    const fname = cFunctionName(top);
+    if (fname) out.push({ name: fname, kind: "function", ...lineRange(top) });
+    return;
+  }
+
   const kind = LANG_KINDS[grammar]?.[top.type];
   if (!kind) return;
-  const name = top.childForFieldName("name");
-  if (name) out.push({ name: name.text, kind, ...lineRange(top) });
+  // Most grammars expose the symbol name via the "name" field; C typedefs put it
+  // in "declarator" (`typedef struct {...} Foo`).
+  const name = top.childForFieldName("name") ?? top.childForFieldName("declarator");
+  if (name && !name.text.includes("\n")) out.push({ name: name.text, kind, ...lineRange(top) });
 }
 
 /** Top-level symbols of a parsed file, dispatching to the right grammar's rules. */
