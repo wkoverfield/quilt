@@ -177,15 +177,18 @@ function collectLang(top: Parser.SyntaxNode, out: CodeSymbol[], grammar: Grammar
     }
     return;
   }
-  // Go: `type ( ... )` / `type Foo struct{}` wrap one or more type_spec.
+  // Go: `type ( ... )` / `type Foo struct{}` / `type Foo = Bar` wrap one or more
+  // type_spec (definitions) or type_alias (aliases).
   if (grammar === "go" && top.type === "type_declaration") {
     for (const spec of top.namedChildren) {
-      if (spec.type !== "type_spec") continue;
+      if (spec.type !== "type_spec" && spec.type !== "type_alias") continue;
       const name = spec.childForFieldName("name");
       if (!name) continue;
       const t = spec.childForFieldName("type");
       const kind =
-        t && (t.type === "struct_type" || t.type === "interface_type") ? "class" : "value";
+        spec.type === "type_spec" && t && (t.type === "struct_type" || t.type === "interface_type")
+          ? "class"
+          : "value";
       out.push({ name: name.text, kind, ...lineRange(spec) });
     }
     return;
@@ -275,12 +278,11 @@ export function symbolReferences(path: string, content: string): Map<string, Set
 
     // Call callees: `foo(...)`. JS/Go/Rust use `call_expression`; Python uses
     // `call`. The callee is the `function` field; record it when it's a bare name.
-    for (const nodeType of ["call_expression", "call"]) {
-      for (const call of root.descendantsOfType(nodeType)) {
-        const callee = call.childForFieldName("function");
-        if (callee && callee.type === "identifier") {
-          add(enclosing(callee.startPosition.row + 1), callee.text);
-        }
+    const callNodeType = grammar === "python" ? "call" : "call_expression";
+    for (const call of root.descendantsOfType(callNodeType)) {
+      const callee = call.childForFieldName("function");
+      if (callee && callee.type === "identifier") {
+        add(enclosing(callee.startPosition.row + 1), callee.text);
       }
     }
     // Type references: `: Foo`, `extends Foo`, Rust `type_identifier`, etc.

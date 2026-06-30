@@ -106,6 +106,13 @@ test("Go: functions, methods, structs, and interfaces", () => {
   assert.equal(sym("m.go", src, "Greeter").kind, "class"); // interface
 });
 
+test("Go: grouped type blocks and type aliases are surfaced", () => {
+  const src = "package main\n\ntype (\n\tA struct{ X int }\n\tB int\n)\n\ntype MyErr = error\n";
+  assert.equal(sym("g.go", src, "A").kind, "class"); // struct in a grouped block
+  assert.equal(sym("g.go", src, "B").kind, "value"); // named int in the same block
+  assert.equal(sym("g.go", src, "MyErr").kind, "value"); // `type X = Y` alias
+});
+
 test("Rust: functions, structs, enums, and traits", () => {
   const src = "pub fn foo(x: i32) -> i32 {\n    x\n}\n\nstruct Point {\n    x: i32,\n}\n\nenum Color { Red }\n\ntrait Greet {\n    fn hi(&self);\n}\n";
   assert.equal(sym("m.rs", src, "foo").kind, "function");
