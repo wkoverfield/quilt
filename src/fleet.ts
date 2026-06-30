@@ -1,7 +1,8 @@
 import pc from "picocolors";
 import type { Store } from "./state.js";
 import { buildModel } from "./engine.js";
-import { listClaims, claimLabel } from "./claims.js";
+import { listClaims, listBlocks, claimLabel } from "./claims.js";
+import { dependencyWarnings, formatWarning, type DependencyWarning } from "./push.js";
 
 /**
  * Mission control: a read-only view of the fleet — who's in it, what each actor
@@ -34,9 +35,20 @@ export interface FleetOverlap {
   lines: number;
 }
 
+/** An actor whose claim was denied because someone else holds the target. */
+export interface FleetBlock {
+  actor: string;
+  target: string;
+  holder: string;
+}
+
 export interface FleetView {
   actors: FleetActorView[];
   overlaps: FleetOverlap[];
+  /** Who's blocked on whom (denied claims still held by the holder). */
+  blocked: FleetBlock[];
+  /** Cross-actor dependency heads-up: a claimed symbol depends on one being changed. */
+  dependencyWarnings: DependencyWarning[];
   /** Files with changes attributed to no one (pre-existing, generated, etc.). */
   unattributed: string[];
 }
@@ -94,13 +106,43 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
     files: [...(filesByActor.get(id) ?? [])].sort(),
   }));
 
-  return { actors, overlaps, unattributed: [...unattributed].sort() };
+  const blocked = listBlocks(store, now)
+    .map((b) => ({
+      actor: b.actor,
+      target: b.symbol ? `${b.path}#${b.symbol}` : b.path,
+      holder: b.holder,
+    }))
+    .sort((a, b) => a.actor.localeCompare(b.actor) || a.target.localeCompare(b.target));
+
+  // Dependency heads-up across the whole fleet (each actor's warnings, deduped).
+  const seen = new Set<string>();
+  const warnings: DependencyWarning[] = [];
+  for (const a of actors) {
+    for (const w of dependencyWarnings(store, a.id, now)) {
+      const key = `${w.yourSymbol}->${w.heldTarget}@${w.heldBy}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      warnings.push(w);
+    }
+  }
+
+  return {
+    actors,
+    overlaps,
+    blocked,
+    dependencyWarnings: warnings,
+    unattributed: [...unattributed].sort(),
+  };
 }
 
 /** Render the fleet view as a glanceable terminal dashboard. */
 export function renderFleet(view: FleetView, headLabel: string): string {
   const out: string[] = [];
-  out.push(`${pc.bold("Quilt")} ${pc.dim("· fleet")}   ${pc.dim(headLabel)}\n`);
+  const counts =
+    `${view.actors.length} actor${view.actors.length === 1 ? "" : "s"}` +
+    `, ${view.overlaps.length} overlap${view.overlaps.length === 1 ? "" : "s"}` +
+    `, ${view.blocked.length} blocked`;
+  out.push(`${pc.bold("Quilt")} ${pc.dim("· fleet")}   ${pc.dim(headLabel)}   ${pc.dim(counts)}\n`);
 
   out.push(pc.bold("  Actors"));
   if (view.actors.length === 0) {
@@ -109,12 +151,30 @@ export function renderFleet(view: FleetView, headLabel: string): string {
     for (const a of view.actors) {
       const active = a.claims.length > 0 || a.files.length > 0;
       const dot = active ? pc.green("●") : pc.dim("○");
-      const work = a.files.length ? a.files.join(", ") : pc.dim("idle");
+      const work = a.files.length
+        ? a.files.join(", ")
+        : pc.dim(a.claims.length ? "reserved, not yet edited" : "idle");
       out.push(`    ${dot} ${pc.bold(a.id)} ${pc.dim(`(${a.type})`)}   ${work}`);
       if (a.claims.length) out.push(pc.dim(`        claims: ${a.claims.join(", ")}`));
     }
   }
   out.push("");
+
+  if (view.blocked.length) {
+    out.push(pc.bold(pc.red("  Blocked")));
+    for (const b of view.blocked) {
+      out.push(
+        "    " + pc.red("⛔ ") + `${pc.bold(b.actor)} waiting on ${b.target} ${pc.dim(`(held by ${b.holder})`)}`,
+      );
+    }
+    out.push("");
+  }
+
+  if (view.dependencyWarnings.length) {
+    out.push(pc.bold(pc.yellow("  Dependency heads-up")));
+    for (const w of view.dependencyWarnings) out.push("    " + pc.yellow("⚠ ") + formatWarning(w));
+    out.push("");
+  }
 
   if (view.overlaps.length) {
     out.push(pc.bold(pc.yellow("  Overlapping work")) + pc.dim("  (same region — review for a same-line clash)"));
