@@ -20,6 +20,8 @@ Set Padding 22
 Set TypingSpeed 45ms
 
 Hide
+Type 'CAP="  claude lost its work, absorbed by codex"'
+Enter
 Type 'codex(){ git -c user.name=codex -c user.email=codex@quilt.local "$@"; }; claude(){ git -c user.name=claude -c user.email=claude@quilt.local "$@"; }'
 Enter
 Type 'D=$(mktemp -d); cd "$D"; git init -q; git config user.email demo@quilt.local; git config user.name demo; git config commit.gpgsign false'
@@ -38,6 +40,6 @@ Sleep 2s
 Type 'claude commit -am "raise tax"'
 Enter
 Sleep 2.8s
-Type 'git log --pretty="  %an: %s"'
+Type 'git log --pretty="  %an: %s"; echo; echo "$CAP"'
 Enter
-Sleep 3.5s
+Sleep 3.8s

@@ -25,6 +25,8 @@ Hide
 Type 'Q="$PWD/dist/cli.js"; npm run build >/dev/null 2>&1'
 Enter
 Sleep 3s
+Type 'CAP="  both changes kept, attributed to who made them"'
+Enter
 Type 'codex(){ QUILT_ACTOR=codex node "$Q" "$@"; }; claude(){ QUILT_ACTOR=claude node "$Q" "$@"; }'
 Enter
 Type 'D=$(mktemp -d); cd "$D"; git init -q; git config user.email demo@quilt.local; git config user.name demo; git config commit.gpgsign false'
@@ -50,6 +52,6 @@ Sleep 2s
 Type 'claude commit --mine -m "raise tax"'
 Enter
 Sleep 2.8s
-Type 'git log --pretty="  %an: %s"'
+Type 'git log --pretty="  %an: %s"; echo; echo "$CAP"'
 Enter
-Sleep 3.5s
+Sleep 3.8s
