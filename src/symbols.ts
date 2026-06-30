@@ -202,9 +202,16 @@ const LANG_KINDS: Partial<Record<Grammar, Record<string, CodeSymbol["kind"]>>> =
  * inside the declarator, possibly wrapped in pointer/reference/parenthesized
  * declarators (`int *foo()`), so dig down to the innermost named declarator.
  */
+// Step into a declarator's inner declarator. pointer_declarator carries a named
+// `declarator` field; reference_declarator / parenthesized_declarator expose
+// their child only as an unnamed-positional named child, so fall back to that.
+function declaratorChild(d: Parser.SyntaxNode): Parser.SyntaxNode | null {
+  return d.childForFieldName("declarator") ?? d.namedChildren[0] ?? null;
+}
+
 function cFunctionName(node: Parser.SyntaxNode): string | null {
-  let d: Parser.SyntaxNode | null = node.childForFieldName("declarator");
-  while (d && d.type !== "function_declarator") d = d.childForFieldName("declarator");
+  let d: Parser.SyntaxNode | null = declaratorChild(node);
+  while (d && d.type !== "function_declarator") d = declaratorChild(d);
   let name: Parser.SyntaxNode | null = d?.childForFieldName("declarator") ?? null;
   while (name && name.childForFieldName("declarator")) name = name.childForFieldName("declarator");
   if (!name) return null;
@@ -255,6 +262,16 @@ function collectLang(top: Parser.SyntaxNode, out: CodeSymbol[], grammar: Grammar
   if ((grammar === "c" || grammar === "cpp") && top.type === "function_definition") {
     const fname = cFunctionName(top);
     if (fname) out.push({ name: fname, kind: "function", ...lineRange(top) });
+    return;
+  }
+  // C / C++ typedef may name several aliases: `typedef int foo, bar;`. Surface
+  // each cleanly-named alias; skip complex declarators (e.g. `typedef int *p`).
+  if ((grammar === "c" || grammar === "cpp") && top.type === "type_definition") {
+    for (const decl of top.childrenForFieldName("declarator")) {
+      if (/^[A-Za-z_]\w*$/.test(decl.text)) {
+        out.push({ name: decl.text, kind: "value", ...lineRange(top) });
+      }
+    }
     return;
   }
 

@@ -136,6 +136,19 @@ test("C++: free functions, classes, structs", () => {
   assert.equal(sym("m.cpp", src, "S").kind, "class");
 });
 
+test("C++: reference-return functions and out-of-line qualified methods", () => {
+  // reference / rvalue-reference returns wrap the declarator without a `name` field.
+  assert.equal(sym("r.cpp", "int& ref() { static int x; return x; }\n", "ref").kind, "function");
+  assert.equal(sym("r.cpp", "int&& rref() { return 0; }\n", "rref").kind, "function");
+  // out-of-line method definition keeps its qualified name (unambiguous across classes).
+  assert.equal(sym("r.cpp", "int Foo::m() { return 1; }\n", "Foo::m").kind, "function");
+});
+
+test("C: multi-name typedef surfaces every alias", () => {
+  const syms = parseSymbols("t.c", "typedef int foo, bar;\n");
+  assert.deepEqual(syms.map((s) => s.name).sort(), ["bar", "foo"]);
+});
+
 test("Ruby: methods, classes, modules", () => {
   const src = "def foo(x)\n  x\nend\n\nclass Bar\n  def m\n  end\nend\n\nmodule M\nend\n";
   assert.equal(sym("m.rb", src, "foo").kind, "function");
