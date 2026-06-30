@@ -11,6 +11,7 @@ import { reconcile, buildModel } from "./engine.js";
 import { initSymbols } from "./symbols.js";
 import { dependencyWarnings, formatWarning } from "./push.js";
 import { fleetSnapshot, renderFleet } from "./fleet.js";
+import { planUndo } from "./undo.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
@@ -191,6 +192,72 @@ program
       process.stdout.write("\n");
     }
     printClobbers(store);
+  });
+
+program
+  .command("undo")
+  .description("Back out one actor's uncommitted changes from the working tree, keeping everyone else's")
+  .argument("<actor>", "the actor whose uncommitted changes to revert")
+  .option("--dry-run", "show what would be reverted without changing any files")
+  .action((actor: string, opts: { dryRun?: boolean }) => {
+    const store = requireStore();
+    const ctx = activeContext(store);
+    reconcile(store, ctx.actorId);
+    const model = buildModel(store, ctx.actorId);
+    const plan = planUndo(model, store.readOwnership(), actor);
+
+    if (plan.files.length === 0 && plan.skippedBinary.length === 0) {
+      process.stdout.write(pc.dim(`No attributed uncommitted changes owned by ${actor}.\n`));
+      return;
+    }
+    if (opts.dryRun) {
+      process.stdout.write(
+        pc.bold(`Would back out ${plan.totalReverted} line-change(s) by ${actor}:\n`),
+      );
+      for (const f of plan.files) {
+        const what = f.text === null ? "delete" : `${f.reverted} line${f.reverted === 1 ? "" : "s"}`;
+        process.stdout.write(`    ${f.path}   ${pc.dim(`(${what})`)}\n`);
+      }
+      for (const p of plan.skippedBinary) {
+        process.stdout.write(pc.dim(`    ${p}   (binary — can't line-revert)\n`));
+      }
+      return;
+    }
+
+    const repoRoot = store.paths.repoRoot;
+    for (const f of plan.files) {
+      const abs = resolve(repoRoot, f.path);
+      if (f.text === null) {
+        rmSync(abs, { force: true });
+      } else {
+        mkdirSync(dirname(abs), { recursive: true });
+        writeFileSync(abs, f.text);
+      }
+    }
+    // Absorb the undo so the next reconcile doesn't re-attribute it, and drop the
+    // actor's now-gone ownership. Other actors' entries are left intact.
+    store.withLock(() => {
+      const obs = store.readObserved();
+      const own = store.readOwnership();
+      for (const f of plan.files) {
+        obs.files[f.path] = f.text;
+        const fo = own.files[f.path];
+        if (fo) {
+          for (const k of Object.keys(fo.added)) if (fo.added[k] === actor) delete fo.added[k];
+          for (const k of Object.keys(fo.removed)) if (fo.removed[k] === actor) delete fo.removed[k];
+        }
+      }
+      store.writeObserved(obs);
+      store.writeOwnership(own);
+    });
+    process.stdout.write(
+      pc.green("✓ ") +
+        `Backed out ${plan.totalReverted} line-change(s) by ${actor} across ${plan.files.length} file(s). ` +
+        "Other actors' work is untouched.\n",
+    );
+    for (const p of plan.skippedBinary) {
+      process.stdout.write(pc.dim(`  skipped binary (can't line-revert): ${p}\n`));
+    }
   });
 
 program
