@@ -98,6 +98,32 @@ test("two actors editing one file are captured as distinct, correctly-attributed
   }
 });
 
+test("anchor is the surviving line just BEFORE the edit region (for replay)", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "m.js"), "const head = 1;\nconst target = 2;\nconst tail = 3;\n");
+    const r = applyAndRecordEdit(s, { actor: "a", path: "m.js", oldString: "const target = 2;", newString: "const target = 9;" });
+    assert.ok(r.ok);
+    assert.equal(readAuthorship(s)[0]!.anchor, "const head = 1;", "anchor = the line above the change, not the changed line");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("edit/write refuse to escape the repo (actor-controlled path)", () => {
+  const { s, dir } = newStore();
+  try {
+    const w = applyAndRecordWrite(s, { actor: "a", path: "../escape.js", content: "x" });
+    assert.equal(w.ok, false);
+    writeFileSync(join(dir, "ok.js"), "a = 1;\n");
+    const e = applyAndRecordEdit(s, { actor: "a", path: "../../escape.js", oldString: "a", newString: "b" });
+    assert.equal(e.ok, false);
+    assert.equal(readAuthorship(s).length, 0, "no event recorded for an escaping path");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("applyAndRecordWrite captures a whole-file create", () => {
   const { s, dir } = newStore();
   try {

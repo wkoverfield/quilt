@@ -349,6 +349,7 @@ export async function runMcpServer(store: Store): Promise<void> {
     async ({ actor, path, content, why }) => {
       const actorId = resolveActor(actor, true)!;
       const r = applyAndRecordWrite(store, { actor: actorId, path, content, intent: why });
+      if (!r.ok) return ok({ applied: false, error: r.error });
       return ok({ applied: true, captured: r.event });
     },
   );

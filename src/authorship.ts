@@ -6,11 +6,29 @@
 // happens, from the tool-call payload (old -> new), which carries the actor's
 // identity and brackets the exact byte change. Each edit appends one immutable
 // event; ownership is a replay of the log. This is the v0.3 substrate.
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
 import type { Store } from "./state.js";
+
+/**
+ * Resolve a repo-relative path to an absolute one, refusing anything that escapes
+ * the repo (`../` traversal, absolute paths) or is a symlink — `path` is actor-
+ * controlled, so a write must never land outside the working tree. Mirrors the
+ * guard claims.ts/engine.ts apply to reads. Returns null if disallowed.
+ */
+function safeAbs(repoRoot: string, relPath: string): string | null {
+  const root = resolve(repoRoot);
+  const abs = resolve(root, relPath);
+  if (abs !== root && !abs.startsWith(root + sep)) return null;
+  try {
+    if (lstatSync(abs).isSymbolicLink()) return null; // never write through a symlink
+  } catch {
+    /* file doesn't exist yet — fine for a create */
+  }
+  return abs;
+}
 
 export interface AuthorshipEvent {
   /** monotonic per-repo sequence (append order). */
@@ -68,7 +86,16 @@ export function computeDelta(oldText: string, newText: string): { added: string[
  */
 export function recordAuthorship(
   store: Store,
-  args: { actor: string; path: string; oldText: string; newText: string; intent?: string; whole?: boolean },
+  args: {
+    actor: string;
+    path: string;
+    oldText: string;
+    newText: string;
+    intent?: string;
+    whole?: boolean;
+    /** the stable line just BEFORE the edit region (survives the replacement), for replay. */
+    anchor?: string | null;
+  },
 ): AuthorshipEvent {
   const { actor, path, oldText, newText, intent, whole } = args;
   return store.withLock(() => {
@@ -76,7 +103,6 @@ export function recordAuthorship(
     const { added, removed } = whole
       ? { added: splitLines(newText), removed: [] }
       : computeDelta(oldText, newText);
-    const oldL = splitLines(oldText);
     const ev: AuthorshipEvent = {
       seq: events.length,
       ts: new Date().toISOString(),
@@ -84,7 +110,7 @@ export function recordAuthorship(
       path,
       added,
       removed,
-      anchor: whole ? null : oldL[0] ?? null,
+      anchor: whole ? null : args.anchor ?? null,
       preHash: whole ? null : sha(oldText),
       intent: intent?.trim() ? intent.trim() : undefined,
       whole: whole || undefined,
@@ -92,6 +118,14 @@ export function recordAuthorship(
     appendFileSync(store.paths.authorshipLog, JSON.stringify(ev) + "\n");
     return ev;
   });
+}
+
+/** The last complete line of `text` before offset `idx` (the surviving anchor). */
+function lineBefore(text: string, idx: number): string | null {
+  const head = text.slice(0, idx).split("\n");
+  // head's last element is the partial line where the match starts (or "" at a
+  // line boundary); the element before it is the last complete preceding line.
+  return head.length >= 2 ? head[head.length - 2] ?? null : null;
 }
 
 /**
@@ -104,7 +138,8 @@ export function applyAndRecordEdit(
   store: Store,
   args: { actor: string; path: string; oldString: string; newString: string; intent?: string },
 ): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } {
-  const abs = join(store.paths.repoRoot, args.path);
+  const abs = safeAbs(store.paths.repoRoot, args.path);
+  if (!abs) return { ok: false, error: "path escapes the repository" };
   if (!existsSync(abs)) return { ok: false, error: `file not found: ${args.path}` };
   const before = readFileSync(abs, "utf8");
   const idx = before.indexOf(args.oldString);
@@ -120,6 +155,7 @@ export function applyAndRecordEdit(
     oldText: args.oldString,
     newText: args.newString,
     intent: args.intent,
+    anchor: lineBefore(before, idx),
   });
   return { ok: true, event };
 }
@@ -128,8 +164,9 @@ export function applyAndRecordEdit(
 export function applyAndRecordWrite(
   store: Store,
   args: { actor: string; path: string; content: string; intent?: string },
-): { ok: true; event: AuthorshipEvent } {
-  const abs = join(store.paths.repoRoot, args.path);
+): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } {
+  const abs = safeAbs(store.paths.repoRoot, args.path);
+  if (!abs) return { ok: false, error: "path escapes the repository" };
   atomicWrite(abs, args.content);
   const event = recordAuthorship(store, {
     actor: args.actor,
