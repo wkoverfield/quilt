@@ -4,12 +4,14 @@ import { buildModel } from "./engine.js";
 import { listClaims, claimLabel } from "./claims.js";
 
 /**
- * Mission control: a read-only, real-time view of the fleet — who's in it, what
- * each actor has claimed, which working-tree changes each owns, and where they
- * collide. Strictly read-only: it never reconciles or writes state, so watching
- * the fleet can't perturb attribution. Claims are always current; ownership is
- * as fresh as the last `quilt` command any actor ran (run `quilt watch`
- * alongside to keep it live).
+ * Mission control: a read-only view of the fleet — who's in it, what each actor
+ * has claimed, which working-tree changes each owns, and where they overlap.
+ * Strictly read-only: it never reconciles or writes state, so watching the fleet
+ * can't perturb attribution. Because Quilt attributes on reconcile (pull, not
+ * push), the view reflects state AS OF the last `quilt` command any actor ran —
+ * an overlap appears once a collision has been reconciled, not the instant the
+ * keystroke lands. Claims, by contrast, are always current. Run `quilt watch`
+ * alongside (it reconciles on file events) to keep ownership close to live.
  */
 export interface FleetActorView {
   id: string;

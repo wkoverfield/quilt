@@ -32,9 +32,11 @@ function fleet(dir: string): any {
   return JSON.parse(q(dir, ["fleet", "--json"]).stdout);
 }
 
-// The fleet view is mission control — it has to match ground truth, especially:
-// it must never show "all clear" while a real collision is live, and it must not
-// cry wolf when two agents cleanly own different parts of the same file.
+// The fleet view is mission control — it has to match ground truth: once a
+// collision has been reconciled (any actor ran a quilt command after the edit),
+// it must surface, not show "all clear"; and it must not cry wolf when two agents
+// cleanly own different parts of the same file. (The view reflects reconciled
+// state — that's the pull-attribution model, not a flaw in the view.)
 
 test("fleet view: clean disjoint work shows each actor's claims/files and NO overlap", () => {
   const dir = repo();
@@ -83,7 +85,7 @@ test("fleet view: a real same-line collision is never hidden", () => {
     q(dir, ["status"], "b");
 
     const v = fleet(dir);
-    assert.ok(v.overlaps.length > 0, "a real same-line collision must surface, never all-clear");
+    assert.ok(v.overlaps.length > 0, "a reconciled same-line collision must surface, not show all-clear");
     assert.equal(v.overlaps[0].path, "f.js");
     assert.deepEqual(v.overlaps[0].actors.sort(), ["a", "b"]);
   } finally {

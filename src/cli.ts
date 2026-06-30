@@ -219,8 +219,8 @@ program
       process.stdout.write("\n");
       process.exit(0);
     };
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
   });
 
 program
