@@ -48,6 +48,21 @@ Every file write went through the Edit/Write tool. Bash was used only to *run*
 things, never to write file content. So **A's one weakness (bash edits) did not
 occur at all** in realistic Claude-agent work.
 
+**Bigger, bash-tempting sample (n=13).** Re-measured with 8 more agents on tasks
+chosen to *tempt* shell edits — bulk version bump across files, one-line fixes
+across several files, JSON edits, a refactor, a Python edit, a markdown table —
+the exact cases where `sed -i` would be natural:
+
+```
+file-writes via the capturable tool = 20
+file-writes via bash                =  0
+bash for read/run only              =  5
+=> CAPTURABLE COVERAGE = 20/20 = 100%  (13 agents)
+```
+
+Still zero bash file-writes even when the task invites shell editing — which
+closes the one caveat that could have favored bet B.
+
 ## Verdict
 
 **A (Labeled-Write Ledger) is the bet.** With coverage ~100% for the target
@@ -65,9 +80,9 @@ as the floor.
 
 ## Honest caveats
 
-- n=5 Claude agents on small tasks. Coverage could differ for other harnesses
-  (Codex), larger/edgier tasks, or agents explicitly told to use shell. Worth
-  re-measuring on a bigger, noisier sample before fully committing.
+- n=13 Claude agents (including deliberately bash-tempting tasks) — coverage held
+  at 100%. Still worth checking other harnesses (Codex) and agents *explicitly*
+  told to use shell, but the Claude-fleet case (the primary target) looks settled.
 - The eval scenarios are adversarial and synthetic; they prove failure modes
   exist and that A eliminates the unsafe ones, not a real-world rate.
 - B's model here is a simplification of run-boundary capture; a real prototype
