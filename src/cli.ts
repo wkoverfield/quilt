@@ -10,6 +10,7 @@ import { activeContext } from "./session.js";
 import { reconcile, buildModel } from "./engine.js";
 import { initSymbols } from "./symbols.js";
 import { dependencyWarnings, formatWarning } from "./push.js";
+import { fleetSnapshot, renderFleet } from "./fleet.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
@@ -190,6 +191,36 @@ program
       process.stdout.write("\n");
     }
     printClobbers(store);
+  });
+
+program
+  .command("fleet")
+  .description("Mission control: a live view of the fleet — who's working, claims, conflicts")
+  .option("--json", "emit the fleet view as JSON")
+  .option("--watch", "refresh the view live until Ctrl-C")
+  .action((opts: { json?: boolean; watch?: boolean }) => {
+    const store = requireStore();
+    const headLabel = shortHead(store.paths.repoRoot);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(fleetSnapshot(store, Date.now()), null, 2) + "\n");
+      return;
+    }
+    const draw = () => {
+      const view = renderFleet(fleetSnapshot(store, Date.now()), headLabel);
+      if (opts.watch) process.stdout.write("\x1b[2J\x1b[H"); // clear + home
+      process.stdout.write(view);
+    };
+    draw();
+    if (!opts.watch) return;
+    process.stdout.write(pc.dim("  (live — Ctrl-C to stop)\n"));
+    const timer = setInterval(draw, 1000);
+    const stop = () => {
+      clearInterval(timer);
+      process.stdout.write("\n");
+      process.exit(0);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
   });
 
 program
