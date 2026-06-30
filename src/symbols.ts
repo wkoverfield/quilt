@@ -12,9 +12,13 @@ export interface CodeSymbol {
 
 const require = createRequire(import.meta.url);
 
+type Grammar = "javascript" | "typescript" | "tsx" | "python" | "go" | "rust";
+const isJsFamily = (g: Grammar): boolean =>
+  g === "javascript" || g === "typescript" || g === "tsx";
+
 // Extension -> grammar. tree-sitter-javascript also parses JSX; .tsx needs the
 // dedicated tsx grammar (the plain typescript grammar rejects JSX).
-const GRAMMAR_BY_EXT: Record<string, "javascript" | "typescript" | "tsx"> = {
+const GRAMMAR_BY_EXT: Record<string, Grammar> = {
   js: "javascript",
   jsx: "javascript",
   mjs: "javascript",
@@ -23,6 +27,9 @@ const GRAMMAR_BY_EXT: Record<string, "javascript" | "typescript" | "tsx"> = {
   mts: "typescript",
   cts: "typescript",
   tsx: "tsx",
+  py: "python",
+  go: "go",
+  rs: "rust",
 };
 
 /** Loaded parsers, one per grammar, populated by initSymbols(). */
@@ -136,6 +143,69 @@ function collect(top: Parser.SyntaxNode, out: CodeSymbol[]): void {
   out.push({ name: nameNode.text, kind, ...range(node, top) });
 }
 
+// Top-level declaration node types -> kind, for the non-JS grammars. Each grammar
+// names a function/class/type its own way; these are the common, high-value ones.
+const LANG_KINDS: Partial<Record<Grammar, Record<string, CodeSymbol["kind"]>>> = {
+  python: { function_definition: "function", class_definition: "class" },
+  go: { function_declaration: "function", method_declaration: "function" },
+  rust: {
+    function_item: "function",
+    struct_item: "class",
+    enum_item: "class",
+    trait_item: "class",
+  },
+};
+
+function lineRange(node: Parser.SyntaxNode): { startLine: number; endLine: number } {
+  return { startLine: node.startPosition.row + 1, endLine: node.endPosition.row + 1 };
+}
+
+/** Extract top-level symbols for Python / Go / Rust from one top-level node. */
+function collectLang(top: Parser.SyntaxNode, out: CodeSymbol[], grammar: Grammar): void {
+  // Python: `@deco`-wrapped def/class — unwrap, but keep the decorator span.
+  if (grammar === "python" && top.type === "decorated_definition") {
+    const inner = top.namedChildren.find(
+      (c) => c.type === "function_definition" || c.type === "class_definition",
+    );
+    const name = inner?.childForFieldName("name");
+    if (inner && name) {
+      out.push({
+        name: name.text,
+        kind: inner.type === "class_definition" ? "class" : "function",
+        ...lineRange(top),
+      });
+    }
+    return;
+  }
+  // Go: `type ( ... )` / `type Foo struct{}` wrap one or more type_spec.
+  if (grammar === "go" && top.type === "type_declaration") {
+    for (const spec of top.namedChildren) {
+      if (spec.type !== "type_spec") continue;
+      const name = spec.childForFieldName("name");
+      if (!name) continue;
+      const t = spec.childForFieldName("type");
+      const kind =
+        t && (t.type === "struct_type" || t.type === "interface_type") ? "class" : "value";
+      out.push({ name: name.text, kind, ...lineRange(spec) });
+    }
+    return;
+  }
+  const kind = LANG_KINDS[grammar]?.[top.type];
+  if (!kind) return;
+  const name = top.childForFieldName("name");
+  if (name) out.push({ name: name.text, kind, ...lineRange(top) });
+}
+
+/** Top-level symbols of a parsed file, dispatching to the right grammar's rules. */
+function collectAll(root: Parser.SyntaxNode, grammar: Grammar): CodeSymbol[] {
+  const symbols: CodeSymbol[] = [];
+  for (const top of root.namedChildren) {
+    if (isJsFamily(grammar)) collect(top, symbols);
+    else collectLang(top, symbols, grammar);
+  }
+  return symbols;
+}
+
 /**
  * Parse `content` and hand the root node to `fn`, then free the tree. The Tree
  * lives in the wasm heap and is reclaimed only by an explicit delete() (JS GC
@@ -148,7 +218,7 @@ function withTree<T>(
   path: string,
   content: string,
   fallback: T,
-  fn: (root: Parser.SyntaxNode) => T,
+  fn: (root: Parser.SyntaxNode, grammar: Grammar) => T,
 ): T {
   if (!ready) return fallback;
   const grammar = GRAMMAR_BY_EXT[ext(path)];
@@ -159,7 +229,7 @@ function withTree<T>(
   let tree: Parser.Tree | null = null;
   try {
     tree = parser.parse(content);
-    return fn(tree.rootNode);
+    return fn(tree.rootNode, grammar);
   } catch {
     return fallback;
   } finally {
@@ -176,11 +246,7 @@ function withTree<T>(
  * earlier heuristic backend.
  */
 export function parseSymbols(path: string, content: string): CodeSymbol[] {
-  return withTree(path, content, [], (root) => {
-    const symbols: CodeSymbol[] = [];
-    for (const top of root.namedChildren) collect(top, symbols);
-    return symbols;
-  });
+  return withTree(path, content, [], (root, grammar) => collectAll(root, grammar));
 }
 
 /**
@@ -193,9 +259,8 @@ export function parseSymbols(path: string, content: string): CodeSymbol[] {
  * input.
  */
 export function symbolReferences(path: string, content: string): Map<string, Set<string>> {
-  return withTree(path, content, new Map<string, Set<string>>(), (root) => {
-    const symbols: CodeSymbol[] = [];
-    for (const top of root.namedChildren) collect(top, symbols);
+  return withTree(path, content, new Map<string, Set<string>>(), (root, grammar) => {
+    const symbols = collectAll(root, grammar);
     const refs = new Map<string, Set<string>>();
 
     // Find the top-level symbol whose line range encloses a given 1-based row.
@@ -208,14 +273,17 @@ export function symbolReferences(path: string, content: string): Map<string, Set
       (refs.get(owner) ?? refs.set(owner, new Set()).get(owner)!).add(name);
     };
 
-    // Call-expression callees: `foo(...)` -> reference to `foo`.
-    for (const call of root.descendantsOfType("call_expression")) {
-      const callee = call.childForFieldName("function");
-      if (callee && callee.type === "identifier") {
-        add(enclosing(callee.startPosition.row + 1), callee.text);
+    // Call callees: `foo(...)`. JS/Go/Rust use `call_expression`; Python uses
+    // `call`. The callee is the `function` field; record it when it's a bare name.
+    for (const nodeType of ["call_expression", "call"]) {
+      for (const call of root.descendantsOfType(nodeType)) {
+        const callee = call.childForFieldName("function");
+        if (callee && callee.type === "identifier") {
+          add(enclosing(callee.startPosition.row + 1), callee.text);
+        }
       }
     }
-    // Type references: `: Foo`, `extends Foo`, etc.
+    // Type references: `: Foo`, `extends Foo`, Rust `type_identifier`, etc.
     for (const t of root.descendantsOfType("type_identifier")) {
       add(enclosing(t.startPosition.row + 1), t.text);
     }

@@ -186,3 +186,45 @@ test("two actors editing DIFFERENT symbols in one file: parallel, no contention,
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("symbol claims work off JS too: two actors on different Python functions, no contention", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-py-"));
+  const g = (a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+  g(["init", "-q"]);
+  g(["config", "user.email", "t@t.io"]);
+  g(["config", "user.name", "t"]);
+  g(["config", "commit.gpgsign", "false"]);
+  // alpha and beta well separated so their edits land in distinct hunks.
+  const file = (a: string, b: string) =>
+    `def alpha():\n    return ${a}\n\n\n# ----\n# ----\n# ----\n# ----\n# ----\n\n\ndef beta():\n    return ${b}\n`;
+  writeFileSync(join(dir, "m.py"), file("1", "2"));
+  g(["add", "-A"]);
+  g(["commit", "-q", "-m", "init"]);
+  spawnSync("node", [CLI, "init"], { cwd: dir });
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    quilt(dir, ["start", "--actor", "B", "--type", "agent"]);
+
+    assert.equal(quilt(dir, ["claim", "m.py#alpha"], "A").status, 0);
+    assert.equal(
+      quilt(dir, ["claim", "m.py#beta"], "B").status,
+      0,
+      "B claims a different Python function, not blocked by A",
+    );
+
+    writeFileSync(join(dir, "m.py"), file("10", "20"));
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "A: alpha"], "A").status, 0);
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "B: beta"], "B").status, 0);
+
+    const head = spawnSync("git", ["show", "HEAD:m.py"], { cwd: dir, encoding: "utf8" }).stdout;
+    assert.match(head, /return 10/, "alpha change committed");
+    assert.match(head, /return 20/, "beta change committed");
+    assert.equal(
+      spawnSync("git", ["log", "--pretty=%an", "-2"], { cwd: dir, encoding: "utf8" }).stdout.trim(),
+      "B\nA",
+      "two clean Python commits, correctly attributed",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

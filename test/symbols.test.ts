@@ -1,6 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { initSymbols, parseSymbols } from "../src/symbols.js";
+import { initSymbols, parseSymbols, symbolReferences } from "../src/symbols.js";
 
 // parseSymbols is synchronous but depends on the tree-sitter grammars being
 // loaded; the CLI does this once at startup. Mirror that here.
@@ -84,4 +84,39 @@ test("braces inside strings do not corrupt ranges (heuristic-killer case)", () =
   assert.deepEqual([f.startLine, f.endLine], [1, 4]);
   const after = sym("a.js", src, "after");
   assert.deepEqual([after.startLine, after.endLine], [5, 5]);
+});
+
+// --- Python / Go / Rust: symbol claims work off the JS family ---
+
+test("Python: functions, classes, and decorated defs", () => {
+  const src = "def foo(x):\n    return x\n\nclass Bar:\n    def m(self):\n        return 1\n\n@deco\ndef baz():\n    pass\n";
+  assert.equal(sym("m.py", src, "foo").kind, "function");
+  assert.equal(sym("m.py", src, "Bar").kind, "class");
+  const baz = sym("m.py", src, "baz");
+  assert.equal(baz.kind, "function");
+  assert.deepEqual([baz.startLine, baz.endLine], [8, 10], "decorated def range includes the decorator");
+});
+
+test("Go: functions, methods, structs, and interfaces", () => {
+  const src =
+    "package main\n\nfunc Foo(x int) int {\n\treturn x\n}\n\ntype Point struct {\n\tX int\n}\n\ntype Greeter interface {\n\tGreet() string\n}\n\nfunc (p Point) M() int { return 1 }\n";
+  assert.equal(sym("m.go", src, "Foo").kind, "function");
+  assert.equal(sym("m.go", src, "M").kind, "function"); // method
+  assert.equal(sym("m.go", src, "Point").kind, "class"); // struct
+  assert.equal(sym("m.go", src, "Greeter").kind, "class"); // interface
+});
+
+test("Rust: functions, structs, enums, and traits", () => {
+  const src = "pub fn foo(x: i32) -> i32 {\n    x\n}\n\nstruct Point {\n    x: i32,\n}\n\nenum Color { Red }\n\ntrait Greet {\n    fn hi(&self);\n}\n";
+  assert.equal(sym("m.rs", src, "foo").kind, "function");
+  assert.equal(sym("m.rs", src, "Point").kind, "class"); // struct
+  assert.equal(sym("m.rs", src, "Color").kind, "class"); // enum
+  assert.equal(sym("m.rs", src, "Greet").kind, "class"); // trait
+});
+
+test("Python push-awareness: a function's call to another is captured cross-file", () => {
+  // caller() calls helper() — symbolReferences records the dependency by name,
+  // which is what lets push-awareness fire across Python files too.
+  const refs = symbolReferences("main.py", "def caller():\n    return helper(1)\n");
+  assert.deepEqual([...(refs.get("caller") ?? [])], ["helper"]);
 });
