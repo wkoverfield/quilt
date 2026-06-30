@@ -208,8 +208,10 @@ function cFunctionName(node: Parser.SyntaxNode): string | null {
   let name: Parser.SyntaxNode | null = d?.childForFieldName("declarator") ?? null;
   while (name && name.childForFieldName("declarator")) name = name.childForFieldName("declarator");
   if (!name) return null;
-  // identifier / field_identifier / qualified_identifier all carry usable text.
-  return name.text.includes("\n") ? null : name.text;
+  // Accept a plain or C++-qualified identifier; reject anything exotic (e.g. a
+  // function returning a function pointer leaves a garbled declarator) so it
+  // degrades to a whole-file claim rather than an unusable symbol name.
+  return /^[A-Za-z_~]\w*(::~?[A-Za-z_]\w*)*$/.test(name.text) ? name.text : null;
 }
 
 function lineRange(node: Parser.SyntaxNode): { startLine: number; endLine: number } {
