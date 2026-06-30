@@ -9,6 +9,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
+import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
 import { dependencyWarnings } from "./push.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
@@ -309,6 +310,46 @@ export async function runMcpServer(store: Store): Promise<void> {
       const o = recordOutcome(store, "resolved", actorId, target, note, new Date().toISOString());
       store.appendLedger({ ts: o.ts, type: "collision.resolved", target: o.target, actorId });
       return ok({ resolved: o });
+    },
+  );
+
+  server.registerTool(
+    "quilt_edit",
+    {
+      description:
+        "Edit a file through Quilt instead of your raw editor. Replaces the unique `old_string` with `new_string` and records WHO authored the change at the moment of the edit — so attribution is exact even when several agents share this checkout, with no claims or reconcile guesswork. Pass `why` (your ticket/task). Prefer this over a plain file edit when coordinating a fleet.",
+      inputSchema: {
+        actor: actorArg,
+        path: z.string().describe("repo-relative file path"),
+        old_string: z.string().describe("the exact text to replace (must be unique in the file)"),
+        new_string: z.string().describe("the replacement text"),
+        why: z.string().optional().describe("a short why for this edit, e.g. the ticket/task"),
+      },
+    },
+    async ({ actor, path, old_string, new_string, why }) => {
+      const actorId = resolveActor(actor, true)!;
+      const r = applyAndRecordEdit(store, { actor: actorId, path, oldString: old_string, newString: new_string, intent: why });
+      if (!r.ok) return ok({ applied: false, error: r.error });
+      return ok({ applied: true, captured: r.event });
+    },
+  );
+
+  server.registerTool(
+    "quilt_write",
+    {
+      description:
+        "Write a whole file (create or overwrite) through Quilt, recording you as the author of its contents at write time. Use for new files. Pass `why`.",
+      inputSchema: {
+        actor: actorArg,
+        path: z.string().describe("repo-relative file path"),
+        content: z.string().describe("full file contents"),
+        why: z.string().optional(),
+      },
+    },
+    async ({ actor, path, content, why }) => {
+      const actorId = resolveActor(actor, true)!;
+      const r = applyAndRecordWrite(store, { actor: actorId, path, content, intent: why });
+      return ok({ applied: true, captured: r.event });
     },
   );
 

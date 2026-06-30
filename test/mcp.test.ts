@@ -60,6 +60,8 @@ test("MCP server lists all the Quilt tools", async () => {
       "get_my_changes",
       "get_status",
       "preview_mine",
+      "quilt_edit",
+      "quilt_write",
       "release",
       "resolve",
       "start_session",

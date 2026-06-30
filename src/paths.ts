@@ -56,4 +56,8 @@ export class QuiltPaths {
   get outcomes(): string {
     return join(this.dir, "outcomes.json");
   }
+  /** Append-only authorship log: one event per captured edit (the ledger). */
+  get authorshipLog(): string {
+    return join(this.dir, "authorship.log");
+  }
 }
