@@ -74,6 +74,10 @@ export function detect(root: string): Detected {
   };
 }
 
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
 function safeRead(path: string): string | null {
   try {
     return readFileSync(path, "utf8");
@@ -117,13 +121,20 @@ export function mergeMcpServers(existing: string | null): MergeResult {
   } catch {
     return { content: existing, changed: false, error: "not valid JSON" };
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+  if (!isPlainObject(parsed)) {
     return { content: existing, changed: false, error: "not a JSON object" };
   }
-  const obj = parsed as { mcpServers?: Record<string, unknown> };
-  obj.mcpServers ??= {};
-  if (obj.mcpServers.quilt) return { content: existing, changed: false };
-  obj.mcpServers.quilt = { ...QUILT_SERVER };
+  const obj = parsed as Record<string, unknown>;
+  const servers = obj.mcpServers;
+  // Refuse to touch a file whose mcpServers isn't an object — assigning to a
+  // string/number throws, and an array would silently drop our entry.
+  if (servers !== undefined && !isPlainObject(servers)) {
+    return { content: existing, changed: false, error: "mcpServers is not an object" };
+  }
+  const map = (servers as Record<string, unknown> | undefined) ?? {};
+  if (map.quilt) return { content: existing, changed: false };
+  map.quilt = { ...QUILT_SERVER };
+  obj.mcpServers = map;
   return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };
 }
 

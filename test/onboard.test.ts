@@ -51,6 +51,17 @@ test("mergeMcpServers refuses to clobber malformed JSON", () => {
   assert.match(r.error ?? "", /JSON/);
 });
 
+test("mergeMcpServers refuses a non-object mcpServers without throwing or losing data", () => {
+  // A string/number would throw on property assignment; an array would silently
+  // drop our entry. All must bail safely with the original content preserved.
+  for (const bad of ['{"mcpServers":"foo"}', '{"mcpServers":[1,2]}', '{"mcpServers":5}', "[1,2,3]"]) {
+    const r = mergeMcpServers(bad);
+    assert.equal(r.changed, false, `${bad} should not change`);
+    assert.equal(r.content, bad, `${bad} should be preserved verbatim`);
+    assert.ok(r.error, `${bad} should report an error`);
+  }
+});
+
 // --- appendCoordination ---
 
 test("appendCoordination creates content with the marker when none exists", () => {
