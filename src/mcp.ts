@@ -74,7 +74,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       "actor id to act as. Required when several agents share one server (each subagent passes its own id, e.g. its role/task name); optional if identity is pinned via start_session or QUILT_ACTOR.",
     );
 
-  const server = new McpServer({ name: "quilt", version: "0.1.0" });
+  const server = new McpServer({ name: "quilt", version: "0.2.0" });
 
   server.registerTool(
     "start_session",
