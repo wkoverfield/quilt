@@ -1,9 +1,11 @@
 import { resolve, sep } from "node:path";
 import type { Store } from "./state.js";
-import type { Claim } from "./types.js";
+import type { Claim, Block } from "./types.js";
 
 /** How long a claim is held before it auto-expires (refreshed on each claim). */
 export const CLAIM_TTL_MS = 10 * 60 * 1000;
+/** How long a recorded denial lingers without a retry. Short — a block is news. */
+export const BLOCK_TTL_MS = 90 * 1000;
 
 export interface ClaimTarget {
   path: string;
@@ -83,6 +85,9 @@ export function acquireClaims(
   return store.withLock(() => {
     const file = store.readClaims();
     file.claims = active(file.claims, now);
+    file.blocks = (file.blocks ?? []).filter((b) => b.expiresAt > now);
+    const sameTarget = (b: Block, t: ClaimTarget) =>
+      b.actor === actorId && b.path === t.path && b.symbol === t.symbol;
     const results: ClaimResult[] = [];
     for (const raw of rawPaths) {
       const target = parseTarget(raw);
@@ -99,8 +104,25 @@ export function acquireClaims(
       );
       if (conflict) {
         results.push({ ...target, granted: false, holder: conflict.actor });
+        // Record the denial so the fleet view can show who's blocked on whom.
+        const prior = file.blocks.find((b) => sameTarget(b, target));
+        if (prior) {
+          prior.holder = conflict.actor;
+          prior.expiresAt = now + BLOCK_TTL_MS;
+        } else {
+          file.blocks.push({
+            path: target.path,
+            symbol: target.symbol,
+            actor: actorId,
+            holder: conflict.actor,
+            blockedAt: new Date(now).toISOString(),
+            expiresAt: now + BLOCK_TTL_MS,
+          });
+        }
         continue;
       }
+      // Granted: this actor is no longer blocked on this target.
+      file.blocks = file.blocks.filter((b) => !sameTarget(b, target));
 
       const own = file.claims.find(
         (c) =>
@@ -159,6 +181,21 @@ export function releaseClaims(
 /** Currently-active (non-expired) claims. */
 export function listClaims(store: Store, now: number): Claim[] {
   return active(store.readClaims().claims, now);
+}
+
+/**
+ * Active claim denials — who is blocked on whom. Only surfaced while the denial
+ * is fresh AND the holder still holds an overlapping claim (a block whose holder
+ * has released is no longer real, so it's dropped).
+ */
+export function listBlocks(store: Store, now: number): Block[] {
+  const file = store.readClaims();
+  const claims = active(file.claims, now);
+  return (file.blocks ?? [])
+    .filter((b) => b.expiresAt > now)
+    .filter((b) =>
+      claims.some((c) => c.actor === b.holder && overlaps({ path: b.path, symbol: b.symbol }, c)),
+    );
 }
 
 /** Display label for a claim, e.g. `utils.js#formatPrice` or `utils.js`. */

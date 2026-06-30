@@ -70,6 +70,42 @@ test("fleet view: clean disjoint work shows each actor's claims/files and NO ove
   }
 });
 
+test("fleet view: shows who's blocked and cross-actor dependency heads-up", () => {
+  const dir = repo();
+  try {
+    write(
+      dir,
+      "billing.js",
+      "export function rate() {\n  return 0.05;\n}\n\nexport function total(amount) {\n  return amount * rate();\n}\n",
+    );
+    commit(dir, "init");
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "codex", "--type", "agent"], "codex");
+    q(dir, ["start", "--actor", "claude", "--type", "agent"], "claude");
+    q(dir, ["claim", "billing.js#rate"], "codex");
+    q(dir, ["claim", "billing.js#total"], "claude"); // total() calls rate()
+    // claude tries to grab rate too — denied (codex holds it) -> blocked
+    const denied = q(dir, ["claim", "billing.js#rate"], "claude");
+    assert.notEqual(denied.status, 0, "claude's claim on rate is denied");
+
+    const v = fleet(dir);
+    assert.equal(v.blocked.length, 1, "the denial is recorded as a block");
+    assert.deepEqual(v.blocked[0], {
+      actor: "claude",
+      target: "billing.js#rate",
+      holder: "codex",
+    });
+    assert.ok(
+      v.dependencyWarnings.some(
+        (w: any) => w.dependency === "rate" && w.heldBy === "codex",
+      ),
+      "claude#total depends on rate, which codex holds — surfaced fleet-wide",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("fleet view: a real same-line collision is never hidden", () => {
   const dir = repo();
   try {

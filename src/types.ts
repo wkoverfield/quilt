@@ -111,6 +111,23 @@ export interface Claim {
   expiresAt: number;
 }
 
+/**
+ * A recorded claim denial: `actor` tried to reserve a target that `holder`
+ * already has. Short-lived (refreshed on each denied retry, expires if the actor
+ * stops trying) and only surfaced while the holder still holds it — so the fleet
+ * view can show who is blocked on whom.
+ */
+export interface Block {
+  path: string;
+  symbol?: string;
+  actor: string;
+  holder: string;
+  blockedAt: string;
+  /** epoch ms; ignored once now > expiresAt. */
+  expiresAt: number;
+}
+
 export interface ClaimsFile {
   claims: Claim[];
+  blocks?: Block[];
 }
