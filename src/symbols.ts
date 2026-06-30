@@ -197,6 +197,15 @@ const LANG_KINDS: Partial<Record<Grammar, Record<string, CodeSymbol["kind"]>>> =
   },
 };
 
+// Per-grammar call-site shape for the dependency graph (push-awareness): the AST
+// node type for a call and the field holding the callee name. Grammars not listed
+// use the C-family default (`call_expression` / `function`).
+const CALL_SPEC: Partial<Record<Grammar, { node: string; field: string }>> = {
+  python: { node: "call", field: "function" },
+  ruby: { node: "call", field: "method" },
+  java: { node: "method_invocation", field: "name" },
+};
+
 /**
  * Extract a C/C++ function name from a `function_definition`. The name lives
  * inside the declarator, possibly wrapped in pointer/reference/parenthesized
@@ -360,11 +369,14 @@ export function symbolReferences(path: string, content: string): Map<string, Set
       (refs.get(owner) ?? refs.set(owner, new Set()).get(owner)!).add(name);
     };
 
-    // Call callees: `foo(...)`. JS/Go/Rust use `call_expression`; Python uses
-    // `call`. The callee is the `function` field; record it when it's a bare name.
-    const callNodeType = grammar === "python" ? "call" : "call_expression";
-    for (const call of root.descendantsOfType(callNodeType)) {
-      const callee = call.childForFieldName("function");
+    // Call callees: `foo(...)` -> reference to `foo`. Each grammar names the call
+    // node and the callee field differently, so dispatch on both.
+    const { node: callNode, field: calleeField } = CALL_SPEC[grammar] ?? {
+      node: "call_expression",
+      field: "function",
+    };
+    for (const call of root.descendantsOfType(callNode)) {
+      const callee = call.childForFieldName(calleeField);
       if (callee && callee.type === "identifier") {
         add(enclosing(callee.startPosition.row + 1), callee.text);
       }

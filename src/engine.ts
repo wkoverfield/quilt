@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import { changedPaths, headBlob } from "./git.js";
 import {
@@ -7,7 +7,6 @@ import {
   isTrivialLine,
   lineDiff,
   looksBinary,
-  splitLines,
   MAX_LCS_CELLS,
   type Hunk,
 } from "./diff.js";
@@ -60,7 +59,12 @@ export interface WorktreeModel {
 }
 
 function readWorktree(repoRoot: string, relPath: string): string | null {
-  const abs = join(repoRoot, relPath);
+  // Defense in depth: paths come from .quilt/ JSON (ownership/observed) which is
+  // normally Quilt-written, but a hand-edited file could inject `../` — never
+  // read a path that resolves outside the repo, and never follow a symlink.
+  const root = resolve(repoRoot);
+  const abs = resolve(root, relPath);
+  if (abs !== root && !abs.startsWith(root + sep)) return null;
   try {
     // lstat (not stat) so a symlink is never followed — Quilt must not read or
     // snapshot whatever a symlink points at (could be outside the repo).
@@ -458,18 +462,4 @@ export function buildModel(
   }
 
   return { activeActorId, files };
-}
-
-/** Count changed (add/del) lines in a hunk. */
-export function hunkChangedLines(hunk: Hunk): number {
-  return hunk.ops.filter((o) => o.type !== "eq").length;
-}
-
-/** Convenience: does this file have any hunk owned by the active actor? */
-export function fileHasMine(file: FileModel): boolean {
-  return file.hunks.some((h) => h.ownership === "mine" || h.ownership === "mixed");
-}
-
-export function isFinalNewline(text: string | null): boolean {
-  return text === null ? true : splitLines(text).finalNewline;
 }

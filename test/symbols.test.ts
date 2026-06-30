@@ -169,3 +169,16 @@ test("Python push-awareness: a function's call to another is captured cross-file
   const refs = symbolReferences("main.py", "def caller():\n    return helper(1)\n");
   assert.deepEqual([...(refs.get("caller") ?? [])], ["helper"]);
 });
+
+test("push-awareness call detection dispatches per grammar (Ruby/Java/C)", () => {
+  // Each grammar names the call node and callee field differently; the dependency
+  // graph must still capture `caller -> helper` so push-awareness fires.
+  const rb = symbolReferences("m.rb", "def caller\n  helper(1)\nend\n");
+  assert.deepEqual([...(rb.get("caller") ?? [])], ["helper"], "Ruby uses `call`/method field");
+  const c = symbolReferences("m.c", "int caller(){ return helper(1); }\n");
+  assert.deepEqual([...(c.get("caller") ?? [])], ["helper"], "C uses call_expression/function field");
+  // Java methods are nested, so the dependency attaches to the enclosing top-level
+  // class — class-granularity, matching how Java symbols are claimed.
+  const java = symbolReferences("M.java", "class C {\n  void caller() {\n    helper(1);\n  }\n}\n");
+  assert.deepEqual([...(java.get("C") ?? [])], ["helper"], "Java uses method_invocation/name field");
+});

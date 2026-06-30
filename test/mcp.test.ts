@@ -295,6 +295,12 @@ test("MCP: claim returns push-awareness warnings at reservation time", async () 
     assert.equal(bClaim.dependencyWarnings.length, 1, "bob is warned at claim time");
     assert.equal(bClaim.dependencyWarnings[0].dependency, "api");
     assert.equal(bClaim.dependencyWarnings[0].heldBy, "alice");
+
+    // get_status (the orient tool agents call first) must also carry the warning,
+    // not just the claim response — mirrors `quilt status --json`.
+    const bStatus = parse(await b.callTool({ name: "get_status", arguments: { actor: "bob" } }));
+    assert.equal(bStatus.dependencyWarnings.length, 1, "get_status surfaces push-awareness too");
+    assert.equal(bStatus.dependencyWarnings[0].dependency, "api");
   } finally {
     await a.close();
     await b.close();
