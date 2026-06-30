@@ -47,6 +47,8 @@ export interface FleetBlock {
   actor: string;
   target: string;
   holder: string;
+  /** The holder's stated intent, so the block explains itself. */
+  holderIntent?: string;
 }
 
 /**
@@ -140,6 +142,7 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
       actor: b.actor,
       target: b.symbol ? `${b.path}#${b.symbol}` : b.path,
       holder: b.holder,
+      holderIntent: b.holderIntent,
     }))
     .sort((a, b) => a.actor.localeCompare(b.actor) || a.target.localeCompare(b.target));
 
@@ -199,8 +202,9 @@ export function renderFleet(view: FleetView, headLabel: string): string {
   if (view.blocked.length) {
     out.push(pc.bold(pc.red("  Blocked")));
     for (const b of view.blocked) {
+      const held = b.holderIntent ? `held by ${b.holder}: ${b.holderIntent}` : `held by ${b.holder}`;
       out.push(
-        "    " + pc.red("⛔ ") + `${pc.bold(b.actor)} waiting on ${b.target} ${pc.dim(`(held by ${b.holder})`)}`,
+        "    " + pc.red("⛔ ") + `${pc.bold(b.actor)} waiting on ${b.target} ${pc.dim(`(${held})`)}`,
       );
     }
     out.push("");

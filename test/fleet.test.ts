@@ -82,7 +82,7 @@ test("fleet view: shows who's blocked and cross-actor dependency heads-up", () =
     q(dir, ["init"]);
     q(dir, ["start", "--actor", "codex", "--type", "agent"], "codex");
     q(dir, ["start", "--actor", "claude", "--type", "agent"], "claude");
-    q(dir, ["claim", "billing.js#rate"], "codex");
+    q(dir, ["claim", "billing.js#rate", "--intent", "FIX-9: bump the base rate"], "codex");
     q(dir, ["claim", "billing.js#total"], "claude"); // total() calls rate()
     // claude tries to grab rate too — denied (codex holds it) -> blocked
     const denied = q(dir, ["claim", "billing.js#rate"], "claude");
@@ -94,6 +94,7 @@ test("fleet view: shows who's blocked and cross-actor dependency heads-up", () =
       actor: "claude",
       target: "billing.js#rate",
       holder: "codex",
+      holderIntent: "FIX-9: bump the base rate", // the block explains itself
     });
     assert.ok(
       v.dependencyWarnings.some(

@@ -18,6 +18,31 @@ function newStore() {
   return { s, dir };
 }
 
+test("claims: a denied actor receives the holder's intent (the sew primitive)", () => {
+  const { s, dir } = newStore();
+  try {
+    const t0 = 1000;
+    acquireClaims(s, "perf", "sessA", ["pool.js#maxConnections"], t0, "PERF-412: raise for peak load");
+    // The holder's intent is recorded on the claim.
+    const held = listClaims(s, t0).find((c) => c.actor === "perf");
+    assert.equal(held?.intent, "PERF-412: raise for peak load");
+
+    // A blocked actor learns WHY, so it can resolve instead of guessing.
+    const r = acquireClaims(s, "safety", "sessB", ["pool.js#maxConnections"], t0, "SAFETY-87: cap to protect DB");
+    assert.equal(r[0]!.granted, false);
+    assert.equal(r[0]!.holder, "perf");
+    assert.equal(r[0]!.holderIntent, "PERF-412: raise for peak load");
+
+    // Re-claiming with a new intent updates it; a blank intent is ignored.
+    acquireClaims(s, "perf", "sessA", ["pool.js#maxConnections"], t0 + 1, "PERF-412: now dynamic");
+    assert.equal(listClaims(s, t0 + 1).find((c) => c.actor === "perf")?.intent, "PERF-412: now dynamic");
+    acquireClaims(s, "perf", "sessA", ["pool.js#maxConnections"], t0 + 2, "   ");
+    assert.equal(listClaims(s, t0 + 2).find((c) => c.actor === "perf")?.intent, "PERF-412: now dynamic");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("claims: acquire, deny another actor, release, re-acquire", () => {
   const { s, dir } = newStore();
   try {

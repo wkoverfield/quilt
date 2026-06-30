@@ -257,7 +257,10 @@ test("MCP: claim is granted to one actor and denied to another", async () => {
     await b.callTool({ name: "start_session", arguments: { actor: "bob", type: "agent" } });
 
     const aClaim = parse(
-      await a.callTool({ name: "claim", arguments: { paths: ["shared.ts"] } }),
+      await a.callTool({
+        name: "claim",
+        arguments: { paths: ["shared.ts"], intent: "REFACTOR-3: extract the helper" },
+      }),
     );
     assert.equal(aClaim.results[0].granted, true);
 
@@ -266,6 +269,8 @@ test("MCP: claim is granted to one actor and denied to another", async () => {
     );
     assert.equal(bClaim.results[0].granted, false);
     assert.equal(bClaim.results[0].holder, "alice");
+    // bob learns WHY alice holds it, so it can resolve from her intent.
+    assert.equal(bClaim.results[0].holderIntent, "REFACTOR-3: extract the helper");
   } finally {
     await a.close();
     await b.close();
