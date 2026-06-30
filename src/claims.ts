@@ -204,6 +204,30 @@ export function listClaims(store: Store, now: number): Claim[] {
 }
 
 /**
+ * Is some OTHER actor holding a claim that an edit to `path` touching `symbols`
+ * would collide with? A whole-file claim by another actor collides with any edit;
+ * a symbol claim collides only when the edit touches that symbol. Returns the
+ * holder (and their intent) of the first such claim, or null if the edit is free.
+ * This is the edit-time prevention oracle: deny the write before bytes change.
+ */
+export function claimHeldByOther(
+  store: Store,
+  actorId: string,
+  rawPath: string,
+  symbols: string[],
+  now: number,
+): { holder: string; intent?: string } | null {
+  const path = parseTarget(rawPath).path;
+  for (const c of listClaims(store, now)) {
+    if (c.actor === actorId || c.path !== path) continue;
+    if (c.symbol === undefined || symbols.includes(c.symbol)) {
+      return { holder: c.actor, intent: c.intent };
+    }
+  }
+  return null;
+}
+
+/**
  * Active claim denials — who is blocked on whom. Only surfaced while the denial
  * is fresh AND the holder still holds an overlapping claim (a block whose holder
  * has released is no longer real, so it's dropped).
