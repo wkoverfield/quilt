@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +84,26 @@ test("undo --dry-run reports the plan and changes nothing", () => {
     assert.match(r.stdout, /Would back out/);
     assert.match(r.stdout, /utils\.js/);
     assert.equal(read(dir, "utils.js"), before, "dry-run leaves the working tree untouched");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("undo deletes a file the actor newly created", () => {
+  const dir = repo();
+  try {
+    write(dir, "base.js", "export const x = 1;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "init"], { cwd: dir });
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "codex", "--type", "agent"], "codex");
+    q(dir, ["claim", "new.js"], "codex");
+    write(dir, "new.js", "export function created() {\n  return 1;\n}\n");
+    q(dir, ["status"], "codex"); // reconcile -> codex owns the new file
+
+    const r = q(dir, ["undo", "codex"]);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(existsSync(join(dir, "new.js")), false, "the created file is deleted, not left as a stub");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

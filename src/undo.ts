@@ -57,6 +57,9 @@ function buildWithoutActor(
   }
 
   if (reverted === 0) return { text: worktreeText, reverted: 0 };
+  // Undoing a file the actor CREATED (no head) whose every line was theirs: the
+  // file should cease to exist, not be left as an empty stub.
+  if (headText === null && out.length === 0) return { text: null, reverted };
   if (worktreeText === null && out.length === 0) return { text: null, reverted };
   const headFinal = headText === null ? true : splitLines(headText).finalNewline;
   const wtFinal = worktreeText === null ? true : splitLines(worktreeText).finalNewline;
