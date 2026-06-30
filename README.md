@@ -48,7 +48,7 @@ commit.
   sharing one working tree.
 - **Symbol-level claims.** Reserve `utils.js#formatPrice`, not the whole file, so
   agents editing different functions never contend. Powered by tree-sitter
-  (JavaScript, TypeScript, JSX/TSX, Python, Go, Rust), with whole-file claims for
+  (JavaScript, TypeScript, JSX/TSX, Python, Go, Rust, Java, Ruby, C, C++), with whole-file claims for
   everything else.
 - **Push-awareness.** When you claim a symbol that depends on a function another
   actor is changing, Quilt warns you at claim time so the cascade is never a
@@ -311,7 +311,7 @@ delta before another actor's.
   are ignored so they don't false-conflict). Two actors adding the same
   *substantive* line in different places can still be flagged as overlapping;
   conservative by design.
-- Symbol parsing covers **JavaScript, TypeScript, JSX/TSX, Python, Go, and Rust**
+- Symbol parsing covers **JavaScript, TypeScript, JSX/TSX, Python, Go, Rust, Java, Ruby, C, and C++**
   (tree-sitter). Other languages fall back to whole-file claims and line-level
   attribution.
 - Push-awareness is **advisory and name-based**; a cross-file reference to a

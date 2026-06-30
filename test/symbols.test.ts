@@ -121,6 +121,48 @@ test("Rust: functions, structs, enums, and traits", () => {
   assert.equal(sym("m.rs", src, "Greet").kind, "class"); // trait
 });
 
+test("C: functions (incl. pointer return) and typedef'd structs", () => {
+  const src = "int foo(int x) {\n  return x;\n}\n\nint *bar(void) { return 0; }\n\nstruct Point { int x; };\n\ntypedef struct { int y; } P2;\n";
+  assert.equal(sym("m.c", src, "foo").kind, "function");
+  assert.equal(sym("m.c", src, "bar").kind, "function"); // name dug out of `int *bar`
+  assert.equal(sym("m.c", src, "Point").kind, "class");
+  assert.equal(sym("m.c", src, "P2").kind, "value"); // typedef name from the declarator
+});
+
+test("C++: free functions, classes, structs", () => {
+  const src = "int foo(int x) { return x; }\n\nclass Bar {\npublic:\n  int m();\n};\n\nstruct S { int a; };\n";
+  assert.equal(sym("m.cpp", src, "foo").kind, "function");
+  assert.equal(sym("m.cpp", src, "Bar").kind, "class");
+  assert.equal(sym("m.cpp", src, "S").kind, "class");
+});
+
+test("C++: reference-return functions and out-of-line qualified methods", () => {
+  // reference / rvalue-reference returns wrap the declarator without a `name` field.
+  assert.equal(sym("r.cpp", "int& ref() { static int x; return x; }\n", "ref").kind, "function");
+  assert.equal(sym("r.cpp", "int&& rref() { return 0; }\n", "rref").kind, "function");
+  // out-of-line method definition keeps its qualified name (unambiguous across classes).
+  assert.equal(sym("r.cpp", "int Foo::m() { return 1; }\n", "Foo::m").kind, "function");
+});
+
+test("C: multi-name typedef surfaces every alias", () => {
+  const syms = parseSymbols("t.c", "typedef int foo, bar;\n");
+  assert.deepEqual(syms.map((s) => s.name).sort(), ["bar", "foo"]);
+});
+
+test("Ruby: methods, classes, modules", () => {
+  const src = "def foo(x)\n  x\nend\n\nclass Bar\n  def m\n  end\nend\n\nmodule M\nend\n";
+  assert.equal(sym("m.rb", src, "foo").kind, "function");
+  assert.equal(sym("m.rb", src, "Bar").kind, "class");
+  assert.equal(sym("m.rb", src, "M").kind, "class");
+});
+
+test("Java: classes, interfaces, enums", () => {
+  const src = "class Foo {\n  int m() { return 1; }\n}\n\ninterface Greet { void hi(); }\n\nenum Color { RED }\n";
+  assert.equal(sym("Foo.java", src, "Foo").kind, "class");
+  assert.equal(sym("Foo.java", src, "Greet").kind, "class");
+  assert.equal(sym("Foo.java", src, "Color").kind, "class");
+});
+
 test("Python push-awareness: a function's call to another is captured cross-file", () => {
   // caller() calls helper() — symbolReferences records the dependency by name,
   // which is what lets push-awareness fire across Python files too.
