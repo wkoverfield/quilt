@@ -128,6 +128,80 @@ test("fleet view: a real same-line collision is never hidden", () => {
     assert.ok(v.overlaps.length > 0, "a reconciled same-line collision must surface, not show all-clear");
     assert.equal(v.overlaps[0].path, "f.js");
     assert.deepEqual(v.overlaps[0].actors.sort(), ["a", "b"]);
+    assert.equal(v.overlaps[0].kind, "contended", "a same-line overwrite is a real clash");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fleet view: a full overwrite surfaces as a preserved clobber", () => {
+  const dir = repo();
+  try {
+    // alice adds a 2-line block; bob collapses it to one line, fully replacing
+    // alice's lines. The hunk ends up single-owner (not a shared overlap), so the
+    // clash only shows if the fleet surfaces the preserved clobber.
+    write(dir, "f.js", "const head = 0;\nconst tail = 9;\n");
+    commit(dir, "init");
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "alice", "--type", "agent"], "alice");
+    q(dir, ["start", "--actor", "bob", "--type", "agent"], "bob");
+    write(dir, "f.js", "const head = 0;\nconst a1 = 1;\nconst a2 = 2;\nconst tail = 9;\n");
+    q(dir, ["status"], "alice");
+    write(dir, "f.js", "const head = 0;\nconst b1 = 1;\nconst tail = 9;\n");
+    q(dir, ["status"], "bob");
+
+    const v = fleet(dir);
+    assert.equal(v.clobbers.length, 1, "the overwrite is surfaced even though the hunk is single-owner now");
+    assert.equal(v.clobbers[0].path, "f.js");
+    assert.equal(v.clobbers[0].byActor, "bob");
+    assert.equal(v.clobbers[0].victimActor, "alice");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("status --json and conflicts --json expose the overlap kind", () => {
+  const dir = repo();
+  try {
+    write(dir, "f.js", "export const rate = 1;\n");
+    commit(dir, "init");
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "a", "--type", "agent"], "a");
+    q(dir, ["start", "--actor", "b", "--type", "agent"], "b");
+    write(dir, "f.js", "export const rate = 5;\n");
+    q(dir, ["status"], "a");
+    write(dir, "f.js", "export const rate = 9;\n");
+    q(dir, ["status"], "b");
+
+    const status = JSON.parse(q(dir, ["status", "--json"], "a").stdout);
+    const sharedHunk = status.files[0].hunks.find((h: any) => h.ownership === "shared");
+    assert.equal(sharedHunk.overlap, "contended", "status hunk carries the overlap kind");
+
+    const conflicts = JSON.parse(q(dir, ["conflicts", "--json"], "a").stdout);
+    assert.equal(conflicts.conflicts[0].kind, "contended", "conflicts entry carries the kind");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fleet view: adjacent edits in one hunk surface as 'adjacent', not a clash", () => {
+  const dir = repo();
+  try {
+    // Two actors edit DIFFERENT lines close enough to share one diff hunk.
+    write(dir, "f.js", "const a = 1;\nconst b = 2;\nconst c = 3;\nconst d = 4;\nconst e = 5;\n");
+    commit(dir, "init");
+    q(dir, ["init"]);
+    q(dir, ["start", "--actor", "a", "--type", "agent"], "a");
+    q(dir, ["start", "--actor", "b", "--type", "agent"], "b");
+    write(dir, "f.js", "const a = 1;\nconst b = 22;\nconst c = 3;\nconst d = 4;\nconst e = 5;\n");
+    q(dir, ["status"], "a"); // a owns line 2
+    write(dir, "f.js", "const a = 1;\nconst b = 22;\nconst c = 3;\nconst d = 44;\nconst e = 5;\n");
+    q(dir, ["status"], "b"); // b owns line 4 — same hunk, different line
+
+    const v = fleet(dir);
+    assert.equal(v.overlaps.length, 1, "the shared hunk still surfaces for visibility");
+    assert.equal(v.overlaps[0].kind, "adjacent", "different lines sharing a hunk is benign, not a clash");
+    assert.deepEqual(v.overlaps[0].actors.sort(), ["a", "b"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -55,8 +55,10 @@ commit.
   surprise.
 - **Line-level attribution.** Quilt tracks which actor produced which lines, and
   `commit --mine` commits only yours even when they share a hunk.
-- **Conflict surfacing.** Overlapping edits are flagged, not silently committed;
-  pre-existing or generated changes stay unattributed.
+- **Conflict surfacing.** Overlapping edits are flagged, not silently committed,
+  and Quilt tells a real same-line clash apart from two agents working on
+  different lines that merely share a hunk — so the alarm means something.
+  Pre-existing or generated changes stay unattributed.
 - **Preview-first `commit --mine`.** See the exact patch before anything moves.
 - **Preserves other actors' work.** Committing yours leaves everyone else's
   changes untouched in the working tree.

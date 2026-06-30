@@ -22,6 +22,17 @@ export type HunkOwnership =
   | "mixed" // mine + unattributed lines together (needs confirmation)
   | "unclaimed"; // no owner (pre-existing dirty / generated)
 
+/**
+ * For a `shared` hunk, the NATURE of the overlap:
+ *  - "adjacent"  — actors changed different lines that merely share a hunk
+ *    (each owns a paired delete+add at its own position). Benign: `commit --mine`
+ *    separates them cleanly.
+ *  - "contended" — at the same position, one actor's line was replaced by
+ *    another's (a same-line overwrite), or both added the identical line. This is
+ *    a real clash worth a human's eyes.
+ */
+export type HunkOverlap = "adjacent" | "contended";
+
 export interface OwnedHunk {
   hunk: Hunk;
   ownership: HunkOwnership;
@@ -29,6 +40,8 @@ export interface OwnedHunk {
   actors: string[];
   /** True if any changed line in this hunk is flagged as conflicted. */
   conflicted: boolean;
+  /** Set only when ownership === "shared": is the overlap benign or a real clash? */
+  overlap?: HunkOverlap;
 }
 
 export interface FileModel {
@@ -323,6 +336,46 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   }
 }
 
+type FileOwnership = OwnershipFile["files"][string];
+
+/**
+ * Decide whether a shared hunk is a benign adjacency or a real same-line clash.
+ *
+ * Within a change region (a run of del/add ops bounded by equal context) the
+ * diff emits all deletes then all adds, so delete[i] and add[i] describe the
+ * same position — a replacement. If a replacement's deleted line is owned by one
+ * actor and its added line by another, that's an overwrite: someone's line was
+ * replaced by someone else's. Adjacent edits, by contrast, pair each actor's own
+ * delete with its own add, so no cross-owner pair appears.
+ */
+function hunkOverlap(hunk: Hunk, file: FileOwnership | undefined, conflicted: boolean): HunkOverlap {
+  if (conflicted) return "contended"; // identical line added/removed by two actors
+  let delOwners: (string | undefined)[] = [];
+  let addOwners: (string | undefined)[] = [];
+  let contended = false;
+  const flushRegion = () => {
+    const n = Math.min(delOwners.length, addOwners.length);
+    for (let i = 0; i < n; i++) {
+      const d = delOwners[i];
+      const a = addOwners[i];
+      if (d && a && d !== a) contended = true; // a line was replaced by another actor's
+    }
+    delOwners = [];
+    addOwners = [];
+  };
+  for (const op of hunk.ops) {
+    if (op.type === "eq") {
+      flushRegion();
+      continue;
+    }
+    if (isTrivialLine(op.text)) continue;
+    if (op.type === "del") delOwners.push(file?.removed?.[op.text]);
+    else addOwners.push(file?.added?.[op.text]);
+  }
+  flushRegion();
+  return contended ? "contended" : "adjacent";
+}
+
 function classifyHunk(
   hunk: Hunk,
   path: string,
@@ -362,7 +415,8 @@ function classifyHunk(
     else ownership_ = "other";
   }
 
-  return { hunk, ownership: ownership_, actors, conflicted };
+  const overlap = ownership_ === "shared" ? hunkOverlap(hunk, file, conflicted) : undefined;
+  return { hunk, ownership: ownership_, actors, conflicted, overlap };
 }
 
 /** Build the read-only worktree model used by status / mine / preview / commit. */
