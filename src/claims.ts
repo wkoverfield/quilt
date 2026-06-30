@@ -18,6 +18,8 @@ export interface ClaimResult {
   granted: boolean;
   /** when denied, the actor currently holding the conflicting reservation */
   holder?: string;
+  /** when denied, the holder's stated intent — enough to resolve the collision */
+  holderIntent?: string;
   /** when denied for a non-conflict reason (e.g. a path outside the repo) */
   reason?: "outside-repo";
 }
@@ -81,7 +83,9 @@ export function acquireClaims(
   sessionId: string | null,
   rawPaths: string[],
   now: number,
+  intent?: string,
 ): ClaimResult[] {
+  const cleanIntent = intent?.trim() ? intent.trim() : undefined;
   return store.withLock(() => {
     const file = store.readClaims();
     file.claims = active(file.claims, now);
@@ -103,11 +107,18 @@ export function acquireClaims(
         (c) => c.actor !== actorId && overlaps(target, c),
       );
       if (conflict) {
-        results.push({ ...target, granted: false, holder: conflict.actor });
-        // Record the denial so the fleet view can show who's blocked on whom.
+        results.push({
+          ...target,
+          granted: false,
+          holder: conflict.actor,
+          holderIntent: conflict.intent,
+        });
+        // Record the denial so the fleet view can show who's blocked on whom,
+        // carrying the holder's intent so the block explains itself.
         const prior = file.blocks.find((b) => sameTarget(b, target));
         if (prior) {
           prior.holder = conflict.actor;
+          prior.holderIntent = conflict.intent;
           prior.expiresAt = now + BLOCK_TTL_MS;
         } else {
           file.blocks.push({
@@ -115,6 +126,7 @@ export function acquireClaims(
             symbol: target.symbol,
             actor: actorId,
             holder: conflict.actor,
+            holderIntent: conflict.intent,
             blockedAt: new Date(now).toISOString(),
             expiresAt: now + BLOCK_TTL_MS,
           });
@@ -133,6 +145,7 @@ export function acquireClaims(
       if (own) {
         own.expiresAt = now + CLAIM_TTL_MS;
         own.session = sessionId;
+        if (cleanIntent !== undefined) own.intent = cleanIntent;
       } else {
         file.claims.push({
           path: target.path,
@@ -141,6 +154,7 @@ export function acquireClaims(
           session: sessionId,
           acquiredAt: new Date(now).toISOString(),
           expiresAt: now + CLAIM_TTL_MS,
+          intent: cleanIntent,
         });
       }
       results.push({ ...target, granted: true });

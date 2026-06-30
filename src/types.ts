@@ -109,6 +109,12 @@ export interface Claim {
   acquiredAt: string;
   /** epoch ms; the claim is ignored once now > expiresAt. */
   expiresAt: number;
+  /**
+   * Optional short "why" for this claim (e.g. "PERF-412: raise for peak load").
+   * Surfaced to an actor whose overlapping claim is denied, so it can resolve a
+   * collision from the holder's intent instead of guessing or blocking.
+   */
+  intent?: string;
 }
 
 /**
@@ -125,6 +131,8 @@ export interface Block {
   blockedAt: string;
   /** epoch ms; ignored once now > expiresAt. */
   expiresAt: number;
+  /** The holder's claim intent at denial time, so the block explains itself. */
+  holderIntent?: string;
 }
 
 export interface ClaimsFile {

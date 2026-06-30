@@ -238,13 +238,17 @@ export async function runMcpServer(store: Store): Promise<void> {
     "claim",
     {
       description:
-        "Reserve files BEFORE you edit them. Use `path#symbol` (e.g. utils.js#formatPrice) to reserve just one function/class so others can edit other parts of the same file in parallel; use a bare path to reserve the whole file. A denied target is held by another actor — edit something else or coordinate.",
-      inputSchema: { actor: actorArg, paths: z.array(z.string()) },
+        "Reserve files BEFORE you edit them. Use `path#symbol` (e.g. utils.js#formatPrice) to reserve just one function/class so others can edit other parts of the same file in parallel; use a bare path to reserve the whole file. Pass a short `intent` (the why) so an actor you block can resolve the collision from it. A denied target is held by another actor — its `holderIntent` tells you what they're doing, so reconcile from that instead of just waiting.",
+      inputSchema: {
+        actor: actorArg,
+        paths: z.array(z.string()),
+        intent: z.string().optional().describe("a short why for this claim, e.g. the ticket/task"),
+      },
     },
-    async ({ actor, paths }) => {
+    async ({ actor, paths, intent }) => {
       const actorId = resolveActor(actor, true)!;
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
-      const results = acquireClaims(store, actorId, sessionId, paths, Date.now());
+      const results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent);
       // Push-awareness at reservation time: tell the agent if anything it just
       // claimed depends on a symbol another actor is currently changing.
       return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });

@@ -617,7 +617,8 @@ program
   .description("Reserve files (or file#symbol) for editing; with none, lists claims")
   .argument("[paths...]", "files to claim; with none, lists active claims")
   .option("--json", "emit JSON")
-  .action((paths: string[], opts: { json?: boolean }) => {
+  .option("--intent <text>", "a short why for this claim, shown to anyone it blocks")
+  .action((paths: string[], opts: { json?: boolean; intent?: string }) => {
     const store = requireStore();
     const ctx = activeContext(store);
 
@@ -646,6 +647,7 @@ program
       ctx.session?.id ?? null,
       paths,
       Date.now(),
+      opts.intent,
     );
     // Push-awareness: warn if anything just claimed depends on a symbol another
     // actor is currently changing, so the actor learns at reservation time.
@@ -661,6 +663,11 @@ program
           const why =
             r.reason === "outside-repo" ? "outside the repository" : `held by ${r.holder}`;
           process.stdout.write(pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(${why})`)}\n`);
+          // Hand the blocked actor the holder's intent so it can resolve the
+          // collision instead of just waiting.
+          if (r.holderIntent) {
+            process.stdout.write(pc.dim(`      ${r.holder} is: ${r.holderIntent}\n`));
+          }
         }
       }
       for (const w of warnings) {
