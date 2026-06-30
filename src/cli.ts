@@ -17,6 +17,7 @@ import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
 import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
+import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
@@ -691,6 +692,40 @@ program
       paths && paths.length > 0 ? paths : null,
     );
     process.stdout.write(pc.green("✓ ") + `Released ${n} claim${n === 1 ? "" : "s"}.\n`);
+  });
+
+program
+  .command("escalate")
+  .description("Flag a collision you can't reconcile for a human — shows under 'Needs you'")
+  .argument("<target>", "the clash, e.g. pool.js#maxConnections")
+  .option("--reason <text>", "why it needs a human (e.g. the opposed intents)")
+  .action((target: string, opts: { reason?: string }) => {
+    const store = requireStore();
+    const ctx = activeContext(store);
+    const actor = ctx.actorId ?? "unknown";
+    const o = recordOutcome(store, "escalated", actor, target, opts.reason, nowIso());
+    store.appendLedger({ ts: o.ts, type: "collision.escalated", target: o.target, actorId: actor });
+    process.stdout.write(
+      pc.yellow("⚑ ") + `escalated ${pc.bold(o.target)} for review` +
+        (o.note ? pc.dim(` — ${o.note}`) : "") + "\n",
+    );
+  });
+
+program
+  .command("resolve")
+  .description("Mark a collision as sewn/handled — closes its 'Needs you' flag and records the trail")
+  .argument("<target>", "the clash that was resolved, e.g. pool.js#maxConnections")
+  .option("--note <text>", "what was done to reconcile it")
+  .action((target: string, opts: { note?: string }) => {
+    const store = requireStore();
+    const ctx = activeContext(store);
+    const actor = ctx.actorId ?? "unknown";
+    const o = recordOutcome(store, "resolved", actor, target, opts.note, nowIso());
+    store.appendLedger({ ts: o.ts, type: "collision.resolved", target: o.target, actorId: actor });
+    process.stdout.write(
+      pc.green("✓ ") + `resolved ${pc.bold(o.target)}` +
+        (o.note ? pc.dim(` — ${o.note}`) : "") + "\n",
+    );
   });
 
 program

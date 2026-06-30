@@ -139,3 +139,25 @@ export interface ClaimsFile {
   claims: Claim[];
   blocks?: Block[];
 }
+
+/**
+ * How a collision was handled. An agent that hits a clash it can't reconcile
+ * `escalated`s it (a genuine conflict — needs a human); one that sews it records
+ * a `resolved` outcome (the audit trail). The latest outcome per target wins: an
+ * escalation is "open" (needs you) until a later resolution closes it.
+ */
+export interface Outcome {
+  id: string;
+  /** path or path#symbol the collision is on */
+  target: string;
+  kind: "escalated" | "resolved";
+  /** who recorded it (the agent, or a human) */
+  actor: string;
+  /** why it needs a human (escalated) or what was done to sew it (resolved) */
+  note?: string;
+  ts: string;
+}
+
+export interface OutcomesFile {
+  outcomes: Outcome[];
+}

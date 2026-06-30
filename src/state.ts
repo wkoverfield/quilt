@@ -20,6 +20,7 @@ import type {
   Config,
   LedgerEvent,
   ObservedFile,
+  OutcomesFile,
   OwnershipFile,
   Session,
 } from "./types.js";
@@ -156,6 +157,14 @@ export class Store {
   }
   writeClaims(file: ClaimsFile): void {
     writeJson(this.paths.claims, file);
+  }
+
+  // --- collision outcomes (escalations + resolutions) ---
+  readOutcomes(): OutcomesFile {
+    return readJson<OutcomesFile>(this.paths.outcomes, { outcomes: [] });
+  }
+  writeOutcomes(file: OutcomesFile): void {
+    writeJson(this.paths.outcomes, file);
   }
 
   // --- ledger ---
