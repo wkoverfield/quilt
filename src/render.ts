@@ -107,15 +107,17 @@ export function renderStatus(model: WorktreeModel, baseLabel: string): string {
     out.push(pc.yellow(pc.bold("  Shared / needs review:")));
     for (const file of b.shared) {
       const actors = new Set<string>();
-      let conflicted = false;
+      let contended = false;
       for (const h of file.hunks) {
         for (const a of h.actors) actors.add(a);
-        if (h.conflicted) conflicted = true;
+        if (h.overlap === "contended") contended = true;
       }
       out.push(`    ${file.path}   ${fileLineSummary(file)}`);
       out.push(
         `      ${pc.dim("touched by:")} ${[...actors].join(", ") || pc.dim("unknown")}` +
-          (conflicted ? pc.red("   status: conflict") : pc.yellow("   status: needs review")),
+          (contended
+            ? pc.red("   status: same-line clash — review")
+            : pc.dim("   status: adjacent edits — commits cleanly")),
       );
     }
     out.push("");

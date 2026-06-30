@@ -21,6 +21,7 @@ export function statusJson(model: WorktreeModel, base: string | null) {
         ownership: h.ownership,
         actors: h.actors,
         conflicted: h.conflicted,
+        ...(h.overlap ? { overlap: h.overlap } : {}),
         added,
         removed,
         oldStart: h.hunk.oldStart,
@@ -61,17 +62,19 @@ export function mineJson(selection: Selection, includePatch: boolean) {
 }
 
 export function conflictsJson(model: WorktreeModel) {
-  const out: Array<{ path: string; actors: string[]; lines: number }> = [];
+  const out: Array<{ path: string; actors: string[]; lines: number; kind: "adjacent" | "contended" }> = [];
   for (const file of model.files) {
-    const conflicted = file.hunks.filter((h) => h.conflicted || h.ownership === "shared");
-    if (conflicted.length === 0) continue;
+    const shared = file.hunks.filter((h) => h.ownership === "shared");
+    if (shared.length === 0) continue;
     const actors = new Set<string>();
     let lines = 0;
-    for (const h of conflicted) {
+    let contended = false;
+    for (const h of shared) {
       for (const a of h.actors) actors.add(a);
       lines += h.hunk.ops.filter((o) => o.type !== "eq").length;
+      if (h.overlap === "contended") contended = true;
     }
-    out.push({ path: file.path, actors: [...actors], lines });
+    out.push({ path: file.path, actors: [...actors], lines, kind: contended ? "contended" : "adjacent" });
   }
   return { conflicts: out };
 }
