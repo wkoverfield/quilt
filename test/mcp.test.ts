@@ -161,6 +161,93 @@ test("MCP: ONE shared server attributes two subagents via per-call actor", async
   }
 });
 
+// Orchestration confidence eval: a fleet of N subagents drives ONE shared
+// `quilt mcp` server. With per-call actor, each subagent's work stays attributed
+// to it; the pre-per-call-actor path (subagents omit their id, sharing one
+// active actor) collapses the whole fleet into a single author. Same engine, no
+// silent loss either way — the difference is whether a fleet keeps its identity.
+// This guards the orchestrator integration: if it ever regresses, a fleet's
+// history silently collapses to one name and this fails.
+test("MCP orchestration eval: per-call actor keeps a 4-subagent fleet attributed; shared active actor collapses it", async () => {
+  const N = 4;
+  const file = (vals: number[]): string =>
+    Array.from({ length: N }, (_, i) => `export function f${i}() {\n  return ${vals[i]};\n}\n`)
+      .join("\n// ----\n// ----\n// ----\n\n");
+  const base = file([0, 0, 0, 0]);
+  const edited = file([10, 20, 30, 40]);
+  const SEED_AUTHOR = "Quilt Test"; // makeRepo's git user.name (the seed commit)
+
+  // distinct non-seed commit authors, oldest-first values irrelevant
+  const fleetAuthors = (dir: string): string[] => {
+    const all = gitOut(dir, ["log", "--pretty=%an"]).split("\n").filter(Boolean);
+    return [...new Set(all.filter((a) => a !== SEED_AUTHOR))];
+  };
+
+  // ----- WITHOUT per-call actor: one active actor, subagents omit their id -----
+  const d1 = makeRepo();
+  write(d1, "mod.ts", base);
+  spawnSync("git", ["add", "-A"], { cwd: d1 });
+  spawnSync("git", ["commit", "-q", "-m", "seed"], { cwd: d1 });
+  const c1 = await connect(d1);
+  try {
+    await c1.callTool({ name: "start_session", arguments: { actor: "fleet", type: "agent" } });
+    for (let i = 0; i < N; i++) {
+      await c1.callTool({ name: "claim", arguments: { paths: [`mod.ts#f${i}`] } }); // no actor -> "fleet"
+    }
+    write(d1, "mod.ts", edited);
+    for (let i = 0; i < N; i++) {
+      await c1.callTool({ name: "commit_mine", arguments: { message: `f${i}` } }); // no actor -> "fleet"
+    }
+    const head1 = gitOut(d1, ["show", "HEAD:mod.ts"]);
+    for (const v of [10, 20, 30, 40]) assert.match(head1, new RegExp(`return ${v}`), "no work lost");
+    assert.deepEqual(
+      fleetAuthors(d1),
+      ["fleet"],
+      "without per-call actor the whole fleet collapses into one author",
+    );
+  } finally {
+    await c1.close();
+    rmSync(d1, { recursive: true, force: true });
+  }
+
+  // ----- WITH per-call actor: each subagent names itself -----
+  const d2 = makeRepo();
+  write(d2, "mod.ts", base);
+  spawnSync("git", ["add", "-A"], { cwd: d2 });
+  spawnSync("git", ["commit", "-q", "-m", "seed"], { cwd: d2 });
+  const c2 = await connect(d2);
+  try {
+    for (let i = 0; i < N; i++) {
+      const r = parse(
+        await c2.callTool({ name: "claim", arguments: { actor: `agent-${i}`, paths: [`mod.ts#f${i}`] } }),
+      );
+      assert.equal(r.results[0].granted, true, `agent-${i} claims its own symbol`);
+    }
+    write(d2, "mod.ts", edited);
+    for (let i = 0; i < N; i++) {
+      const r = parse(
+        await c2.callTool({ name: "commit_mine", arguments: { actor: `agent-${i}`, message: `f${i}` } }),
+      );
+      assert.equal(r.committed, true, `agent-${i} commits its own work`);
+    }
+    const head2 = gitOut(d2, ["show", "HEAD:mod.ts"]);
+    for (const v of [10, 20, 30, 40]) assert.match(head2, new RegExp(`return ${v}`), "no work lost");
+    assert.deepEqual(
+      fleetAuthors(d2).sort(),
+      ["agent-0", "agent-1", "agent-2", "agent-3"],
+      "with per-call actor every subagent keeps its own attribution",
+    );
+    // and each function's change is attributed to the right subagent
+    for (let i = 0; i < N; i++) {
+      const author = gitOut(d2, ["log", "-S", `return ${(i + 1) * 10}`, "--pretty=%an", "--", "mod.ts"]);
+      assert.equal(author, `agent-${i}`, `f${i} attributed to agent-${i}`);
+    }
+  } finally {
+    await c2.close();
+    rmSync(d2, { recursive: true, force: true });
+  }
+});
+
 test("MCP: claim is granted to one actor and denied to another", async () => {
   const dir = makeRepo();
   const a = await connect(dir);
