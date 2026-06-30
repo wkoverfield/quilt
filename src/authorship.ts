@@ -70,6 +70,24 @@ export function readAuthorship(store: Store): AuthorshipEvent[] {
     .map((l) => JSON.parse(l) as AuthorshipEvent);
 }
 
+/**
+ * Fold the ledger into current authorship: `path -> (lineText -> actor)`, where a
+ * later event wins for the same line. This is the authoritative record reconcile
+ * overlays on top of (or in place of) its content-key inference — a line the
+ * ledger has an author for is attributed to THAT actor, no matter who happened to
+ * run reconcile. (Position-aware keying for identical lines is a later increment;
+ * for now latest-by-text, which still fixes the who-reconciled-first hole.)
+ */
+export function ledgerOwnership(events: AuthorshipEvent[]): Map<string, Map<string, string>> {
+  const byPath = new Map<string, Map<string, string>>();
+  for (const ev of events) {
+    let m = byPath.get(ev.path);
+    if (!m) byPath.set(ev.path, (m = new Map()));
+    for (const line of ev.added) m.set(line, ev.actor);
+  }
+  return byPath;
+}
+
 /** The genuinely-added and removed lines for an old->new payload. */
 export function computeDelta(oldText: string, newText: string): { added: string[]; removed: string[] } {
   const ops = lineDiff(oldText, newText);
@@ -149,11 +167,15 @@ export function applyAndRecordEdit(
   }
   const after = before.slice(0, idx) + args.newString + before.slice(idx + args.oldString.length);
   atomicWrite(abs, after);
+  // Diff the FULL before->after content (computed in-memory from the bytes this
+  // actor read — never a disk re-read, so a sibling's concurrent write can't taint
+  // it). This yields whole-line adds/removes that match how ownership is keyed,
+  // unlike the partial old_string/new_string fragments.
   const event = recordAuthorship(store, {
     actor: args.actor,
     path: args.path,
-    oldText: args.oldString,
-    newText: args.newString,
+    oldText: before,
+    newText: after,
     intent: args.intent,
     anchor: lineBefore(before, idx),
   });
