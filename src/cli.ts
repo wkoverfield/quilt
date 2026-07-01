@@ -19,6 +19,7 @@ import { runWatch, watcherRunning } from "./watch.js";
 import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
+import { diagnose, type Check } from "./doctor.js";
 import { parseHookInput, runHookPre, runHookPost } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
@@ -208,7 +209,9 @@ program
         "\n" +
           pc.green("✓ ") +
           "Quilt is wired in. Each agent: claim before editing, commit_mine when done.\n" +
-          pc.dim("  Details: see CLAUDE.md, or docs/orchestrators.md.\n"),
+          pc.dim("  Give each agent process its own QUILT_ACTOR so the capture hooks can\n") +
+          pc.dim("  tell them apart — without it, native edits aren't attributed.\n") +
+          pc.dim("  Run `quilt doctor` to confirm capture is flowing. See docs/orchestrators.md.\n"),
       );
     }
   });
@@ -754,6 +757,37 @@ program
       pc.green("✓ ") + `resolved ${pc.bold(o.target)}` +
         (o.note ? pc.dim(` — ${o.note}`) : "") + "\n",
     );
+  });
+
+program
+  .command("doctor")
+  .description("Check Quilt's health here: wiring, identity, and whether capture is actually flowing")
+  .option("--json", "output the report as JSON")
+  .action((opts: { json?: boolean }) => {
+    // Not requireStore: doctor should run pre-init and REPORT that, not error.
+    const store = new Store(findRepo());
+    const report = diagnose(store, { actorEnv: process.env.QUILT_ACTOR });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+      return;
+    }
+    const glyph = (s: Check["status"]) =>
+      s === "ok" ? pc.green("✓") : s === "warn" ? pc.yellow("!") : s === "fail" ? pc.red("✗") : pc.dim("·");
+    process.stdout.write(pc.bold("quilt doctor") + "\n\n");
+    for (const c of report.checks) {
+      process.stdout.write(`  ${glyph(c.status)} ${pc.bold(c.label)}  ${c.detail}\n`);
+      if (c.hint) process.stdout.write(`      ${pc.dim("→ " + c.hint)}\n`);
+    }
+    const verdict =
+      report.verdict === "healthy"
+        ? pc.green("healthy")
+        : report.verdict === "warnings"
+          ? pc.yellow("wired, with warnings")
+          : pc.red("not ready — see the checks above");
+    process.stdout.write("\n" + pc.dim("Verdict: ") + verdict + "\n");
+    // Non-zero on not-ready so `quilt doctor` is usable as a CI/scripting gate.
+    // Warnings stay 0 (advisory), matching the convention of linters.
+    if (report.verdict === "not-ready") process.exitCode = 1;
   });
 
 program
