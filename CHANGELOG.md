@@ -6,6 +6,19 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **The capture ledger is now the primary attribution source; content-key
+  inference is the fallback floor.** Reconcile attributes every captured line to
+  its recorded author and only falls back to inference for lines the ledger never
+  saw (e.g. a raw `bash`/`sed` write) — so who ran `reconcile` first no longer
+  affects attribution for any captured edit.
+- **Log compaction** — the append-only authorship log folds into a checkpoint and
+  truncates once it grows past a threshold, so reconcile reads the checkpoint plus
+  a short tail instead of re-reading all of history. The checkpoint is written
+  atomically before the log is truncated, and the fold is idempotent, so an
+  interrupted compaction re-folds rather than losing authorship.
+
 ### Added
 
 - **`quilt setup` now also installs the capture hooks** into `.claude/settings.json`

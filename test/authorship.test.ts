@@ -18,7 +18,17 @@ import {
   readAuthorship,
   applyAndRecordEdit,
   applyAndRecordWrite,
+  foldedAuthorship,
+  compactAuthorship,
+  readCheckpoint,
 } from "../src/authorship.js";
+
+/** Flatten a `path -> (line -> actor)` map for deep-equal comparisons. */
+function foldToObj(m: Map<string, Map<string, string>>): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const [path, lines] of m) out[path] = Object.fromEntries(lines);
+  return out;
+}
 
 function newStore() {
   const dir = mkdtempSync(join(tmpdir(), "quilt-auth-"));
@@ -209,6 +219,94 @@ test("applyAndRecordWrite captures a whole-file create", () => {
     assert.equal(ev[0]!.actor, "Z");
     assert.equal(ev[0]!.whole, true);
     assert.deepEqual(ev[0]!.added, ["export const x = 1;"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- compaction (increment 5) ----
+
+test("compaction folds the log into a checkpoint and truncates it — attribution unchanged (fold-equivalence)", () => {
+  const { s, dir } = newStore();
+  try {
+    recordAuthorship(s, { actor: "X", path: "a.js", oldText: "a\n", newText: "a\nb\n" }); // +b
+    recordAuthorship(s, { actor: "Y", path: "a.js", oldText: "a\nb\n", newText: "a\nb\nc\n" }); // +c
+    recordAuthorship(s, { actor: "X", path: "b.js", oldText: "", newText: "z\n", whole: true }); // +z
+    const before = foldToObj(foldedAuthorship(s));
+    assert.equal(readAuthorship(s).length, 3);
+
+    compactAuthorship(s);
+
+    assert.equal(readAuthorship(s).length, 0, "log truncated");
+    assert.equal(readCheckpoint(s).count, 3, "checkpoint counts the folded events");
+    // The whole point: the folded authorship is byte-for-byte the same afterward.
+    assert.deepEqual(foldToObj(foldedAuthorship(s)), before);
+    assert.equal(foldedAuthorship(s).get("a.js")?.get("b"), "X");
+    assert.equal(foldedAuthorship(s).get("a.js")?.get("c"), "Y");
+    assert.equal(foldedAuthorship(s).get("b.js")?.get("z"), "X");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a post-checkpoint event overrides the checkpoint for the same line (log tail wins)", () => {
+  const { s, dir } = newStore();
+  try {
+    recordAuthorship(s, { actor: "X", path: "a.js", oldText: "", newText: "shared\n", whole: true });
+    compactAuthorship(s); // "shared" -> X now lives in the checkpoint
+    recordAuthorship(s, { actor: "Y", path: "a.js", oldText: "", newText: "shared\n", whole: true });
+    assert.equal(foldedAuthorship(s).get("a.js")?.get("shared"), "Y", "tail event wins over the checkpoint");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("seq stays monotonic across a compaction (not reset when the log truncates)", () => {
+  const { s, dir } = newStore();
+  try {
+    const a = recordAuthorship(s, { actor: "X", path: "a.js", oldText: "", newText: "1\n", whole: true });
+    assert.equal(a.seq, 0);
+    compactAuthorship(s);
+    const b = recordAuthorship(s, { actor: "Y", path: "a.js", oldText: "1\n", newText: "1\n2\n" });
+    assert.equal(b.seq, 1, "seq continues from the compacted count, not back to 0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt checkpoint fails loudly instead of silently dropping history", () => {
+  const { s, dir } = newStore();
+  try {
+    recordAuthorship(s, { actor: "X", path: "a.js", oldText: "", newText: "1\n", whole: true });
+    compactAuthorship(s); // creates the checkpoint; the log is now truncated
+    writeFileSync(s.paths.authorshipCheckpoint, "{ not valid json");
+    // The log no longer holds X's edit, so returning an empty checkpoint would
+    // silently lose it. We must throw instead.
+    assert.throws(() => readCheckpoint(s), /checkpoint is corrupt/);
+    assert.throws(() => foldedAuthorship(s), /checkpoint is corrupt/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("reconcile attribution survives compaction: the checkpoint feeds the ledger overlay", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-compact-recon-"));
+  const g = (a: string[]) => execFileSync("git", a, { cwd: dir });
+  g(["init", "-q"]); g(["config", "user.email", "t@t.io"]); g(["config", "user.name", "t"]); g(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(dir, "m.js"), "export const limit = 100;\n");
+  g(["add", "-A"]); g(["commit", "-qm", "i"]);
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    applyAndRecordEdit(s, { actor: "X", path: "m.js", oldString: "limit = 100", newString: "limit = 500", intent: "PERF" });
+    compactAuthorship(s); // X's edit now lives only in the checkpoint, log is empty
+    assert.equal(readAuthorship(s).length, 0);
+    reconcile(s, "Y"); // Y reconciles first — inference alone would credit Y
+    assert.equal(
+      s.readOwnership().files["m.js"]?.added["export const limit = 500;"],
+      "X",
+      "checkpoint-fed ledger still overrides inference after compaction",
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

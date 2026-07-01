@@ -11,7 +11,7 @@ import {
   type Hunk,
 } from "./diff.js";
 import { parseSymbols } from "./symbols.js";
-import { readAuthorship, ledgerOwnership } from "./authorship.js";
+import { foldedAuthorship } from "./authorship.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
 
@@ -143,9 +143,12 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   const observed = store.readObserved();
   const clobbers = store.readClobbers();
   let clobbersChanged = false;
-  // Authoritative authorship from the capture-at-edit ledger. Empty when nothing
-  // used quilt_edit, so this whole overlay no-ops on the legacy/inference path.
-  const ledgerOwn = ledgerOwnership(readAuthorship(store));
+  // Authoritative authorship from the capture-at-edit ledger (checkpoint + log
+  // tail). The ledger is the PRIMARY attribution source: any line it has an
+  // author for wins. The content-key inference below is the FALLBACK FLOOR — it
+  // only decides lines the ledger never captured (e.g. a raw bash/sed write).
+  // Empty when nothing was captured, so the whole overlay no-ops on that path.
+  const ledgerOwn = foldedAuthorship(store);
 
   // Files reserved by OTHER actors. We skip them entirely this pass: don't
   // attribute, don't advance the observed snapshot, don't prune. A claim
@@ -332,11 +335,11 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       }
     }
 
-    // Ledger overlay: a line the capture-at-edit ledger has an author for is
-    // attributed to THAT actor — overriding whatever the inference pass guessed
-    // (which is the fix for "whoever reconciled first owns it"). Only applies to
-    // lines actually present in the current diff; un-captured lines keep their
-    // inferred owner (the fallback floor).
+    // Ledger overlay: the ledger is authoritative, so a captured line is
+    // attributed to its RECORDED author, replacing whatever the inference floor
+    // above guessed (this is the fix for "whoever reconciled first owns it").
+    // Only applies to lines actually present in the current diff; un-captured
+    // lines keep their inferred owner — inference is the fallback floor.
     const ledgerForPath = ledgerOwn.get(path);
     if (ledgerForPath) {
       const f = (ownership.files[path] ??= { added: {}, removed: {} });

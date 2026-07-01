@@ -143,21 +143,99 @@ export function readAuthorship(store: Store): AuthorshipEvent[] {
 }
 
 /**
- * Fold the ledger into current authorship: `path -> (lineText -> actor)`, where a
- * later event wins for the same line. This is the authoritative record reconcile
- * overlays on top of (or in place of) its content-key inference — a line the
- * ledger has an author for is attributed to THAT actor, no matter who happened to
- * run reconcile. (Position-aware keying for identical lines is a later increment;
- * for now latest-by-text, which still fixes the who-reconciled-first hole.)
+ * Fold a run of events into an existing `path -> (lineText -> actor)` map, later
+ * event winning for the same line. The one place the fold rule lives, so the
+ * log-fold and the checkpoint-fold can't drift.
+ *
+ * Tracks only ADDED-line authorship; `removed` is not processed. Removing a line
+ * doesn't drop its entry — under text keying that would be unsafe (an identical
+ * line elsewhere shares the key). Reconcile filters to lines actually in the
+ * current diff, so a stale entry is never written to ownership; it just lingers
+ * in the checkpoint (a bounded space cost). Positional keying (deferred) would
+ * let compaction prune removed lines safely.
  */
-export function ledgerOwnership(events: AuthorshipEvent[]): Map<string, Map<string, string>> {
-  const byPath = new Map<string, Map<string, string>>();
+function foldEvents(byPath: Map<string, Map<string, string>>, events: AuthorshipEvent[]): void {
   for (const ev of events) {
     let m = byPath.get(ev.path);
     if (!m) byPath.set(ev.path, (m = new Map()));
     for (const line of ev.added) m.set(line, ev.actor);
   }
+}
+
+/** A compacted fold of old events: the log's authorship folded once, so the log
+ * can be truncated and reconcile need not re-read all of history every time. */
+export interface AuthorshipCheckpoint {
+  /** total events folded into this checkpoint (keeps `seq` monotonic post-truncate). */
+  count: number;
+  /** the folded `path -> lineText -> actor`, latest-author-wins. */
+  ownership: Record<string, Record<string, string>>;
+}
+
+/** Compact once the un-folded log passes this many events. */
+export const COMPACT_THRESHOLD = 1000;
+
+/**
+ * Read the checkpoint. Absent → an empty checkpoint (nothing compacted yet). But
+ * a checkpoint that EXISTS and won't parse is fatal: the log was truncated after
+ * it was written, so it's the only record of that compacted authorship. Returning
+ * empty would silently misattribute every historical line, so we throw loudly
+ * instead — a corrupt checkpoint is a stop-and-look, not something to paper over.
+ */
+export function readCheckpoint(store: Store): AuthorshipCheckpoint {
+  const p = store.paths.authorshipCheckpoint;
+  if (!existsSync(p)) return { count: 0, ownership: {} };
+  let cp: AuthorshipCheckpoint;
+  try {
+    cp = JSON.parse(readFileSync(p, "utf8")) as AuthorshipCheckpoint;
+  } catch (e) {
+    throw new Error(
+      `quilt: authorship checkpoint is corrupt (${p}) — compacted authorship history can't be read. ` +
+        `Restore it from backup, or delete it to continue without that history. (${(e as Error).message})`,
+    );
+  }
+  return { count: cp.count ?? 0, ownership: cp.ownership ?? {} };
+}
+
+/**
+ * The authoritative line-ownership reconcile attributes from: the checkpoint's
+ * fold plus the un-compacted log tail on top (later wins). Reading the checkpoint
+ * instead of re-folding all of history keeps reconcile cheap on long-lived repos.
+ */
+export function foldedAuthorship(store: Store): Map<string, Map<string, string>> {
+  const cp = readCheckpoint(store);
+  const byPath = new Map<string, Map<string, string>>();
+  for (const [path, lines] of Object.entries(cp.ownership)) {
+    byPath.set(path, new Map(Object.entries(lines)));
+  }
+  foldEvents(byPath, readAuthorship(store));
   return byPath;
+}
+
+/** Fold the current log into the checkpoint and truncate the log. NOT locked —
+ * call only while holding the store lock. Writing the checkpoint atomically
+ * BEFORE truncating means a crash in between just leaves the log to be re-folded
+ * (idempotent: re-setting a line to the same actor is a no-op), never lost. */
+function compactLocked(store: Store): void {
+  const events = readAuthorship(store);
+  if (events.length === 0) return;
+  const cp = readCheckpoint(store);
+  const byPath = new Map<string, Map<string, string>>();
+  for (const [path, lines] of Object.entries(cp.ownership)) byPath.set(path, new Map(Object.entries(lines)));
+  foldEvents(byPath, events);
+  const ownership: Record<string, Record<string, string>> = {};
+  for (const [path, m] of byPath) ownership[path] = Object.fromEntries(m);
+  const next: AuthorshipCheckpoint = { count: cp.count + events.length, ownership };
+  const tmp = store.paths.authorshipCheckpoint + ".tmp";
+  writeFileSync(tmp, JSON.stringify(next));
+  renameSync(tmp, store.paths.authorshipCheckpoint); // atomic
+  writeFileSync(store.paths.authorshipLog, ""); // truncate only after the checkpoint is durable
+}
+
+/** Compact the ledger (fold the log into the checkpoint, truncate). Locked — the
+ * explicit entry point (recordAuthorship compacts inline under its own lock). For
+ * tests and a future `quilt compact` maintenance command. */
+export function compactAuthorship(store: Store): void {
+  store.withLock(() => compactLocked(store));
 }
 
 /** The genuinely-added and removed lines for an old->new payload. */
@@ -194,7 +272,9 @@ export function recordAuthorship(
       ? { added: splitLines(newText), removed: [] }
       : computeDelta(oldText, newText);
     const ev: AuthorshipEvent = {
-      seq: events.length,
+      // seq spans the compacted history too, so it stays monotonic after a
+      // truncation resets the log to empty.
+      seq: readCheckpoint(store).count + events.length,
       ts: new Date().toISOString(),
       actor,
       path,
@@ -206,6 +286,9 @@ export function recordAuthorship(
       whole: whole || undefined,
     };
     appendFileSync(store.paths.authorshipLog, JSON.stringify(ev) + "\n");
+    // Keep the log bounded: once it's grown past the threshold, fold it into the
+    // checkpoint and truncate. Same lock, so the fold sees exactly what we wrote.
+    if (events.length + 1 >= COMPACT_THRESHOLD) compactLocked(store);
     return ev;
   });
 }
