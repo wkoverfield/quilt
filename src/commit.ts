@@ -13,6 +13,7 @@ import {
   type FileModel,
   type WorktreeModel,
 } from "./engine.js";
+import { symbolLocator, opKeyer } from "./symbols.js";
 import type { Actor, FileOwnership, OwnershipFile } from "./types.js";
 
 export interface SelectedFile {
@@ -64,6 +65,7 @@ interface OwnedBuild {
  * different changes that happen to share one diff hunk.
  */
 function buildOwnedText(
+  path: string,
   headText: string | null,
   worktreeText: string | null,
   owned: FileOwnership | undefined,
@@ -71,6 +73,9 @@ function buildOwnedText(
   includeUnclaimed: boolean,
 ): OwnedBuild {
   const ops = lineDiff(headText ?? "", worktreeText ?? "");
+  // Key each line the same way reconcile did: adds by their symbol scope in the
+  // worktree, removals by their scope in HEAD.
+  const keyOf = opKeyer(symbolLocator(path, worktreeText ?? ""), symbolLocator(path, headText ?? ""));
   const out: string[] = [];
   let added = 0;
   let removed = 0;
@@ -81,6 +86,7 @@ function buildOwnedText(
   let blockInclude = false; // trivial lines inherit their change run's decision
 
   for (const op of ops) {
+    const key = keyOf(op); // every op, so the line cursor stays aligned
     if (op.type === "eq") {
       out.push(op.text);
       lastFromWorktree = false;
@@ -91,7 +97,7 @@ function buildOwnedText(
     if (isTrivialLine(op.text)) {
       include = blockInclude;
     } else {
-      const owner = op.type === "add" ? owned?.added[op.text] : owned?.removed[op.text];
+      const owner = op.type === "add" ? owned?.added[key!] : owned?.removed[key!];
       if (owner === actor) include = true;
       else if (owner == null) {
         include = includeUnclaimed;
@@ -154,6 +160,7 @@ export function selectOwned(
   for (const file of model.files) {
     if (file.binary || actor === null) continue;
     const built = buildOwnedText(
+      file.path,
       file.oldText,
       file.newText,
       ownership.files[file.path],

@@ -178,7 +178,10 @@ test("quilt watch attributes a live edit to the active actor without a manual st
     const owned = await waitUntil(() => {
       try {
         const own = JSON.parse(read(dir, join(".quilt", "ownership.json")));
-        return own.files?.["live.txt"]?.added?.["alice-live-edit"] === "alice";
+        // Ownership is keyed by `symbol\0text`; a .txt line is top-level so the
+        // scope is empty — match the entry whose text is our line.
+        const added: Record<string, string> = own.files?.["live.txt"]?.added ?? {};
+        return Object.entries(added).some(([k, v]) => k.endsWith("alice-live-edit") && v === "alice");
       } catch {
         return false; // file missing or mid-write — keep polling
       }

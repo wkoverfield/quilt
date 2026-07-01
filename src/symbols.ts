@@ -345,6 +345,92 @@ export function parseSymbols(path: string, content: string): CodeSymbol[] {
   return withTree(path, content, [], (root, grammar) => collectAll(root, grammar));
 }
 
+/** Separates the symbol scope from the line text in an ownership key. NUL can't
+ * appear in a source line, so it's an unambiguous delimiter. */
+export const OWN_KEY_SEP = "\u0000";
+
+/**
+ * The ownership key for a line: its enclosing symbol scope plus the line text.
+ * Keying on `symbol\0text` instead of bare `text` stops identical lines in
+ * different symbols (e.g. `  return null;` in two functions) from collapsing to
+ * one owner. Top-level lines use an empty scope, so they key by text as before.
+ */
+export function ownKey(symbol: string, text: string): string {
+  return symbol + OWN_KEY_SEP + text;
+}
+
+/** The line text back out of an ownership key (drops the symbol scope). */
+export function keyText(key: string): string {
+  const i = key.indexOf(OWN_KEY_SEP);
+  return i === -1 ? key : key.slice(i + 1);
+}
+
+/**
+ * Build a line-number -> enclosing-symbol lookup for a file's content, so callers
+ * can compute ownership keys while walking a diff. Parses once; the returned
+ * function maps a 1-based line number to the innermost symbol containing it (a
+ * method beats its class — smallest span wins, ties broken by document order),
+ * or "" when the line is top-level or the file doesn't parse. Empty content or an
+ * unsupported language yields "" for every line, i.e. plain text keying — a safe
+ * degrade.
+ */
+export function symbolLocator(path: string, content: string): (line: number) => string {
+  const symbols = parseSymbols(path, content);
+  if (symbols.length === 0) return () => "";
+  return (line: number) => {
+    let best = "";
+    let bestSpan = Infinity;
+    for (const s of symbols) {
+      if (line >= s.startLine && line <= s.endLine) {
+        const span = s.endLine - s.startLine; // innermost = smallest span
+        if (span < bestSpan) {
+          best = s.name;
+          bestSpan = span;
+        }
+      }
+    }
+    return best;
+  };
+}
+
+/**
+ * A stateful helper for walking a line diff and producing each op's ownership
+ * key. `addLoc`/`delLoc` are symbol locators for the new and old sides; pass the
+ * hunk's `newStart`/`oldStart` (default 1 for a whole-file diff). Call it on
+ * EVERY op in order: `eq` advances both cursors and returns null; `add`/`del`
+ * return the line's `symbol\0text` key. Added lines scope to the new side (where
+ * they live), removed lines to the old side.
+ *
+ * Consistency note: reconcile keys a removed line from its scope in the
+ * last-observed baseline, while commit/undo/fleet key it from HEAD. These match
+ * unless the enclosing function was RENAMED between HEAD and the baseline (a rare
+ * uncommitted-rename case); if they diverge the removal is treated as unclaimed
+ * (benign — never misattributed or lost). Added lines have no such split (every
+ * reader scopes them from the shared working tree).
+ */
+export function opKeyer(
+  addLoc: (line: number) => string,
+  delLoc: (line: number) => string,
+  newStart = 1,
+  oldStart = 1,
+): (op: { type: "eq" | "add" | "del"; text: string }) => string | null {
+  let newLine = newStart - 1;
+  let oldLine = oldStart - 1;
+  return (op) => {
+    if (op.type === "eq") {
+      newLine++;
+      oldLine++;
+      return null;
+    }
+    if (op.type === "add") {
+      newLine++;
+      return ownKey(addLoc(newLine), op.text);
+    }
+    oldLine++;
+    return ownKey(delLoc(oldLine), op.text);
+  };
+}
+
 /**
  * Dependency graph: maps each top-level symbol name to the set of names it
  * references in its body — function-call callees and type references. Targets

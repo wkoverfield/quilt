@@ -1,5 +1,6 @@
 import { isTrivialLine, lineDiff, splitLines } from "./diff.js";
 import type { WorktreeModel } from "./engine.js";
+import { symbolLocator, opKeyer } from "./symbols.js";
 import type { FileOwnership, OwnershipFile } from "./types.js";
 
 /**
@@ -13,18 +14,22 @@ import type { FileOwnership, OwnershipFile } from "./types.js";
  * commit path.
  */
 function buildWithoutActor(
+  path: string,
   headText: string | null,
   worktreeText: string | null,
   owned: FileOwnership | undefined,
   actor: string,
 ): { text: string | null; reverted: number } {
   const ops = lineDiff(headText ?? "", worktreeText ?? "");
+  // Same keying as commit/reconcile: adds by worktree scope, removals by HEAD.
+  const keyOf = opKeyer(symbolLocator(path, worktreeText ?? ""), symbolLocator(path, headText ?? ""));
   const out: string[] = [];
   let reverted = 0;
   let lastFromWorktree = false;
   let blockRevert = false; // trivial lines inherit their run's revert decision
 
   for (const op of ops) {
+    const key = keyOf(op); // every op, so the line cursor stays aligned
     if (op.type === "eq") {
       out.push(op.text);
       lastFromWorktree = false;
@@ -35,7 +40,7 @@ function buildWithoutActor(
     if (isTrivialLine(op.text)) {
       revert = blockRevert;
     } else {
-      const owner = op.type === "add" ? owned?.added[op.text] : owned?.removed[op.text];
+      const owner = op.type === "add" ? owned?.added[key!] : owned?.removed[key!];
       revert = owner === actor; // back out ONLY this actor's lines
       blockRevert = revert;
     }
@@ -104,7 +109,7 @@ export function planUndo(model: WorktreeModel, ownership: OwnershipFile, actor: 
       skippedBinary.push(file.path);
       continue;
     }
-    const built = buildWithoutActor(file.oldText, file.newText, ownership.files[file.path], actor);
+    const built = buildWithoutActor(file.path, file.oldText, file.newText, ownership.files[file.path], actor);
     if (built.reverted === 0) continue;
     files.push({ path: file.path, text: built.text, reverted: built.reverted });
     totalReverted += built.reverted;

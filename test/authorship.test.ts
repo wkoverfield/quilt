@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { Store } from "../src/state.js";
 import { reconcile } from "../src/engine.js";
 import { acquireClaims } from "../src/claims.js";
-import { initSymbols } from "../src/symbols.js";
+import { initSymbols, keyText, ownKey } from "../src/symbols.js";
 
 before(async () => {
   await initSymbols(); // prevention checks parse symbols to find the touched ones
@@ -28,6 +28,15 @@ function foldToObj(m: Map<string, Map<string, string>>): Record<string, Record<s
   const out: Record<string, Record<string, string>> = {};
   for (const [path, lines] of m) out[path] = Object.fromEntries(lines);
   return out;
+}
+
+/** The owner of a given line TEXT, searching symbol-qualified keys. Ownership is
+ * keyed by `symbol\0text` now, so tests look up by the text part. */
+function ownerOf(m: Map<string, string> | Record<string, string> | undefined, text: string): string | undefined {
+  if (!m) return undefined;
+  const entries = m instanceof Map ? [...m] : Object.entries(m);
+  for (const [k, v] of entries) if (keyText(k) === text) return v;
+  return undefined;
 }
 
 function newStore() {
@@ -157,7 +166,7 @@ test("ledger overrides inference in reconcile: a captured edit keeps its author 
     reconcile(s, "Y");
     const own = s.readOwnership();
     assert.equal(
-      own.files["m.js"]?.added["export const limit = 500;"],
+      ownerOf(own.files["m.js"]?.added, "export const limit = 500;"),
       "X",
       "the ledger keeps X as the author despite Y reconciling first",
     );
@@ -241,9 +250,9 @@ test("compaction folds the log into a checkpoint and truncates it — attributio
     assert.equal(readCheckpoint(s).count, 3, "checkpoint counts the folded events");
     // The whole point: the folded authorship is byte-for-byte the same afterward.
     assert.deepEqual(foldToObj(foldedAuthorship(s)), before);
-    assert.equal(foldedAuthorship(s).get("a.js")?.get("b"), "X");
-    assert.equal(foldedAuthorship(s).get("a.js")?.get("c"), "Y");
-    assert.equal(foldedAuthorship(s).get("b.js")?.get("z"), "X");
+    assert.equal(ownerOf(foldedAuthorship(s).get("a.js"), "b"), "X");
+    assert.equal(ownerOf(foldedAuthorship(s).get("a.js"), "c"), "Y");
+    assert.equal(ownerOf(foldedAuthorship(s).get("b.js"), "z"), "X");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -255,7 +264,7 @@ test("a post-checkpoint event overrides the checkpoint for the same line (log ta
     recordAuthorship(s, { actor: "X", path: "a.js", oldText: "", newText: "shared\n", whole: true });
     compactAuthorship(s); // "shared" -> X now lives in the checkpoint
     recordAuthorship(s, { actor: "Y", path: "a.js", oldText: "", newText: "shared\n", whole: true });
-    assert.equal(foldedAuthorship(s).get("a.js")?.get("shared"), "Y", "tail event wins over the checkpoint");
+    assert.equal(ownerOf(foldedAuthorship(s).get("a.js"), "shared"), "Y", "tail event wins over the checkpoint");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -269,6 +278,49 @@ test("seq stays monotonic across a compaction (not reset when the log truncates)
     compactAuthorship(s);
     const b = recordAuthorship(s, { actor: "Y", path: "a.js", oldText: "1\n", newText: "1\n2\n" });
     assert.equal(b.seq, 1, "seq continues from the compacted count, not back to 0");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("THE FIX: identical lines in two functions get distinct owners via reconcile — no collapse, no false conflict", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-dup-"));
+  const g = (a: string[]) => execFileSync("git", a, { cwd: dir });
+  g(["init", "-q"]); g(["config", "user.email", "t@t.io"]); g(["config", "user.name", "t"]); g(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(dir, "m.js"), "function foo() {\n  return 0;\n}\nfunction bar() {\n  return 0;\n}\n");
+  g(["add", "-A"]); g(["commit", "-qm", "i"]);
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    // X changes foo's body to `return null`, reconciles as X.
+    writeFileSync(join(dir, "m.js"), "function foo() {\n  return null;\n}\nfunction bar() {\n  return 0;\n}\n");
+    reconcile(s, "X");
+    // Y changes bar's body to the IDENTICAL line `return null`, reconciles as Y.
+    writeFileSync(join(dir, "m.js"), "function foo() {\n  return null;\n}\nfunction bar() {\n  return null;\n}\n");
+    reconcile(s, "Y");
+
+    const own = s.readOwnership();
+    const added = own.files["m.js"]!.added;
+    // Same text, two different symbols -> two distinct keys, one owner each.
+    assert.equal(added[ownKey("foo", "  return null;")], "X", "foo's line stays X's");
+    assert.equal(added[ownKey("bar", "  return null;")], "Y", "bar's identical line is Y's, not collapsed onto X");
+    // With text-only keying this would have been a false conflict. It isn't.
+    assert.equal(own.conflicts["m.js"], undefined, "no false conflict on the identical line");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("compaction prunes a removed line's ownership (the fold deletes on removedKeys)", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "m.js"), "export const a = 1;\n");
+    // X adds a second const, then it gets removed by a later edit.
+    applyAndRecordEdit(s, { actor: "X", path: "m.js", oldString: "export const a = 1;", newString: "export const a = 1;\nexport const b = 2;" });
+    assert.equal(ownerOf(foldedAuthorship(s).get("m.js"), "export const b = 2;"), "X", "b starts owned by X");
+    applyAndRecordEdit(s, { actor: "Y", path: "m.js", oldString: "export const a = 1;\nexport const b = 2;", newString: "export const a = 1;" });
+    // The removal drops b's ownership from the fold — no stale entry lingers.
+    assert.equal(ownerOf(foldedAuthorship(s).get("m.js"), "export const b = 2;"), undefined, "b's ownership pruned after removal");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -303,7 +355,7 @@ test("reconcile attribution survives compaction: the checkpoint feeds the ledger
     assert.equal(readAuthorship(s).length, 0);
     reconcile(s, "Y"); // Y reconciles first — inference alone would credit Y
     assert.equal(
-      s.readOwnership().files["m.js"]?.added["export const limit = 500;"],
+      ownerOf(s.readOwnership().files["m.js"]?.added, "export const limit = 500;"),
       "X",
       "checkpoint-fed ledger still overrides inference after compaction",
     );
