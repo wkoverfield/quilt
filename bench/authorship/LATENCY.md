@@ -1,15 +1,15 @@
-# Latency — does Quilt slow agents down? (2026-06-30)
+# Latency — does Quilt slow agents down? (2026-06-30, incl. batched git reads)
 
 Run: `node bench/authorship/latency.mjs`. Median ms over repeated runs.
 
-| operation | latency |
-|---|---|
-| raw fs write | ~0.03 ms |
-| `quilt_edit` (write + ledger append) | ~0.01 ms — **free** |
-| `reconcile`, 1 changed file | ~31 ms |
-| `reconcile`, 10 changed files | ~207 ms |
-| `reconcile`, 50 changed files | ~948 ms |
-| `reconcile`, 150 changed files | **~2.9 s** |
+| operation | before (per-file git) | after (batched) |
+|---|---|---|
+| raw fs write | ~0.03 ms | ~0.03 ms |
+| `quilt_edit` (write + ledger append) | ~0.01 ms — **free** | ~0.01 ms — **free** |
+| `reconcile`, 1 changed file | ~31 ms | ~38 ms |
+| `reconcile`, 10 changed files | ~207 ms | **~38 ms** |
+| `reconcile`, 50 changed files | ~948 ms | **~47 ms** |
+| `reconcile`, 150 changed files | **~2.9 s** | **~68 ms** |
 
 (For scale: a single LLM turn is ~1–10 s.)
 
@@ -17,23 +17,24 @@ Run: `node bench/authorship/latency.mjs`. Median ms over repeated runs.
 
 - **Capture is free.** Routing an edit through `quilt_edit` (the v0.3 path) adds no
   measurable latency vs a raw write. The new architecture costs nothing per edit.
-- **`reconcile` scales ~linearly at ~19 ms/changed-file**, and it runs on *every*
-  quilt command. Low-churn repos (≤10 changed files) are invisible (<200 ms next
-  to a multi-second LLM turn). But a high-churn repo (50–150+ changed files) pays
-  0.9–2.9 s **per command** — real drag that would slow an agent loop.
+- **`reconcile` is now near-flat in changed-file count.** It was ~19 ms/file
+  (O(N) subprocess spawns, 0.9–2.9 s on a churny 50–150-file repo). Batching the
+  HEAD reads dropped 150 files from ~2.9 s to ~68 ms (~43×). What's left is a
+  fixed ~38 ms floor (three git spawns per reconcile: `status`, `rev-parse`,
+  `cat-file --batch`) plus a tiny marginal per-file cost (worktree read + diff).
 
-## Cause & fix (tracked, not yet done)
+## Done
 
-`reconcile` calls `git` once per changed file (the HEAD blob read in
-`engine.ts#relevantPaths` / `headBlob`), inside the lock. That's O(N) subprocess
-spawns. Fixes, in order of leverage:
-1. **Batch the git reads** — one `git cat-file --batch` for all changed blobs
-   instead of N `git show` spawns → O(1) subprocess. Biggest win.
+1. **Batch the git reads** — DONE (2026-06-30). `git.ts#headBlobs` reads every
+   changed file's HEAD content in one `git cat-file --batch` instead of a `git
+   show` (plus a `rev-parse`) per file. `engine.ts` reconcile and `buildModel`
+   both route through it. This was the biggest win and it's landed.
+
+## Still tracked (not yet done)
+
 2. **Move read-only git I/O outside the lock** so concurrent agents don't
-   serialize behind each other's whole-repo scans.
-3. The authorship ledger doesn't fix this by itself (it still needs HEAD content
-   for the diff/prune), so this optimization is orthogonal to the v0.3 work — but
-   it's the thing to do before anyone runs Quilt on a big, churny repo.
-
-This is a perf optimization, not a correctness issue, so it's queued after the
-authorship-capture increments — but it's now measured and on the list.
+   serialize behind each other's whole-repo scans. Lower leverage now that the
+   whole scan is ~40–70 ms, but still worth it under heavy fan-out.
+3. The remaining fixed floor is three git spawns; could be trimmed further (e.g.
+   fold `rev-parse` into the batch), but ~40 ms next to a multi-second LLM turn is
+   already invisible.

@@ -20,10 +20,17 @@ export interface GitResult {
  * Run a git command. Quilt shells out to git for all repository operations so
  * that git remains the single source of truth (Principle 1: trust git).
  */
+/** spawnSync is set to `encoding: "buffer"`, which it would (wrongly) try to use
+ * to encode a string stdin — so coerce, letting callers pass a string or Buffer
+ * as the `input` type promises. */
+function toBufferInput(input: string | Buffer | undefined): Buffer | undefined {
+  return typeof input === "string" ? Buffer.from(input, "utf8") : input;
+}
+
 export function git(args: string[], opts: GitRunOptions): GitResult {
   const res = spawnSync("git", args, {
     cwd: opts.cwd,
-    input: opts.input,
+    input: toBufferInput(opts.input),
     encoding: "buffer",
     env: { ...process.env, ...opts.env },
     maxBuffer: 256 * 1024 * 1024,
@@ -46,7 +53,7 @@ export function git(args: string[], opts: GitRunOptions): GitResult {
 export function gitBytes(args: string[], opts: GitRunOptions): Buffer {
   const res = spawnSync("git", args, {
     cwd: opts.cwd,
-    input: opts.input,
+    input: toBufferInput(opts.input),
     encoding: "buffer",
     env: { ...process.env, ...opts.env },
     maxBuffer: 256 * 1024 * 1024,
@@ -99,6 +106,52 @@ export function headBlob(cwd: string, relPath: string): string | null {
   const res = git(["show", `HEAD:${relPath}`], { cwd, check: false });
   if (res.status !== 0) return null;
   return res.stdout;
+}
+
+/**
+ * Read many files' HEAD content in ONE `git cat-file --batch` instead of a
+ * subprocess per path — the reconcile hot path (see bench/authorship/LATENCY.md).
+ * Returns `path -> content` (utf8), or `null` for a path absent at HEAD (a new
+ * file) or that doesn't resolve to a blob. Order-correlated: cat-file emits one
+ * record per input line in order, so responses map back to `paths` by index.
+ * Parsed byte-wise off the raw buffer so blob sizes stay correct for any bytes.
+ */
+export function headBlobs(cwd: string, paths: string[]): Map<string, string | null> {
+  const result = new Map<string, string | null>();
+  if (paths.length === 0) return result;
+  const sha = headSha(cwd);
+  if (!sha) {
+    for (const p of paths) result.set(p, null); // unborn branch: nothing at HEAD
+    return result;
+  }
+  const input = paths.map((p) => `HEAD:${p}`).join("\n") + "\n";
+  const out = gitBytes(["cat-file", "--batch"], { cwd, input });
+  let off = 0;
+  for (const p of paths) {
+    const nl = out.indexOf(0x0a, off); // end of this record's header line
+    if (nl === -1) {
+      result.set(p, null); // truncated/short output — treat as absent
+      continue;
+    }
+    const header = out.toString("utf8", off, nl);
+    off = nl + 1;
+    const tokens = header.split(" ");
+    // Missing object: "<input> missing" (the input path may contain spaces, but
+    // the final token is always "missing"). Found blob: "<oid> blob <size>".
+    if (tokens[tokens.length - 1] === "missing" || tokens[tokens.length - 2] !== "blob") {
+      result.set(p, null);
+      if (tokens[tokens.length - 1] !== "missing") {
+        // A non-blob (e.g. a tree) still has <size> bytes of body to skip over.
+        const size = Number(tokens[tokens.length - 1]);
+        if (Number.isFinite(size)) off += size + 1;
+      }
+      continue;
+    }
+    const size = Number(tokens[tokens.length - 1]);
+    result.set(p, out.toString("utf8", off, off + size));
+    off += size + 1; // skip the body and its trailing LF
+  }
+  return result;
 }
 
 /**
