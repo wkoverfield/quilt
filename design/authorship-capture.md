@@ -65,22 +65,31 @@ file, no daemon), Git stays truth, Quilt calls no LLM (intent is the agent's own
 
 ## Implementation plan (increments)
 
-1. **Ledger + capture** — `src/authorship.ts` (append/read), `quilt_edit` /
-   `quilt_write` MCP tools, `quilt record-edit` CLI for the optional hook. Tests:
-   events recorded with correct payload-derived attribution.
-2. **Replay in reconcile** — attribute from the ledger positionally; inference
-   stays as the fallback floor. Re-run the eval harness against the *real* impl.
-3. **Prevention** — preHash + claims pre-write check; deny-with-intent.
-4. **Hook (optional)** — Claude Code PostToolUse adapter via `record-edit`.
-5. **Migrate / reconcile-replay becomes the default**, content-key path demoted to
-   floor; update docs.
+1. **Ledger + capture** — DONE. `src/authorship.ts` (append/read), `quilt_edit` /
+   `quilt_write` MCP tools. Events recorded with payload-derived attribution.
+2. **Replay in reconcile** — DONE. Reconcile folds the ledger and attributes each
+   captured line to its recorded author; inference stays as the fallback floor.
+3. **Prevention** — DONE. Claims pre-write check; deny-with-intent, before any
+   bytes change.
+4. **Native-edit hooks** — DONE. A Pre/Post Claude Code hook pair on the built-in
+   Edit/Write/MultiEdit tools, so capture + prevention work with zero protocol
+   (the MCP tools stay the fallback). `quilt setup` installs them.
+5. **Ledger-replay is the default; content-key inference is the floor** — DONE.
+   The reconcile overlay is authoritative for every captured line; inference only
+   decides lines the ledger never captured (e.g. a raw bash/sed write). Plus **log
+   compaction**: the append-only log folds into a checkpoint (`authorship.checkpoint.json`)
+   once it passes a threshold and truncates, so reconcile reads the checkpoint plus
+   a short tail instead of all of history. The checkpoint is written atomically
+   before the truncate, and the fold is idempotent, so a crash in between re-folds
+   rather than losing authorship.
 
 ## Deferred / caveats
 
 - Coverage is settled for Claude fleets; still worth checking Codex and agents
   *explicitly* told to use shell.
-- Log compaction (checkpoint + truncate) for long-lived repos — the one new moving
-  part the append-only model needs.
+- Positional keying (anchor + postHash) for identical lines across functions —
+  still latest-by-text today; the duplicate-one-liner collapse is the known edge.
+- Real Claude-Code live run of the hook + a 4th eval path in `bench/authorship/`.
 - B-style run-boundary capture kept on the shelf as a fallback for harnesses with
   no capturable edit tool.
 - This largely subsumes the earlier "Tier 1–3 hardening" (the commit-time gate

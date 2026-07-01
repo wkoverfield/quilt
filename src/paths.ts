@@ -60,6 +60,11 @@ export class QuiltPaths {
   get authorshipLog(): string {
     return join(this.dir, "authorship.log");
   }
+  /** Compacted fold of old authorship events (line-ownership), so the log stays
+   * bounded — reconcile reads this checkpoint plus the un-compacted log tail. */
+  get authorshipCheckpoint(): string {
+    return join(this.dir, "authorship.checkpoint.json");
+  }
   /** Directory for pre→post hook snapshots (the pre-edit file content). */
   get hookSnapshotsDir(): string {
     return join(this.dir, "hooks");
