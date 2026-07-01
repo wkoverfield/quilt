@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # npm runtime + dev dependencies. Grouped into one PR per week so a small
+  # dependency set does not turn into per-package PR noise.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm:
+        patterns:
+          - "*"
+
+  # GitHub Actions used by the CI workflow, so pinned action versions stay current.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
