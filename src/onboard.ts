@@ -4,11 +4,16 @@
 // Everything here is idempotent and non-destructive: existing config is parsed
 // and merged, never clobbered. If a file can't be safely merged (e.g. malformed
 // JSON), we leave it alone and tell the user what to add by hand.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 /** The MCP server entry every agent in the fleet shares. */
 export const QUILT_SERVER = { command: "quilt", args: ["mcp"] } as const;
+
+/** The native Edit/Write/MultiEdit tools the capture hooks intercept. */
+export const HOOK_MATCHER = "Edit|Write|MultiEdit";
+export const HOOK_PRE_COMMAND = "quilt hook-pre";
+export const HOOK_POST_COMMAND = "quilt hook-post";
 
 /** Marker so the CLAUDE.md snippet is added at most once. */
 export const COORDINATION_MARKER = "<!-- quilt:coordination -->";
@@ -41,20 +46,25 @@ You share this checkout with other agents. Coordinate through Quilt:
 export interface Detected {
   mcpJsonPath: string;
   claudeMdPath: string;
+  settingsPath: string;
   hasMcpJson: boolean;
   hasClaudeMd: boolean;
+  hasSettings: boolean;
   /** Signals a Claude Code / Cursor / generic agent setup is in use. */
   orchestrator: string | null;
   quiltWired: boolean;
   coordinationPresent: boolean;
+  hooksWired: boolean;
 }
 
 /** Inspect a repo root for orchestrator config and whether Quilt is wired in. */
 export function detect(root: string): Detected {
   const mcpJsonPath = join(root, ".mcp.json");
   const claudeMdPath = join(root, "CLAUDE.md");
+  const settingsPath = join(root, ".claude", "settings.json");
   const hasMcpJson = existsSync(mcpJsonPath);
   const hasClaudeMd = existsSync(claudeMdPath);
+  const hasSettings = existsSync(settingsPath);
   const hasClaudeDir = existsSync(join(root, ".claude"));
   const hasCursorDir = existsSync(join(root, ".cursor"));
   const hasAgentsMd = existsSync(join(root, "AGENTS.md"));
@@ -71,15 +81,19 @@ export function detect(root: string): Detected {
   const quiltWired = hasMcpJson && mcpServersHasQuilt(safeRead(mcpJsonPath));
   const coordinationPresent =
     hasClaudeMd && (safeRead(claudeMdPath) ?? "").includes(COORDINATION_MARKER);
+  const hooksWired = hasSettings && settingsHasQuiltHooks(safeRead(settingsPath));
 
   return {
     mcpJsonPath,
     claudeMdPath,
+    settingsPath,
     hasMcpJson,
     hasClaudeMd,
+    hasSettings,
     orchestrator,
     quiltWired,
     coordinationPresent,
+    hooksWired,
   };
 }
 
@@ -103,6 +117,39 @@ function mcpServersHasQuilt(content: string | null): boolean {
   } catch {
     return false;
   }
+}
+
+/** Does a hook event's array already contain a group running `command`? */
+function hookGroupHas(list: unknown, command: string): boolean {
+  if (!Array.isArray(list)) return false;
+  for (const group of list) {
+    const hooks = isPlainObject(group) ? group.hooks : undefined;
+    if (Array.isArray(hooks)) {
+      for (const h of hooks) if (isPlainObject(h) && h.command === command) return true;
+    }
+  }
+  return false;
+}
+
+function settingsHasQuiltHooks(content: string | null): boolean {
+  if (!content) return false;
+  try {
+    const parsed = JSON.parse(content);
+    const hooks = isPlainObject(parsed) ? parsed.hooks : undefined;
+    if (!isPlainObject(hooks)) return false;
+    return hookGroupHas(hooks.PreToolUse, HOOK_PRE_COMMAND) && hookGroupHas(hooks.PostToolUse, HOOK_POST_COMMAND);
+  } catch {
+    return false;
+  }
+}
+
+/** Ensure a hook event array holds a group running `command`; returns true if it added one. */
+function ensureHookGroup(hooks: Record<string, unknown>, event: string, command: string): boolean {
+  if (hookGroupHas(hooks[event], command)) return false;
+  const arr = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
+  arr.push({ matcher: HOOK_MATCHER, hooks: [{ type: "command", command }] });
+  hooks[event] = arr;
+  return true;
 }
 
 export interface MergeResult {
@@ -144,6 +191,43 @@ export function mergeMcpServers(existing: string | null): MergeResult {
   if (map.quilt) return { content: existing, changed: false };
   map.quilt = { ...QUILT_SERVER };
   obj.mcpServers = map;
+  return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };
+}
+
+/**
+ * Add the Quilt capture hooks (PreToolUse + PostToolUse on Edit/Write/MultiEdit)
+ * to a `.claude/settings.json`. Creates the content if absent, no-ops if both
+ * hooks are already present, and refuses to touch a file that isn't valid JSON
+ * or whose `hooks` shape can't be safely merged (returns an error, unchanged).
+ */
+export function mergeHookSettings(existing: string | null): MergeResult {
+  let parsed: unknown = {};
+  if (existing !== null && existing.trim() !== "") {
+    try {
+      parsed = JSON.parse(existing);
+    } catch {
+      return { content: existing, changed: false, error: "not valid JSON" };
+    }
+    if (!isPlainObject(parsed)) {
+      return { content: existing, changed: false, error: "not a JSON object" };
+    }
+  }
+  const obj = parsed as Record<string, unknown>;
+  const hooks = obj.hooks;
+  if (hooks !== undefined && !isPlainObject(hooks)) {
+    return { content: existing ?? "", changed: false, error: "hooks is not an object" };
+  }
+  const hooksObj = (hooks as Record<string, unknown> | undefined) ?? {};
+  // A pre-existing event value that isn't an array can't be merged safely.
+  for (const event of ["PreToolUse", "PostToolUse"]) {
+    if (hooksObj[event] !== undefined && !Array.isArray(hooksObj[event])) {
+      return { content: existing ?? "", changed: false, error: `hooks.${event} is not an array` };
+    }
+  }
+  let changed = ensureHookGroup(hooksObj, "PreToolUse", HOOK_PRE_COMMAND);
+  changed = ensureHookGroup(hooksObj, "PostToolUse", HOOK_POST_COMMAND) || changed;
+  if (!changed) return { content: existing ?? "", changed: false };
+  obj.hooks = hooksObj;
   return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };
 }
 
@@ -206,6 +290,27 @@ export function planSetup(root: string): SetupStep[] {
     });
   }
 
+  const settingsExisting = d.hasSettings ? safeRead(d.settingsPath) : null;
+  const hooks = mergeHookSettings(settingsExisting);
+  if (hooks.error) {
+    steps.push({
+      file: ".claude/settings.json",
+      action: "skip",
+      detail: `left untouched (${hooks.error}) — add the quilt hooks by hand`,
+      path: d.settingsPath,
+    });
+  } else if (!hooks.changed) {
+    steps.push({ file: ".claude/settings.json", action: "skip", detail: "capture hooks already present", path: d.settingsPath });
+  } else {
+    steps.push({
+      file: ".claude/settings.json",
+      action: d.hasSettings ? "update" : "create",
+      detail: d.hasSettings ? "add the Edit/Write capture hooks" : "create with the Edit/Write capture hooks",
+      content: hooks.content,
+      path: d.settingsPath,
+    });
+  }
+
   return steps;
 }
 
@@ -214,6 +319,7 @@ export function applySetup(steps: SetupStep[]): SetupStep[] {
   const written: SetupStep[] = [];
   for (const step of steps) {
     if (step.action === "skip" || step.content === undefined) continue;
+    mkdirSync(dirname(step.path), { recursive: true }); // .claude/ may not exist yet
     writeFileSync(step.path, step.content);
     written.push(step);
   }

@@ -19,9 +19,34 @@ quilt setup --dry-run  # preview the changes first
 ```
 
 It detects your orchestrator (Claude Code, Cursor, …), adds the `quilt` server to
-`.mcp.json` (merging, never clobbering), and appends the coordination snippet to
-`CLAUDE.md`. It's idempotent — safe to re-run. The manual steps below are what it
-does, if you'd rather wire it by hand.
+`.mcp.json` (merging, never clobbering), appends the coordination snippet to
+`CLAUDE.md`, and installs the capture hooks into `.claude/settings.json`. It's
+idempotent — safe to re-run. The manual steps below are what it does, if you'd
+rather wire it by hand.
+
+## Two ways to capture — hooks and MCP
+
+Quilt captures who wrote which lines through either path, and you can use both:
+
+- **Hooks (zero protocol).** On Claude Code, `quilt setup` installs a
+  `PreToolUse`/`PostToolUse` hook pair on the native `Edit`, `Write`, and
+  `MultiEdit` tools. Agents edit the way they already do — no new tools, no
+  instructions to follow — and Quilt records the author of each change and denies
+  a write into code another agent is mid-change on. Each agent just needs its own
+  id in `QUILT_ACTOR` (see below). This is the seamless path.
+- **MCP (explicit).** The `quilt_edit` / `quilt_write` tools, and the
+  `claim` → `commit_mine` loop below, work anywhere an agent can reach an MCP
+  server — Codex, Cursor, Aider, your own harness — including runtimes that have
+  no hook system. Reach for this when hooks aren't available.
+
+### Giving each agent an id for the hooks
+
+The hooks attribute an edit to `QUILT_ACTOR`, read from the environment of the
+process running the tool. Give each subagent a distinct, stable id — its role or
+task name — in that variable (a session id can't tell two subagents in one
+process apart, which is why the id is explicit). If `QUILT_ACTOR` is unset the
+hooks stay out of the way: they capture nothing rather than guess. The MCP tools
+take the id per call instead, so a single shared `quilt mcp` server needs no env.
 
 ## 1. Add the shared server
 

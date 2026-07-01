@@ -1,16 +1,19 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   mergeMcpServers,
+  mergeHookSettings,
   appendCoordination,
   detect,
   planSetup,
   COORDINATION_MARKER,
+  HOOK_PRE_COMMAND,
+  HOOK_POST_COMMAND,
 } from "../src/onboard.js";
 
 const CLI = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
@@ -104,6 +107,44 @@ test("detect reports the orchestrator and wiring state", () => {
   }
 });
 
+// --- mergeHookSettings ---
+
+test("mergeHookSettings creates settings with both capture hooks", () => {
+  const r = mergeHookSettings(null);
+  assert.equal(r.changed, true);
+  const parsed = JSON.parse(r.content);
+  assert.equal(parsed.hooks.PreToolUse[0].hooks[0].command, HOOK_PRE_COMMAND);
+  assert.equal(parsed.hooks.PreToolUse[0].matcher, "Edit|Write|MultiEdit");
+  assert.equal(parsed.hooks.PostToolUse[0].hooks[0].command, HOOK_POST_COMMAND);
+});
+
+test("mergeHookSettings preserves existing unrelated settings and hooks", () => {
+  const existing = JSON.stringify({
+    permissions: { allow: ["Bash"] },
+    hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "audit.sh" }] }] },
+  });
+  const r = mergeHookSettings(existing);
+  assert.equal(r.changed, true);
+  const parsed = JSON.parse(r.content);
+  assert.deepEqual(parsed.permissions.allow, ["Bash"], "unrelated settings kept");
+  assert.equal(parsed.hooks.PreToolUse.length, 2, "existing Bash hook kept, quilt appended");
+  assert.ok(parsed.hooks.PreToolUse.some((g: { hooks: { command: string }[] }) => g.hooks[0].command === HOOK_PRE_COMMAND));
+});
+
+test("mergeHookSettings is a no-op when the quilt hooks are already present", () => {
+  const first = mergeHookSettings(null).content;
+  const r = mergeHookSettings(first);
+  assert.equal(r.changed, false);
+});
+
+test("mergeHookSettings refuses malformed JSON and a non-array hook event", () => {
+  assert.equal(mergeHookSettings("{ not json").error, "not valid JSON");
+  const bad = JSON.stringify({ hooks: { PreToolUse: "oops" } });
+  const r = mergeHookSettings(bad);
+  assert.equal(r.changed, false);
+  assert.match(r.error!, /PreToolUse is not an array/);
+});
+
 // --- planSetup / end-to-end CLI ---
 
 test("planSetup skips files that are already wired", () => {
@@ -114,6 +155,8 @@ test("planSetup skips files that are already wired", () => {
       JSON.stringify({ mcpServers: { quilt: { command: "quilt", args: ["mcp"] } } }),
     );
     writeFileSync(join(dir, "CLAUDE.md"), `# rules\n\n${COORDINATION_MARKER}\nstuff\n`);
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "settings.json"), mergeHookSettings(null).content);
     const steps = planSetup(dir);
     assert.ok(steps.every((s) => s.action === "skip"), "everything already wired");
   } finally {
@@ -130,6 +173,10 @@ test("quilt setup wires a fresh repo and is idempotent", () => {
     assert.ok(existsSync(join(dir, ".quilt")), "Quilt initialized");
     assert.ok(JSON.parse(readFileSync(join(dir, ".mcp.json"), "utf8")).mcpServers.quilt);
     assert.ok(readFileSync(join(dir, "CLAUDE.md"), "utf8").includes(COORDINATION_MARKER));
+    const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
+    assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, HOOK_PRE_COMMAND);
+    assert.equal(settings.hooks.PostToolUse[0].hooks[0].command, HOOK_POST_COMMAND);
+    assert.equal(detect(dir).hooksWired, true);
 
     const second = run();
     assert.equal(second.status, 0, second.stderr);
