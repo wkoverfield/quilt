@@ -1,6 +1,6 @@
 {
   "name": "@quilt-dev/cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Actor-owned patches for Git. Same repo. Many agents. Clean commits.",
   "type": "module",
   "bin": {
