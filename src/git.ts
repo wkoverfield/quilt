@@ -174,7 +174,9 @@ export function changedPaths(cwd: string): string[] {
     // Format: XY<space>path  (XY = two status chars)
     const status = entry.slice(0, 2);
     let path = entry.slice(3);
-    // Renames carry "old -> new"; porcelain -z puts old path in the next field.
+    // Defensive: `--no-renames` above makes git emit a rename as delete+add, so
+    // `R` shouldn't appear — but if it ever does, porcelain -z puts the old path
+    // in the next NUL field, so consume it rather than treat it as a real path.
     if (status[0] === "R" || status[1] === "R") {
       i++; // consume the old-path field
     }
@@ -182,15 +184,6 @@ export function changedPaths(cwd: string): string[] {
     if (path && path !== ".quilt" && !path.startsWith(".quilt/")) out.push(path);
   }
   return out;
-}
-
-/** True if the path is tracked by git at HEAD or the index. */
-export function isTracked(cwd: string, relPath: string): boolean {
-  const res = git(["ls-files", "--error-unmatch", "--", relPath], {
-    cwd,
-    check: false,
-  });
-  return res.status === 0;
 }
 
 /**

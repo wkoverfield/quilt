@@ -181,7 +181,7 @@ function foldEvents(byPath: Map<string, Map<string, string>>, events: Authorship
 export interface AuthorshipCheckpoint {
   /** total events folded into this checkpoint (keeps `seq` monotonic post-truncate). */
   count: number;
-  /** the folded `path -> lineText -> actor`, latest-author-wins. */
+  /** the folded `path -> ownKey(symbol\0text) -> actor`, latest-author-wins. */
   ownership: Record<string, Record<string, string>>;
 }
 

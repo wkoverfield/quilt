@@ -235,7 +235,9 @@ its own `actor` per call instead, so there's no single identity to clobber (see
 [docs/orchestrators.md](docs/orchestrators.md)). `quilt setup` wires this for you.
 
 Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
-`preview_mine`, `commit_mine`, `claim`, `release`. The intended loop:
+`preview_mine`, `commit_mine`, `claim`, `release`, `escalate`, `resolve`, and
+`quilt_edit` / `quilt_write` (the capture-and-prevent edit tools — the fallback
+for runtimes without the native-edit hooks). The intended loop:
 
 ```txt
 # fleet (per-call actor — no session needed):
@@ -364,7 +366,10 @@ delta before another actor's.
   clobbers.json      # records of overwritten work, preserved for restore
   snapshots/         # preserved pre-clobber file content
   watcher.pid        # pidfile for a running `quilt watch`
-  ledger.jsonl       # append-only event log
+  ledger.jsonl       # append-only event log (sessions, claims, clobbers, …)
+  authorship.log             # captured edits — who authored which lines (the ledger)
+  authorship.checkpoint.json # compacted fold of old authorship events
+  hooks/             # pre→post hook snapshots (pre-edit file content)
 ```
 
 `.quilt/` is git-ignored automatically.

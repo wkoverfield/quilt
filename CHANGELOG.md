@@ -4,25 +4,30 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-06-30
 
-### Changed
+The capture release: agents edit with their native tools and Quilt records who
+wrote which lines — no protocol to follow — with attribution that survives
+concurrent edits and stays correct even for identical lines in different
+functions.
 
-- **Ownership is now keyed by symbol scope + line text, not bare text.** Two
-  identical lines in different functions (e.g. `  return null;`) no longer
-  collapse to one owner — each gets its own attribution, closing a class of false
-  conflicts and misattributions. Applies across reconcile, commit, undo, the
-  fleet view, and the capture ledger. A captured removal now drops exactly that
-  line's ownership, so log compaction prunes removed lines instead of retaining
-  stale entries.
+### Added
 
-### Performance
-
-- **`reconcile` no longer scales with changed-file count.** It read each changed
-  file's HEAD content in a separate `git` subprocess (~19 ms/file — up to ~2.9 s on
-  a churny 150-file repo). It now batches all those reads into one `git cat-file
-  --batch`, so a 150-file reconcile drops from ~2.9 s to ~70 ms (~43×). `reconcile`
-  runs on every Quilt command, so this is a whole-loop speedup on large repos.
+- **Native-edit capture hooks** — a `PreToolUse`/`PostToolUse` hook pair
+  (`quilt hook-pre` / `quilt hook-post`) that gives agents authorship capture and
+  collision prevention on Claude Code's built-in `Edit`, `Write`, and `MultiEdit`
+  tools with no protocol to follow: agents edit normally and Quilt records the
+  author of each change, denying a write into code another agent holds. Each agent
+  identifies itself with `QUILT_ACTOR`; without it the hooks capture nothing rather
+  than misattribute. The `quilt_edit` / `quilt_write` MCP tools remain the fallback
+  for runtimes without hooks.
+  - Capture is race-free: the pre hook snapshots the file's pre-edit content
+    (keyed per actor+path) and the post hook reconstructs the result from the edit
+    payload in memory, so a sibling's concurrent write to the same file can never
+    leak into another agent's recorded delta.
+- **`quilt setup` now also installs the capture hooks** into `.claude/settings.json`
+  (in addition to the `.mcp.json` server and the `CLAUDE.md` snippet it already
+  wrote) — same idempotent, non-clobbering merge.
 
 ### Changed
 
@@ -31,30 +36,26 @@ All notable changes to Quilt are documented here. The format is based on
   its recorded author and only falls back to inference for lines the ledger never
   saw (e.g. a raw `bash`/`sed` write) — so who ran `reconcile` first no longer
   affects attribution for any captured edit.
+- **Ownership is now keyed by symbol scope + line text, not bare text.** Two
+  identical lines in different functions (e.g. `  return null;`) no longer collapse
+  to one owner — each gets its own attribution, closing a class of false conflicts
+  and misattributions. Applies across reconcile, commit, undo, the fleet view, and
+  the capture ledger.
 - **Log compaction** — the append-only authorship log folds into a checkpoint and
   truncates once it grows past a threshold, so reconcile reads the checkpoint plus
-  a short tail instead of re-reading all of history. The checkpoint is written
-  atomically before the log is truncated, and the fold is idempotent, so an
-  interrupted compaction re-folds rather than losing authorship.
+  a short tail instead of re-reading all of history. A captured removal drops
+  exactly that line's ownership, so compaction prunes removed lines rather than
+  retaining stale entries. The checkpoint is written atomically before the log is
+  truncated, and the fold is idempotent, so an interrupted compaction re-folds
+  rather than losing authorship.
 
-### Added
+### Performance
 
-- **`quilt setup` now also installs the capture hooks** into `.claude/settings.json`
-  (in addition to the `.mcp.json` server and the `CLAUDE.md` snippet it already
-  wrote) — same idempotent, non-clobbering merge.
-- **Native-edit capture hooks** — a `PreToolUse`/`PostToolUse` hook pair
-  (`quilt hook-pre` / `quilt hook-post`) that gives agents authorship capture and
-  collision prevention on Claude Code's built-in `Edit`, `Write`, and `MultiEdit`
-  tools with no protocol to follow: agents edit normally and Quilt records the
-  author of each change, denying a write into code another agent holds. `quilt
-  setup` now installs the hooks into `.claude/settings.json` (merging, never
-  clobbering). Each agent identifies itself with `QUILT_ACTOR`; without it the
-  hooks capture nothing rather than misattribute. The `quilt_edit` / `quilt_write`
-  MCP tools remain the fallback for runtimes without hooks.
-  - Capture is race-free: the pre hook snapshots the file's pre-edit content
-    (keyed per actor+path) and the post hook reconstructs the result from the edit
-    payload in memory, so a sibling's concurrent write to the same file can never
-    leak into another agent's recorded delta.
+- **`reconcile` no longer scales with changed-file count.** It read each changed
+  file's HEAD content in a separate `git` subprocess (~19 ms/file — up to ~2.9 s on
+  a churny 150-file repo). It now batches all those reads into one `git cat-file
+  --batch`, so a 150-file reconcile drops from ~2.9 s to ~70 ms (~43×). `reconcile`
+  runs on every Quilt command, so this is a whole-loop speedup on large repos.
 
 ## [0.2.0] - 2026-06-30
 
