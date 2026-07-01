@@ -8,6 +8,9 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **`quilt setup` now also installs the capture hooks** into `.claude/settings.json`
+  (in addition to the `.mcp.json` server and the `CLAUDE.md` snippet it already
+  wrote) — same idempotent, non-clobbering merge.
 - **Native-edit capture hooks** — a `PreToolUse`/`PostToolUse` hook pair
   (`quilt hook-pre` / `quilt hook-post`) that gives agents authorship capture and
   collision prevention on Claude Code's built-in `Edit`, `Write`, and `MultiEdit`

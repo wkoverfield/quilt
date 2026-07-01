@@ -27,9 +27,10 @@ export interface EditDenied {
  * Resolve a repo-relative path to an absolute one, refusing anything that escapes
  * the repo (`../` traversal, absolute paths) or is a symlink — `path` is actor-
  * controlled, so a write must never land outside the working tree. Mirrors the
- * guard claims.ts/engine.ts apply to reads. Returns null if disallowed.
+ * guard claims.ts/engine.ts apply to reads. Returns null if disallowed. Shared
+ * with the native-edit hooks (hooks.ts) so both apply the identical guard.
  */
-function safeAbs(repoRoot: string, relPath: string): string | null {
+export function safeAbs(repoRoot: string, relPath: string): string | null {
   const root = resolve(repoRoot);
   const abs = resolve(root, relPath);
   if (abs !== root && !abs.startsWith(root + sep)) return null;

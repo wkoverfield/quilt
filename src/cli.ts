@@ -796,6 +796,9 @@ program
       if (store && input && actor) {
         const decision = runHookPre(store, actor, input);
         if (decision.deny) {
+          // Claude Code's PreToolUse deny format: this JSON on stdout (exit 0)
+          // blocks the tool call and shows `permissionDecisionReason` to the
+          // agent. Allowing is the default — emit nothing.
           process.stdout.write(
             JSON.stringify({
               hookSpecificOutput: {

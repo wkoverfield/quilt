@@ -222,13 +222,17 @@ Coding agents drive Quilt directly over MCP. Each agent runs its own server, so
 attribution is precise per-agent.
 
 ```jsonc
-// .mcp.json (or your agent's MCP config)
+// .mcp.json — single-agent form: one server pinned to one identity.
 {
   "mcpServers": {
     "quilt": { "command": "quilt", "args": ["mcp"], "env": { "QUILT_ACTOR": "codex-auth" } }
   }
 }
 ```
+
+For a **fleet**, drop the `env` and run one shared server — each subagent passes
+its own `actor` per call instead, so there's no single identity to clobber (see
+[docs/orchestrators.md](docs/orchestrators.md)). `quilt setup` wires this for you.
 
 Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
 `preview_mine`, `commit_mine`, `claim`, `release`. The intended loop:

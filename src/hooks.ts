@@ -16,9 +16,8 @@
 // tool calls sequentially (Pre → write → Post), and two agents editing the same
 // file get different keys, so neither reads the other's snapshot.
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
-import { anchorForEdit, checkHeldEdit, checkHeldWrite, recordAuthorship, type EditDenied } from "./authorship.js";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { anchorForEdit, checkHeldEdit, checkHeldWrite, recordAuthorship, safeAbs, type EditDenied } from "./authorship.js";
 import type { Store } from "./state.js";
 
 /** One old→new replacement (Edit = one; MultiEdit = many). */
@@ -80,23 +79,8 @@ export function parseHookInput(raw: unknown): HookInput | null {
   return { tool, path, edits, content };
 }
 
-/** Guard an actor-controlled path against escaping the repo or being a symlink.
- * path.resolve is purely lexical, so a repo-internal symlink would otherwise let
- * readBefore follow it to an out-of-repo target and capture its content — mirror
- * the lstat guard authorship.ts applies. */
-function safeAbs(store: Store, path: string): string | null {
-  const root = resolve(store.paths.repoRoot);
-  const abs = resolve(root, path);
-  if (abs !== root && !abs.startsWith(root + sep)) return null;
-  try {
-    if (lstatSync(abs).isSymbolicLink()) return null;
-  } catch {
-    /* file doesn't exist yet — fine for a create */
-  }
-  return abs;
-}
-
 function snapshotKey(actor: string, path: string): string {
+  // 128 bits of sha256 — ample to avoid collisions for a transient scratch file.
   return createHash("sha256").update(`${actor}\0${path}`).digest("hex").slice(0, 32);
 }
 
@@ -123,8 +107,8 @@ export interface HookPreDecision {
  */
 export function runHookPre(store: Store, actor: string, input: HookInput): HookPreDecision {
   if (!input.path) return { deny: false };
-  const abs = safeAbs(store, input.path);
-  if (!abs) return { deny: false }; // outside the repo — not Quilt's to police
+  const abs = safeAbs(store.paths.repoRoot, input.path);
+  if (!abs) return { deny: false }; // outside the repo or a symlink — not Quilt's to police
   const before = readBefore(abs);
 
   let denied: EditDenied | null = null;
@@ -163,9 +147,12 @@ export function runHookPre(store: Store, actor: string, input: HookInput): HookP
 
 /** Replay the edit payload against the pre-image IN MEMORY, mirroring what the
  * native tool wrote — the first occurrence of each old_string, applied in order.
- * Reconstructing `after` this way (rather than re-reading the written file) is
- * what makes capture race-free: a sibling's concurrent write to the same file
- * can't leak into this actor's recorded delta. */
+ * This matches Claude Code's own Edit/MultiEdit semantics (first occurrence, and
+ * a non-unique old_string is rejected before the hook fires), so the location we
+ * find here is the one the tool actually changed. Reconstructing `after` this way
+ * (rather than re-reading the written file) is what makes capture race-free: a
+ * sibling's concurrent write to the same file can't leak into this actor's
+ * recorded delta. */
 function replayEdits(before: string, edits: HookEdit[]): string {
   let after = before;
   for (const e of edits) {
@@ -184,7 +171,7 @@ function replayEdits(before: string, edits: HookEdit[]): string {
  */
 export function runHookPost(store: Store, actor: string, input: HookInput): void {
   if (!input.path) return;
-  if (!safeAbs(store, input.path)) return;
+  if (!safeAbs(store.paths.repoRoot, input.path)) return;
   const snap = snapshotPath(store, actor, input.path);
   if (!existsSync(snap)) return; // nothing captured for this call
   const before = readFileSync(snap, "utf8");
