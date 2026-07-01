@@ -8,9 +8,19 @@
 quilt commit --mine
 ```
 
-![Two coding agents share one checkout: they claim different functions without contending, one gets a heads-up that something it depends on is changing, and each commits only its own work.](examples/demo.gif)
+You can run ~3 coding agents on one repo before they start clobbering each other —
+two edit the same file, one silently overwrites the other, and their commits
+tangle into one blob you can't attribute. The usual fix is *"run fewer."* Quilt
+lifts that ceiling: the agents share one checkout, and it keeps attribution
+clean, prevents collisions, and gives each agent its own clean commit.
 
-Same edits, two agents, one repo. Plain git vs Quilt:
+![Seven agents fan out on one repo. Without Quilt, their work collapses into one tangled commit and a collision silently overwrites an agent's change. With Quilt, each agent lands a clean, correctly-attributed commit and the collision is prevented — no work lost.](examples/fleet.gif)
+
+Run it yourself: `./examples/fleet.sh` — nothing faked, it drives the real
+machinery ([see it in 20 seconds](#see-it-in-20-seconds)).
+
+Up close, with two agents claiming different functions in one file — plain git
+vs Quilt:
 
 ![Without Quilt, the first agent's commit absorbs the other's work and the history credits one author; with Quilt, each change is committed by the agent that made it.](examples/contrast.gif)
 
@@ -32,13 +42,15 @@ ordinary Git commit.
 ```bash
 git clone https://github.com/wkoverfield/quilt && cd quilt
 npm install && npm run build
-./examples/demo.sh
+./examples/fleet.sh    # 7 agents, one repo: plain git vs Quilt, head to head
+./examples/demo.sh     # the same, up close, with two agents
 ```
 
-Two agents share one checkout, claim different functions in the same file
-without contending, one gets a heads-up that a function it depends on is
-changing, and each lands only its own work as a clean, correctly-attributed
-commit.
+`fleet.sh` fans seven agents out on one checkout and runs it both ways: without
+Quilt their work collapses into a single tangled commit (and a collision
+silently overwrites an agent's change); with Quilt each agent lands a clean,
+correctly-attributed commit and the collision is prevented. `demo.sh` walks the
+same mechanic with two agents claiming different functions in one file.
 
 ---
 
