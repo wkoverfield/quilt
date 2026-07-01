@@ -9,3 +9,7 @@ examples/contrast-with.gif
 
 # Quilt's own local state (also self-ignored via .quilt/.gitignore)
 .quilt/
+
+# Local artifacts from dogfooding `quilt setup` on this repo — keep out of the public tree
+.mcp.json
+.claude/
