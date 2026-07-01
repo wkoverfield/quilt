@@ -35,8 +35,7 @@ to head:
 
 ![Seven agents fan out on one repo. Without Quilt, their work collapses into one tangled commit and a collision silently overwrites an agent's change. With Quilt, each agent lands a clean, correctly-attributed commit and the collision is prevented.](examples/fleet.gif)
 
-That is `./examples/fleet.sh`. It drives the real machinery, nothing faked; run it
-yourself.
+That is `./examples/fleet.sh`. It uses the quilt system, and you can also run it yourself.
 
 ## What it does
 
