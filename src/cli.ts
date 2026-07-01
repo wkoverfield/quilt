@@ -20,7 +20,7 @@ import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.j
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
-import { parseHookInput, runHookPre, runHookPost } from "./hooks.js";
+import { parseHookInput, runHookPre, runHookPost, sessionActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -68,14 +68,18 @@ function readStdin(): Promise<string> {
 }
 
 /**
- * Resolve the actor a hook acts as: QUILT_ACTOR (per-subagent identity, the
- * load-bearing signal for a shared checkout) falls back to the active session's
- * actor (single-agent case). Registers a first-seen actor so it shows up in the
- * fleet. Returns null when identity is unknown — the hook then no-ops rather than
- * guess (it can't tell self from other without an id).
+ * Resolve the actor a hook acts as. The ladder: QUILT_ACTOR (an explicit stable
+ * id — always wins) > the active session's actor (quilt start) > an auto id
+ * derived from the Claude Code session id in the hook payload (zero-config
+ * capture; parallel sessions get distinct ids for free). Registers a first-seen
+ * actor so it shows up in the fleet. Returns null only when there's no signal at
+ * all — the hook then no-ops rather than guess.
  */
-function hookActor(store: Store): string | null {
-  const id = process.env.QUILT_ACTOR || activeContext(store).actorId;
+function hookActor(store: Store, sessionId: string | null): string | null {
+  const id =
+    process.env.QUILT_ACTOR ||
+    activeContext(store).actorId ||
+    (sessionId ? sessionActorId(sessionId) : null);
   if (!id) return null;
   if (!store.findActor(id)) {
     store.upsertActor({ id, type: "agent", displayName: id.split("/").pop() ?? id, createdAt: nowIso() });
@@ -209,8 +213,8 @@ program
         "\n" +
           pc.green("✓ ") +
           "Quilt is wired in. Each agent: claim before editing, commit_mine when done.\n" +
-          pc.dim("  Give each agent process its own QUILT_ACTOR so the capture hooks can\n") +
-          pc.dim("  tell them apart — without it, native edits aren't attributed.\n") +
+          pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
+          pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
           pc.dim("  Run `quilt doctor` to confirm capture is flowing. See docs/orchestrators.md.\n"),
       );
     }
@@ -826,7 +830,7 @@ program
     try {
       const store = hookStore();
       const input = store && parseHookInput(JSON.parse(await readStdin()));
-      const actor = store && hookActor(store);
+      const actor = store && input && hookActor(store, input.sessionId);
       if (store && input && actor) {
         const decision = runHookPre(store, actor, input);
         if (decision.deny) {
@@ -857,7 +861,7 @@ program
     try {
       const store = hookStore();
       const input = store && parseHookInput(JSON.parse(await readStdin()));
-      const actor = store && hookActor(store);
+      const actor = store && input && hookActor(store, input.sessionId);
       if (store && input && actor) runHookPost(store, actor, input);
     } catch {
       /* fail-open: skip capture */

@@ -24,8 +24,11 @@ export const COORDINATION_BLOCK = `${COORDINATION_MARKER}
 
 You share this checkout with other agents. Coordinate through Quilt:
 
-- Pick a stable id for yourself — your role or task name (e.g. \`auth-agent\`).
-  Use that exact id as \`actor\` on every Quilt call.
+- Identity is automatic: if you don't name yourself, Quilt derives an id from
+  your session/connection. But if you are one of SEVERAL subagents sharing one
+  process or MCP connection, pick a stable id — your role or task name (e.g.
+  \`auth-agent\`) — and pass it as \`actor\` on every Quilt call, since a shared
+  connection can't tell you apart automatically.
 - Before you edit a file, \`claim\` what you're about to change
   (\`path#symbol\`, e.g. \`src/auth.ts#login\`). Pass a short
   intent too — the why (your ticket/task) — which is shown to anyone you block.
