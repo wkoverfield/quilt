@@ -215,13 +215,39 @@ export function readCheckpoint(store: Store): AuthorshipCheckpoint {
  * fold plus the un-compacted log tail on top (later wins). Reading the checkpoint
  * instead of re-folding all of history keeps reconcile cheap on long-lived repos.
  */
-export function foldedAuthorship(store: Store): Map<string, Map<string, string>> {
+export function foldedAuthorship(store: Store, log: AuthorshipEvent[] = readAuthorship(store)): Map<string, Map<string, string>> {
   const cp = readCheckpoint(store);
   const byPath = new Map<string, Map<string, string>>();
   for (const [path, lines] of Object.entries(cp.ownership)) {
     byPath.set(path, new Map(Object.entries(lines)));
   }
-  foldEvents(byPath, readAuthorship(store));
+  foldEvents(byPath, log);
+  return byPath;
+}
+
+/**
+ * Who REMOVED each line, per the ledger: `path -> removedKey -> latest actor`.
+ * The mirror of foldedAuthorship for the removed side, so reconcile can attribute
+ * a captured removal to its recorded author instead of to whoever happened to
+ * reconcile first (which is what let a committer's `commit --mine` swallow another
+ * actor's line removal when no reconcile ran between their edits). A pure fold —
+ * pass the log the caller already read (reconcile reads it once for both folds).
+ *
+ * Log-only by design, NOT checkpoint-backed: a removed line is never "un-removed",
+ * so a checkpoint of removal attribution would grow without bound and defeat
+ * compaction. Removals in the current working diff are recent and uncommitted, so
+ * their events are in the log tail. The only gap is a removal still uncommitted
+ * after compaction (~1000 events), which degrades to inference — the pre-fix
+ * behavior, safe (never a wrong ledger answer, just no ledger answer).
+ */
+export function foldedRemovals(log: AuthorshipEvent[]): Map<string, Map<string, string>> {
+  const byPath = new Map<string, Map<string, string>>();
+  for (const ev of log) {
+    if (!ev.removedKeys?.length) continue;
+    let m = byPath.get(ev.path);
+    if (!m) byPath.set(ev.path, (m = new Map()));
+    for (const key of ev.removedKeys) m.set(key, ev.actor); // later removal wins
+  }
   return byPath;
 }
 
