@@ -178,6 +178,7 @@ shared pointer.
 | `quilt claim [targets...] [--json]` | Reserve files, or `file#symbol`, for editing; with none, lists claims. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
+| `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? |
 | `quilt whoami` | Show the active actor/session. |
 | `quilt end` | End the active session. |
 
@@ -338,10 +339,25 @@ delta before another actor's.
 
 ### Limitations (honest)
 
-- Attribution keys on **line content** (blank lines and lone braces/punctuation
-  are ignored so they don't false-conflict). Two actors adding the same
-  *substantive* line in different places can still be flagged as overlapping;
-  conservative by design.
+Quilt is designed to fail **safe**: every limitation below degrades to
+best-effort attribution or a surfaced warning — it never silently loses or
+corrupts your work.
+
+- **Capture is best-effort, and it can go quiet.** The native-edit hooks fail
+  open (they must never block an agent's edit), so if capture stops — an agent
+  without a `QUILT_ACTOR`, a Claude Code update that changes the hook payload, an
+  unparseable file — edits fall back to Quilt's line-inference instead of the
+  precise ledger. Nothing is lost, but attribution gets coarser. Run
+  **`quilt doctor`** to confirm capture is actually flowing (it reports how many
+  edits have been recorded).
+- **Identity is per-process.** The hooks attribute an edit to the `QUILT_ACTOR`
+  of the process that made it. Give each agent its own; several sub-agents inside
+  **one** process share one id, so for that topology use the MCP `quilt_edit` /
+  per-call-`actor` path instead of the hooks.
+- **Attribution keys on symbol + line content** (blank lines and lone
+  braces/punctuation are ignored so they don't false-conflict). Identical lines in
+  *different* functions are kept distinct; two identical lines in the *same*
+  function can still collapse — rare, and conservative by design.
 - Symbol parsing covers **JavaScript, TypeScript, JSX/TSX, Python, Go, Rust, Java, Ruby, C, and C++**
   (tree-sitter). Other languages fall back to whole-file claims and line-level
   attribution.
@@ -350,6 +366,12 @@ delta before another actor's.
 - No automatic conflict resolution: Quilt surfaces, it does not merge.
 - Binary files are never attributed or committed by Quilt.
 - POSIX-first. CRLF / `core.autocrlf` repos on Windows aren't handled yet.
+- The fleet/status view reflects the **last reconcile**, not live state, unless
+  `quilt watch` is running.
+
+**On the roadmap:** import-resolution for push-awareness; pruning of the older
+state logs (the authorship log already compacts; `ledger.jsonl` and preserved
+clobber snapshots still grow); more languages; Windows/CRLF support.
 
 ---
 

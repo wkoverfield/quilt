@@ -28,6 +28,11 @@ functions.
 - **`quilt setup` now also installs the capture hooks** into `.claude/settings.json`
   (in addition to the `.mcp.json` server and the `CLAUDE.md` snippet it already
   wrote) — same idempotent, non-clobbering merge.
+- **`quilt doctor`** — a health check that turns silent failure visible: it
+  reports whether Quilt is wired, whether `QUILT_ACTOR` is set, and — the key
+  signal — how many edits have actually been captured, warning when there are
+  uncommitted changes but nothing was recorded (the tell that capture isn't
+  flowing). `--json` for scripts.
 
 ### Changed
 
@@ -147,5 +152,6 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `@quilt-dev/cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
+[0.3.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wkoverfield/quilt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.1.0
