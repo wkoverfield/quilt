@@ -341,6 +341,32 @@ test("a corrupt checkpoint fails loudly instead of silently dropping history", (
   }
 });
 
+test("a captured REMOVAL is attributed to its author, not whoever reconciles first (so a commit can't delete another actor's line)", () => {
+  // The exact bug a hands-on fleet run surfaced: alice and bob each replace a line
+  // in adjacent functions with NO reconcile between their edits. Without the
+  // removed-side overlay, alice's reconcile grabbed bob's removal too, and her
+  // `commit --mine` deleted bob's line.
+  const dir = mkdtempSync(join(tmpdir(), "quilt-rm-attr-"));
+  const g = (a: string[]) => execFileSync("git", a, { cwd: dir });
+  g(["init", "-q"]); g(["config", "user.email", "t@t.io"]); g(["config", "user.name", "t"]); g(["config", "commit.gpgsign", "false"]);
+  writeFileSync(join(dir, "m.js"), "export function a() {\n  return 1;\n}\nexport function b() {\n  return 2;\n}\n");
+  g(["add", "-A"]); g(["commit", "-qm", "i"]);
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    applyAndRecordEdit(s, { actor: "alice", path: "m.js", oldString: "  return 1;", newString: "  return 111;" });
+    applyAndRecordEdit(s, { actor: "bob", path: "m.js", oldString: "  return 2;", newString: "  return 222;" });
+    reconcile(s, "alice"); // alice reconciles first — inference alone would credit her both removals
+    const own = s.readOwnership();
+    const rm = own.files["m.js"]!.removed;
+    assert.equal(ownerOf(rm, "  return 1;"), "alice", "alice removed her own line");
+    assert.equal(ownerOf(rm, "  return 2;"), "bob", "bob's removal stays bob's, not alice's");
+    assert.equal(own.conflicts["m.js"], undefined, "no spurious conflict on the reattributed removal");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("reconcile attribution survives compaction: the checkpoint feeds the ledger overlay", () => {
   const dir = mkdtempSync(join(tmpdir(), "quilt-compact-recon-"));
   const g = (a: string[]) => execFileSync("git", a, { cwd: dir });

@@ -12,7 +12,7 @@ import {
   type DiffOp,
 } from "./diff.js";
 import { parseSymbols, ownKey, keyText, symbolLocator, opKeyer } from "./symbols.js";
-import { foldedAuthorship } from "./authorship.js";
+import { foldedAuthorship, foldedRemovals, readAuthorship } from "./authorship.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
 
@@ -155,7 +155,13 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   // author for wins. The content-key inference below is the FALLBACK FLOOR — it
   // only decides lines the ledger never captured (e.g. a raw bash/sed write).
   // Empty when nothing was captured, so the whole overlay no-ops on that path.
-  const ledgerOwn = foldedAuthorship(store);
+  // Read the log once and feed both folds (added-ownership and removal-author).
+  const authorshipLog = readAuthorship(store);
+  const ledgerOwn = foldedAuthorship(store, authorshipLog);
+  // ...and who removed each line, so a captured removal is attributed to its
+  // recorded author too (not just whoever reconciled first) — else a commit can
+  // include deleting another actor's line when no reconcile ran between edits.
+  const removalOwn = foldedRemovals(authorshipLog);
 
   // Files reserved by OTHER actors. We skip them entirely this pass: don't
   // attribute, don't advance the observed snapshot, don't prune. A claim
@@ -357,16 +363,29 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     // Ledger overlay: the ledger is authoritative, so a captured line is
     // attributed to its RECORDED author, replacing whatever the inference floor
     // above guessed (this is the fix for "whoever reconciled first owns it").
-    // Only applies to ADDED lines present in the current diff; un-captured lines
-    // keep their inferred owner — inference is the fallback floor. (Removed-line
-    // attribution stays inference-only — the overlay writes f.added, not
-    // f.removed; that only feeds commit's deletion split, benignly.)
+    // Applies to lines present in the current diff; un-captured lines keep their
+    // inferred owner — inference is the fallback floor. Added and removed sides
+    // are overlaid symmetrically so neither depends on reconcile timing.
     const ledgerForPath = ledgerOwn.get(path);
     if (ledgerForPath) {
       const f = (ownership.files[path] ??= { added: {}, removed: {} });
       for (const [key, actor] of ledgerForPath) {
         if (!added.has(key) || isTrivialLine(keyText(key))) continue;
         f.added[key] = actor;
+        if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
+      }
+    }
+    // Same key-mismatch caveat as the added overlay (see symbols.ts#opKeyer): a
+    // removed line's key here scopes to HEAD's symbol, the ledger's to the edit's
+    // baseline — they diverge only if the enclosing function was renamed between
+    // the two, in which case this silently no-ops and the line keeps its inferred
+    // owner (benign, rare).
+    const removalForPath = removalOwn.get(path);
+    if (removalForPath) {
+      const f = (ownership.files[path] ??= { added: {}, removed: {} });
+      for (const [key, actor] of removalForPath) {
+        if (!removed.has(key) || isTrivialLine(keyText(key))) continue;
+        f.removed[key] = actor;
         if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
       }
     }

@@ -40,7 +40,9 @@ functions.
   inference is the fallback floor.** Reconcile attributes every captured line to
   its recorded author and only falls back to inference for lines the ledger never
   saw (e.g. a raw `bash`/`sed` write) — so who ran `reconcile` first no longer
-  affects attribution for any captured edit.
+  affects attribution for any captured edit. This now covers **removed** lines as
+  well as added ones, so `commit --mine` never includes deleting another actor's
+  line even when several agents edit adjacent code with no reconcile in between.
 - **Ownership is now keyed by symbol scope + line text, not bare text.** Two
   identical lines in different functions (e.g. `  return null;`) no longer collapse
   to one owner — each gets its own attribution, closing a class of false conflicts
