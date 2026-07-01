@@ -60,4 +60,12 @@ export class QuiltPaths {
   get authorshipLog(): string {
     return join(this.dir, "authorship.log");
   }
+  /** Directory for pre→post hook snapshots (the pre-edit file content). */
+  get hookSnapshotsDir(): string {
+    return join(this.dir, "hooks");
+  }
+  /** A single pre→post snapshot file, keyed by a hash of actor+path. */
+  hookSnapshot(key: string): string {
+    return join(this.hookSnapshotsDir, `${key}.blob`);
+  }
 }

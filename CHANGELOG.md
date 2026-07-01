@@ -4,6 +4,27 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`quilt setup` now also installs the capture hooks** into `.claude/settings.json`
+  (in addition to the `.mcp.json` server and the `CLAUDE.md` snippet it already
+  wrote) — same idempotent, non-clobbering merge.
+- **Native-edit capture hooks** — a `PreToolUse`/`PostToolUse` hook pair
+  (`quilt hook-pre` / `quilt hook-post`) that gives agents authorship capture and
+  collision prevention on Claude Code's built-in `Edit`, `Write`, and `MultiEdit`
+  tools with no protocol to follow: agents edit normally and Quilt records the
+  author of each change, denying a write into code another agent holds. `quilt
+  setup` now installs the hooks into `.claude/settings.json` (merging, never
+  clobbering). Each agent identifies itself with `QUILT_ACTOR`; without it the
+  hooks capture nothing rather than misattribute. The `quilt_edit` / `quilt_write`
+  MCP tools remain the fallback for runtimes without hooks.
+  - Capture is race-free: the pre hook snapshots the file's pre-edit content
+    (keyed per actor+path) and the post hook reconstructs the result from the edit
+    payload in memory, so a sibling's concurrent write to the same file can never
+    leak into another agent's recorded delta.
+
 ## [0.2.0] - 2026-06-30
 
 The orchestration release: drop a whole fleet of agents into one checkout with a

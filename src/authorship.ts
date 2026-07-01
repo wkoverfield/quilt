@@ -27,9 +27,10 @@ export interface EditDenied {
  * Resolve a repo-relative path to an absolute one, refusing anything that escapes
  * the repo (`../` traversal, absolute paths) or is a symlink — `path` is actor-
  * controlled, so a write must never land outside the working tree. Mirrors the
- * guard claims.ts/engine.ts apply to reads. Returns null if disallowed.
+ * guard claims.ts/engine.ts apply to reads. Returns null if disallowed. Shared
+ * with the native-edit hooks (hooks.ts) so both apply the identical guard.
  */
-function safeAbs(repoRoot: string, relPath: string): string | null {
+export function safeAbs(repoRoot: string, relPath: string): string | null {
   const root = resolve(repoRoot);
   const abs = resolve(root, relPath);
   if (abs !== root && !abs.startsWith(root + sep)) return null;
@@ -75,9 +76,50 @@ function checkHeld(
   const touched = parseSymbols(path, before)
     .filter((s) => !(s.endLine < startLine || s.startLine > endLine))
     .map((s) => s.name);
-  const held = claimHeldByOther(store, actor, path, touched, Date.now());
+  return heldDenial(claimHeldByOther(store, actor, path, touched, Date.now()));
+}
+
+/** Shape a `claimHeldByOther` hit into the shared EditDenied return, or null if clear. */
+function heldDenial(held: ReturnType<typeof claimHeldByOther>): EditDenied | null {
   if (!held) return null;
   return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
+}
+
+/**
+ * Prevention check for an `old_string` edit, given the file's current content.
+ * Returns an EditDenied if another actor holds the touched symbol(s), else null
+ * (including when the old_string can't be located — that's not a claim problem).
+ * Shared by the MCP `quilt_edit` tool and the native-Edit hook so both prevent
+ * identically.
+ */
+export function checkHeldEdit(
+  store: Store,
+  actor: string,
+  path: string,
+  before: string,
+  oldString: string,
+): EditDenied | null {
+  const idx = before.indexOf(oldString);
+  if (idx === -1) return null;
+  return checkHeld(store, actor, path, before, idx, oldString);
+}
+
+/**
+ * Prevention check for a whole-file write. Considers symbols in BOTH the new
+ * content and the existing file (pass its content, or null if new), so
+ * overwriting a claimed symbol away is still denied. Shared by `quilt_write`
+ * and the native-Write hook.
+ */
+export function checkHeldWrite(
+  store: Store,
+  actor: string,
+  path: string,
+  content: string,
+  existing: string | null,
+): EditDenied | null {
+  const symbols = new Set(parseSymbols(path, content).map((s) => s.name));
+  if (existing !== null) for (const s of parseSymbols(path, existing)) symbols.add(s.name);
+  return heldDenial(claimHeldByOther(store, actor, path, [...symbols], Date.now()));
 }
 
 function splitLines(s: string): string[] {
@@ -168,6 +210,16 @@ export function recordAuthorship(
   });
 }
 
+/**
+ * The surviving anchor line for an `old_string` edit (the last complete line
+ * before the match), or null if the string can't be located. Used by the hook,
+ * which — unlike applyAndRecordEdit — doesn't already hold the match offset.
+ */
+export function anchorForEdit(before: string, oldString: string): string | null {
+  const idx = before.indexOf(oldString);
+  return idx === -1 ? null : lineBefore(before, idx);
+}
+
 /** The last complete line of `text` before offset `idx` (the surviving anchor). */
 function lineBefore(text: string, idx: number): string | null {
   const head = text.slice(0, idx).split("\n");
@@ -198,7 +250,7 @@ export function applyAndRecordEdit(
   // PREVENTION: if another actor holds the symbol(s) this edit touches, deny the
   // write before any bytes change and hand back their intent — the earliest
   // possible encounter point (earlier than commit), so the agent resolves in-band.
-  const denied = checkHeld(store, args.actor, args.path, before, idx, args.oldString);
+  const denied = checkHeldEdit(store, args.actor, args.path, before, args.oldString);
   if (denied) return denied;
   const after = before.slice(0, idx) + args.newString + before.slice(idx + args.oldString.length);
   atomicWrite(abs, after);
@@ -228,10 +280,9 @@ export function applyAndRecordWrite(
   // symbols in BOTH the new content and the existing file — overwriting a file in
   // a way that removes a claimed symbol must still be denied (else it silently
   // deletes the held code).
-  const symbols = new Set(parseSymbols(args.path, args.content).map((s) => s.name));
-  if (existsSync(abs)) for (const s of parseSymbols(args.path, readFileSync(abs, "utf8"))) symbols.add(s.name);
-  const held = claimHeldByOther(store, args.actor, args.path, [...symbols], Date.now());
-  if (held) return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
+  const existing = existsSync(abs) ? readFileSync(abs, "utf8") : null;
+  const denied = checkHeldWrite(store, args.actor, args.path, args.content, existing);
+  if (denied) return denied;
   atomicWrite(abs, args.content);
   const event = recordAuthorship(store, {
     actor: args.actor,

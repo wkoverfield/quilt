@@ -19,9 +19,51 @@ quilt setup --dry-run  # preview the changes first
 ```
 
 It detects your orchestrator (Claude Code, Cursor, …), adds the `quilt` server to
-`.mcp.json` (merging, never clobbering), and appends the coordination snippet to
-`CLAUDE.md`. It's idempotent — safe to re-run. The manual steps below are what it
-does, if you'd rather wire it by hand.
+`.mcp.json` (merging, never clobbering), appends the coordination snippet to
+`CLAUDE.md`, and installs the capture hooks into `.claude/settings.json`. It's
+idempotent — safe to re-run. The manual steps below are what it does, if you'd
+rather wire it by hand.
+
+## Two ways to capture — hooks and MCP
+
+Quilt captures who wrote which lines through either path, and you can use both:
+
+- **Hooks (zero protocol).** On Claude Code, `quilt setup` installs a
+  `PreToolUse`/`PostToolUse` hook pair on the native `Edit`, `Write`, and
+  `MultiEdit` tools. Agents edit the way they already do — no new tools, no
+  instructions to follow — and Quilt records the author of each change and denies
+  a write into code another agent is mid-change on. Each agent just needs its own
+  id in `QUILT_ACTOR` (see below). This is the seamless path.
+- **MCP (explicit).** The `quilt_edit` / `quilt_write` tools, and the
+  `claim` → `commit_mine` loop below, work anywhere an agent can reach an MCP
+  server — Codex, Cursor, Aider, your own harness — including runtimes that have
+  no hook system. Reach for this when hooks aren't available.
+
+### Giving each agent an id for the hooks
+
+The hooks attribute an edit to `QUILT_ACTOR`, read from the environment of the
+**process** that runs the tool. So the hook path fits a fleet where each agent is
+its own process — an orchestrator that launches one `claude` (or one shell) per
+agent. Export the id in that agent's environment before it starts:
+
+```sh
+QUILT_ACTOR=auth-agent claude   # this agent's native edits are captured as "auth-agent"
+```
+
+Pick a stable id per agent — its role or task name. If `QUILT_ACTOR` is unset the
+hooks stay out of the way: they capture nothing rather than guess.
+
+The one topology the hooks can't split is **several subagents inside one
+process** — they share that process's `QUILT_ACTOR`, and no env var (or session
+id) can tell them apart after the fact. That's exactly what the MCP path is for:
+each subagent passes its own `actor` on each `quilt_edit` / `claim` call, so one
+shared `quilt mcp` server attributes them all correctly. Use hooks for
+process-per-agent fleets, the MCP tools for many-agents-per-process — or both.
+
+The hooks also need Quilt initialized in the repo (`quilt setup` does this, or run
+`quilt init` once). If the store isn't initialized, the hooks no-op silently
+rather than error — so if native edits aren't being captured, check that
+`.quilt/` exists and `QUILT_ACTOR` is set.
 
 ## 1. Add the shared server
 

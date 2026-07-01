@@ -162,7 +162,7 @@ shared pointer.
 | Command | Purpose |
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
-| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: add the shared MCP server to `.mcp.json` and the coordination snippet to `CLAUDE.md` (idempotent). |
+| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: add the shared MCP server to `.mcp.json`, the coordination snippet to `CLAUDE.md`, and the native-edit capture hooks to `.claude/settings.json` (idempotent). |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
@@ -222,13 +222,17 @@ Coding agents drive Quilt directly over MCP. Each agent runs its own server, so
 attribution is precise per-agent.
 
 ```jsonc
-// .mcp.json (or your agent's MCP config)
+// .mcp.json — single-agent form: one server pinned to one identity.
 {
   "mcpServers": {
     "quilt": { "command": "quilt", "args": ["mcp"], "env": { "QUILT_ACTOR": "codex-auth" } }
   }
 }
 ```
+
+For a **fleet**, drop the `env` and run one shared server — each subagent passes
+its own `actor` per call instead, so there's no single identity to clobber (see
+[docs/orchestrators.md](docs/orchestrators.md)). `quilt setup` wires this for you.
 
 Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
 `preview_mine`, `commit_mine`, `claim`, `release`. The intended loop:
@@ -259,11 +263,15 @@ is to wire your agents (or your orchestrator) into the MCP server so cooperation
 is the default.
 
 **Running a fleet of subagents?** Run `quilt setup` — it detects your
-orchestrator and wires in the shared MCP server plus the coordination snippet in
-one step. One shared `quilt mcp` server then attributes the whole fleet — each
-subagent passes its own `actor` per call, so there's no single identity to
-clobber. See [docs/orchestrators.md](docs/orchestrators.md) for the details and
-the Codex / Cursor / Aider variants.
+orchestrator and wires in the shared MCP server, the coordination snippet, and
+the native-edit capture hooks in one step. On Claude Code the hooks let agents
+use the built-in `Edit`/`Write` tools normally while Quilt records each change's
+author and blocks a write into code another agent holds — no protocol to follow
+(each agent just carries its own id in `QUILT_ACTOR`). One shared `quilt mcp`
+server attributes the whole fleet the explicit way too — each subagent passes its
+own `actor` per call, so there's no single identity to clobber. See
+[docs/orchestrators.md](docs/orchestrators.md) for the details and the Codex /
+Cursor / Aider variants.
 
 ## Push-awareness: dependents hear about changes
 

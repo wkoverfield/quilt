@@ -19,6 +19,7 @@ import { runWatch, watcherRunning } from "./watch.js";
 import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
+import { parseHookInput, runHookPre, runHookPost } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -52,6 +53,33 @@ function requireStore(): Store {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Read all of stdin as a string (for the hook commands' JSON payload). */
+function readStdin(): Promise<string> {
+  return new Promise((resolve) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (c) => (data += c));
+    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("error", () => resolve(data));
+  });
+}
+
+/**
+ * Resolve the actor a hook acts as: QUILT_ACTOR (per-subagent identity, the
+ * load-bearing signal for a shared checkout) falls back to the active session's
+ * actor (single-agent case). Registers a first-seen actor so it shows up in the
+ * fleet. Returns null when identity is unknown — the hook then no-ops rather than
+ * guess (it can't tell self from other without an id).
+ */
+function hookActor(store: Store): string | null {
+  const id = process.env.QUILT_ACTOR || activeContext(store).actorId;
+  if (!id) return null;
+  if (!store.findActor(id)) {
+    store.upsertActor({ id, type: "agent", displayName: id.split("/").pop() ?? id, createdAt: nowIso() });
+  }
+  return id;
 }
 
 /** Initialize Quilt's .quilt/ store. Returns false if it already existed. */
@@ -154,7 +182,7 @@ program
       process.stdout.write(pc.dim(`Detected ${d.orchestrator}.\n`));
     } else {
       process.stdout.write(
-        pc.dim("No orchestrator config detected — wiring up for Claude Code (.mcp.json + CLAUDE.md).\n"),
+        pc.dim("No orchestrator config detected — wiring up for Claude Code (.mcp.json + CLAUDE.md + hooks).\n"),
       );
     }
 
@@ -741,6 +769,66 @@ program
     process.stdout.removeListener("error", epipeExit);
     process.stdout.on("error", () => {});
     await runMcpServer(store);
+  });
+
+// A Quilt-initialized store for the current repo, or null when there's no repo
+// or Quilt isn't set up. The hook commands stay fail-open: any problem → no-op.
+function hookStore(): Store | null {
+  try {
+    const root = repoRoot(process.cwd());
+    if (!root) return null;
+    const store = new Store(root);
+    return store.initialized ? store : null;
+  } catch {
+    return null;
+  }
+}
+
+program
+  .command("hook-pre")
+  .description("PreToolUse hook: snapshot + prevention for native Edit/Write/MultiEdit (reads JSON on stdin)")
+  .action(async () => {
+    // Fail-open: a hook must never block or crash an agent's edit on our account.
+    try {
+      const store = hookStore();
+      const input = store && parseHookInput(JSON.parse(await readStdin()));
+      const actor = store && hookActor(store);
+      if (store && input && actor) {
+        const decision = runHookPre(store, actor, input);
+        if (decision.deny) {
+          // Claude Code's PreToolUse deny format: this JSON on stdout (exit 0)
+          // blocks the tool call and shows `permissionDecisionReason` to the
+          // agent. Allowing is the default — emit nothing.
+          process.stdout.write(
+            JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: "PreToolUse",
+                permissionDecision: "deny",
+                permissionDecisionReason: decision.reason,
+              },
+            }) + "\n",
+          );
+        }
+      }
+    } catch {
+      /* fail-open: allow the edit */
+    }
+    process.exit(0);
+  });
+
+program
+  .command("hook-post")
+  .description("PostToolUse hook: capture authorship of a native Edit/Write/MultiEdit (reads JSON on stdin)")
+  .action(async () => {
+    try {
+      const store = hookStore();
+      const input = store && parseHookInput(JSON.parse(await readStdin()));
+      const actor = store && hookActor(store);
+      if (store && input && actor) runHookPost(store, actor, input);
+    } catch {
+      /* fail-open: skip capture */
+    }
+    process.exit(0);
   });
 
 program
