@@ -1,425 +1,129 @@
 # Quilt
 
 [![CI](https://github.com/wkoverfield/quilt/actions/workflows/ci.yml/badge.svg)](https://github.com/wkoverfield/quilt/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@quilt-dev/cli)](https://www.npmjs.com/package/@quilt-dev/cli)
+[![downloads](https://img.shields.io/npm/dm/@quilt-dev/cli)](https://www.npmjs.com/package/@quilt-dev/cli)
+[![license](https://img.shields.io/npm/l/@quilt-dev/cli)](LICENSE)
 
-**The coordination layer for agent fleets.** Same repo. Many agents. Clean commits.
+Quilt is a command-line tool that tracks which agent wrote which lines in a
+shared Git checkout, so multiple AI coding agents can work in one repo at once
+and each commits only its own changes.
 
-```bash
-quilt commit --mine
-```
+It captures every edit at the tool boundary, keeps a per-line record of who wrote
+what, and reconstructs each agent's own changes at commit time. Git stays the
+source of truth. Quilt never calls an LLM or spawns agents, and its state lives in
+a `.quilt/` sidecar you can delete without touching your repo.
 
-You can run ~3 coding agents on one repo before they start clobbering each other —
-two edit the same file, one silently overwrites the other, and their commits
-tangle into one blob you can't attribute. The usual fix is *"run fewer."* Quilt
-lifts that ceiling: the agents share one checkout, and it keeps attribution
-clean, prevents collisions, and gives each agent its own clean commit.
-
-![Seven agents fan out on one repo. Without Quilt, their work collapses into one tangled commit and a collision silently overwrites an agent's change. With Quilt, each agent lands a clean, correctly-attributed commit and the collision is prevented — no work lost.](examples/fleet.gif)
-
-Run it yourself: `./examples/fleet.sh` — nothing faked, it drives the real
-machinery ([see it in 20 seconds](#see-it-in-20-seconds)).
-
-Up close, with two agents claiming different functions in one file — plain git
-vs Quilt:
-
-![Without Quilt, the first agent's commit absorbs the other's work and the history credits one author; with Quilt, each change is committed by the agent that made it.](examples/contrast.gif)
-
-Everyone else ran *toward* isolation: a worktree per agent, a branch per agent,
-reconcile at PR time. That trades one mess for another. You get `node_modules`,
-`.env`, and build caches per worktree, agents blind to each other's in-flight
-work, and a merge pile-up at the end. Quilt goes the other way: **many agents,
-one checkout**, coordinating in the open.
-
-Parallelism comes from **coordination and visibility**, not isolation and
-blindness. Agents claim the code they're about to touch, see each other's
-uncommitted work, get a heads-up when something they depend on is changing, and
-each commits only its own changes. Quilt is a cooperative protocol, like Git
-itself, and it keeps Git as the source of truth: every commit it makes is an
-ordinary Git commit.
-
-### See it in 20 seconds
+![Two agents editing one file, plain git vs Quilt. Without Quilt (left), the first agent's commit absorbs the other's work and the history credits one author. With Quilt (right), each change is committed by the agent that made it.](examples/contrast.gif)
 
 ```bash
-git clone https://github.com/wkoverfield/quilt && cd quilt
-npm install && npm run build
-./examples/fleet.sh    # 7 agents, one repo: plain git vs Quilt, head to head
-./examples/demo.sh     # the same, up close, with two agents
+npm install -g @quilt-dev/cli
+quilt setup     # wire Quilt into your repo (Claude Code, Cursor, or plain git)
 ```
 
-`fleet.sh` fans seven agents out on one checkout and runs it both ways: without
-Quilt their work collapses into a single tangled commit (and a collision
-silently overwrites an agent's change); with Quilt each agent lands a clean,
-correctly-attributed commit and the collision is prevented. `demo.sh` walks the
-same mechanic with two agents claiming different functions in one file.
+## The problem
 
----
+You can run about three coding agents on one repo before they start clobbering
+each other. Two edit the same file and one silently overwrites the other. Their
+commits tangle into one blob you can't attribute. The usual advice is "run
+fewer," or "give each agent its own worktree."
+
+Quilt lifts that ceiling. The agents share one checkout, and Quilt keeps
+attribution clean, prevents collisions, and gives each agent its own clean commit.
+And it holds as you add agents. Here are seven fanning out on one repo, run head
+to head:
+
+![Seven agents fan out on one repo. Without Quilt, their work collapses into one tangled commit and a collision silently overwrites an agent's change. With Quilt, each agent lands a clean, correctly-attributed commit and the collision is prevented.](examples/fleet.gif)
+
+That is `./examples/fleet.sh`. It drives the real machinery, nothing faked; run it
+yourself.
 
 ## What it does
 
-- **Same-checkout actor ownership.** Model humans, agents, and bots as actors
-  sharing one working tree.
+- **One shared checkout.** Model humans, agents, and bots as actors editing one
+  working tree, no worktree per agent.
+- **Line-level attribution.** `commit --mine` commits only your lines, even when
+  they share a hunk with another actor's.
 - **Symbol-level claims.** Reserve `utils.js#formatPrice`, not the whole file, so
-  agents editing different functions never contend. Powered by tree-sitter
-  (JavaScript, TypeScript, JSX/TSX, Python, Go, Rust, Java, Ruby, C, C++), with whole-file claims for
-  everything else.
-- **Push-awareness.** When you claim a symbol that depends on a function another
-  actor is changing, Quilt warns you at claim time so the cascade is never a
-  surprise.
-- **Line-level attribution.** Quilt tracks which actor produced which lines, and
-  `commit --mine` commits only yours even when they share a hunk.
-- **Conflict surfacing.** Overlapping edits are flagged, not silently committed,
-  and Quilt tells a real same-line clash apart from two agents working on
-  different lines that merely share a hunk — so the alarm means something.
-  Pre-existing or generated changes stay unattributed.
-- **Self-sewing collisions.** A claim carries a short `intent`; a blocked agent
-  gets the holder's intent and resolves most collisions itself — dropping a
-  redundant change or adapting. Only genuinely opposed work is `escalate`d to a
-  human. `quilt fleet` splits it into **Needs you** and **Sewn by agents**. Quilt
-  never calls an LLM — it hands your agents the context and records what they
-  decide.
-- **Preview-first `commit --mine`.** See the exact patch before anything moves.
-- **Preserves other actors' work.** Committing yours leaves everyone else's
-  changes untouched in the working tree.
-- **Human-readable status + stable JSON**, and a first-class MCP server for
-  agents.
-- **Local-first.** All state lives under `.quilt/`. No account, no daemon, no
-  hosted service.
+  agents editing different functions never contend. Ten languages via tree-sitter;
+  whole-file claims for the rest.
+- **Collision prevention.** A write into code another agent has claimed is denied,
+  with the holder's stated intent, before any bytes change.
+- **Push-awareness.** Claim a symbol that depends on a function another actor is
+  changing, and Quilt warns you at claim time.
+- **Detect and preserve.** If one actor overwrites another's uncommitted lines,
+  Quilt snapshots the victim's version so nothing is silently lost.
 
-Quilt trusts Git and never rewrites it. Every commit Quilt produces is an
-ordinary Git commit.
-
----
-
-## Why not worktrees?
-
-A worktree (or branch, or clone) per agent is the usual answer, and for fully
-independent tasks it works. But isolation has costs that grow with the number of
-agents:
-
-- **Setup tax.** Every worktree needs its own install, build, and environment —
-  `node_modules`, `.env`, build caches — duplicated N times.
-- **Blindness.** Agents can't see each other's uncommitted work, so they find
-  out they collided or broke a shared dependency at merge time, after the work
-  is already done.
-- **Merge tax.** Reconciliation happens at the end, when the branches have
-  diverged the most.
-
-The deeper issue is that worktrees isolate; they don't coordinate. When agents
-are working in the same codebase, you usually want the opposite — for them to
-see each other and account for each other as they go. Quilt keeps everyone in
-one checkout and coordinates continuously: claims stop collisions before they
-happen, shared visibility lets an agent adapt to what another is doing, and
-`commit --mine` keeps each actor's history clean without a checkout per agent.
-
-Worktrees still make sense for genuinely independent, long-running work, or when
-you want hard OS-level isolation. Quilt is for agents working the same code at
-the same time. The two aren't mutually exclusive.
-
----
-
-## Install
-
-```bash
-npm install -g @quilt-dev/cli     # puts the `quilt` command on your PATH
-```
-
-Or from source:
-
-```bash
-npm install        # install deps
-npm run build      # compile to dist/
-npm link           # put `quilt` on your PATH
-```
-
-Requires Node 20+ and `git` on the PATH.
-
----
+Every commit Quilt produces is an ordinary Git commit. It trusts Git and never
+rewrites it, and all state lives locally under `.quilt/`. No account, no daemon.
 
 ## Quickstart
 
 ```bash
-quilt init
-quilt start --actor wilson/codex-auth --type agent
+quilt setup      # wire Quilt into the repo (MCP server, hooks, coordination)
+quilt doctor     # confirm it's wired and capture is flowing
+```
 
-# ... the agent edits files ...
+Give each agent process its own id, so Quilt can tell them apart:
 
-quilt status                       # who owns what
-quilt preview --mine               # exact patch that would be committed
+```bash
+QUILT_ACTOR=auth-agent claude    # this agent's edits are attributed to auth-agent
+```
+
+Then each agent commits only its own lines:
+
+```bash
+quilt status                     # who owns what
+quilt preview --mine             # exact patch that would be committed
 quilt commit --mine -m "fix auth redirect"
 ```
 
-### Multiple actors, one checkout
+`quilt fleet` shows the whole picture: every actor, their claims, and anything
+that needs a human. See [docs/reference.md](docs/reference.md) for the full
+command list.
 
-```bash
-quilt start --actor alice --type agent   # Alice's shell
-# alice edits src/auth.ts
-quilt status                              # claims Alice's edits
+## Why not worktrees?
 
-quilt start --actor bob --type agent     # Bob's shell
-# bob edits src/theme.ts
-quilt status                              # claims Bob's edits
+A worktree per agent is the usual answer, and for fully independent tasks it
+works. But isolation moves the problem to the end, and its costs grow with the
+number of agents.
 
-quilt commit --mine -m "auth work"        # (as Alice) commits ONLY Alice's hunks
-# Bob's changes remain in the working tree, uncommitted.
-```
+|                                 | Run fewer agents | Worktree per agent          | Quilt                       |
+| ------------------------------- | ---------------- | --------------------------- | --------------------------- |
+| Parallelism                     | capped low       | high                        | high                        |
+| Setup per agent                 | none             | full install/build/env × N  | none (one checkout)         |
+| See each other's in-flight work | n/a              | no                          | yes                         |
+| Collisions                      | avoided by hand  | surface at merge            | prevented, or surfaced live |
+| Clean per-agent commits         | n/a              | after a merge               | yes                         |
 
-Concurrent actors run in their own shells; set `QUILT_ACTOR=<id>` (or
-`QUILT_SESSION=<id>`) per shell so each invocation knows who "you" are without a
-shared pointer.
+Worktrees isolate; they don't coordinate. When agents work the same code at the
+same time, you usually want them to see each other and account for each other as
+they go. That is what Quilt does. The two aren't mutually exclusive: worktrees for
+independent, long-running work, Quilt for agents in the same code at once.
 
----
+## Using it with agents
 
-## Commands
+`quilt setup` wires the capture hooks and a shared MCP server. On Claude Code the
+hooks let agents use the built-in Edit and Write tools normally while Quilt
+records each change's author and blocks a write into code another agent holds,
+with no protocol for the agent to follow. Each agent just carries its own id in
+`QUILT_ACTOR`. For other runtimes, the same capture and prevention is available as
+MCP tools.
 
-| Command | Purpose |
-| --- | --- |
-| `quilt init` | Initialize `.quilt/` in the repo. |
-| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: add the shared MCP server to `.mcp.json`, the coordination snippet to `CLAUDE.md`, and the native-edit capture hooks to `.claude/settings.json` (idempotent). |
-| `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
-| `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
-| `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
-| `quilt status [--json]` | Show who owns which working-tree changes. |
-| `quilt mine [--json]` | Summarize the changes you own. |
-| `quilt conflicts [--json]` | Show shared changes: same-line clashes vs adjacent edits that commit cleanly. |
-| `quilt undo <actor> [--dry-run]` | Back out one actor's uncommitted changes, leaving everyone else's untouched. |
-| `quilt escalate <target> [--reason]` | Flag a collision agents can't reconcile for a human (shows under "Needs you"). |
-| `quilt resolve <target> [--note]` | Mark a collision sewn/handled — clears its "Needs you" flag, records the trail. |
-| `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
-| `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
-| `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
-| `quilt claim [targets...] [--json]` | Reserve files, or `file#symbol`, for editing; with none, lists claims. |
-| `quilt release [paths...]` | Release your claims (all of yours if no paths). |
-| `quilt mcp` | Run the MCP server (stdio) for agent integration. |
-| `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? |
-| `quilt whoami` | Show the active actor/session. |
-| `quilt end` | End the active session. |
+See [docs/orchestrators.md](docs/orchestrators.md) for Codex, Cursor, Aider, and
+the difference between process-per-agent and many-agents-in-one-process setups.
 
----
+## Docs
 
-## Live attribution + collision rescue (`quilt watch`)
+- [docs/orchestrators.md](docs/orchestrators.md): running a fleet of agents.
+- [docs/reference.md](docs/reference.md): the full command list, how attribution
+  works, and the `.quilt/` state layout.
+- [bench/](bench/): the scenario ladder Quilt is tested against, run with and
+  without Quilt on the same metrics.
 
-Run the watcher once and stop thinking about it:
+## Contributing
 
-```bash
-quilt watch
-```
-
-It attributes edits to the active actor **as they happen** (no need to run
-`quilt status` to claim) and it catches collisions. When one actor's edit
-overwrites uncommitted lines another actor owns, Quilt preserves *both* versions
-and tells you:
-
-```txt
-⚠ collision  claude-ui overwrote codex's edits in auth.ts. both saved, run: quilt restore auth.ts
-```
-
-Nothing is silently lost. `quilt restore auth.ts` writes the overwritten version
-to a sidecar file (`auth.ts.quilt-codex`) so you can diff and merge; your
-current file is never touched.
-
-Preservation captures the victim's **last-observed** content, so keep `quilt
-watch` running while agents work, so it keeps that snapshot current to each edit.
-Without the watcher, the preserved version is only as fresh as the last `quilt`
-command the victim ran.
-
-This is the backstop for actors Quilt knows about: when one actor's edit
-overwrites lines another actor already owns, the loss is made visible and
-recoverable instead of silent. Preventing the overwrite outright is what
-**claims** are for (below); this catches the case where someone edited without
-claiming first. It can't referee writers that never identify themselves; Quilt
-coordinates participants, not anonymous edits.
-
-## Agent-native: the MCP server
-
-Coding agents drive Quilt directly over MCP. Each agent runs its own server, so
-attribution is precise per-agent.
-
-```jsonc
-// .mcp.json — single-agent form: one server pinned to one identity.
-{
-  "mcpServers": {
-    "quilt": { "command": "quilt", "args": ["mcp"], "env": { "QUILT_ACTOR": "codex-auth" } }
-  }
-}
-```
-
-For a **fleet**, drop the `env` and run one shared server — each subagent passes
-its own `actor` per call instead, so there's no single identity to clobber (see
-[docs/orchestrators.md](docs/orchestrators.md)). `quilt setup` wires this for you.
-
-Tools: `start_session`, `get_status`, `get_my_changes`, `get_conflicts`,
-`preview_mine`, `commit_mine`, `claim`, `release`, `escalate`, `resolve`, and
-`quilt_edit` / `quilt_write` (the capture-and-prevent edit tools — the fallback
-for runtimes without the native-edit hooks). The intended loop:
-
-```txt
-# fleet (per-call actor — no session needed):
-claim(actor, symbols)  →  …edit…  →  commit_mine(actor)
-
-# single agent (pinned session):
-start_session  →  get_status  →  claim(symbols)  →  …edit…  →  commit_mine
-```
-
-A fleet of subagents shares one server and passes its own `actor` on each call,
-so no `start_session` is needed — an id registers on first use. `claim` adds
-**advisory prevention** on top of detect-and-preserve: a symbol already claimed
-by another actor is denied, so a well-behaved agent edits something else. The
-`claim`, `get_status`, and `get_conflicts` responses all carry
-**`dependencyWarnings`**: push-awareness, so the moment an agent reserves a
-symbol — or just orients with `get_status` — it learns whether a function it
-depends on is being changed by someone else (see below). An agent that skips
-claiming but still drives Quilt as itself is still caught by collision detection.
-
-Quilt is a **cooperative protocol**, like Git: it coordinates the agents that
-participate. Each agent identifies itself (its own MCP server, or `QUILT_ACTOR`).
-An agent that ignores Quilt entirely gets no protection, the same way a worktree
-gives an uncoordinated agent only isolation, not coordination. The intended path
-is to wire your agents (or your orchestrator) into the MCP server so cooperation
-is the default.
-
-**Running a fleet of subagents?** Run `quilt setup` — it detects your
-orchestrator and wires in the shared MCP server, the coordination snippet, and
-the native-edit capture hooks in one step. On Claude Code the hooks let agents
-use the built-in `Edit`/`Write` tools normally while Quilt records each change's
-author and blocks a write into code another agent holds — no protocol to follow
-(each agent just carries its own id in `QUILT_ACTOR`). One shared `quilt mcp`
-server attributes the whole fleet the explicit way too — each subagent passes its
-own `actor` per call, so there's no single identity to clobber. See
-[docs/orchestrators.md](docs/orchestrators.md) for the details and the Codex /
-Cursor / Aider variants.
-
-## Push-awareness: dependents hear about changes
-
-The hardest multi-agent failure is the silent cascade: agent A changes a
-function's signature while agent B, not knowing, builds against the old one.
-Quilt closes that gap proactively. When you claim a symbol, Quilt reads what it
-references and warns you if any dependency is currently claimed by someone else:
-
-```txt
-$ quilt claim billing.js#total          # while another actor holds billing.js#rate
-  ✓ claimed billing.js#total
-  ⚠ heads-up billing.js#total depends on rate, which codex is changing (billing.js#rate)
-```
-
-The win doesn't depend on B remembering to look. The same warnings appear in
-`quilt status` and in the `claim` / `get_conflicts` MCP responses as
-`dependencyWarnings`. (V1 is advisory and name-based, including across files;
-import-resolution is a future refinement.)
-
-## Evidence: the eval harness
-
-Architecture choices here are settled by evidence, not vibes. [`bench/`](bench/)
-runs Quilt against a graded scenario ladder (L1 disjoint work, L2 incompatible
-conflict, L3 dependency cascade, L4 refactor-underfoot, L5 emergent overlap, L6
-mixed actors + noise), each scenario run **WITH vs WITHOUT** Quilt and graded on
-the same metrics (silent loss, attribution correctness, broken final state,
-surfaced conflicts, wasted work).
-
-```bash
-npm run bench           # the whole ladder, side by side
-```
-
-The scripted scenarios are deterministic and run in CI; a documented live
-sub-agent layer ([`bench/live/`](bench/live/README.md)) replays the same ladder
-with real agents. See [`bench/README.md`](bench/README.md) for the honesty
-caveats (what the scripted layer models vs. what the live layer tests).
-
-## How attribution works
-
-Quilt is honest and conservative: a blocked commit beats a spooky one.
-
-Each `quilt` command runs a **reconcile** step:
-
-1. Quilt keeps an *observed* snapshot of the working tree.
-2. The delta since it last looked is attributed to the actor active for this
-   command.
-3. `quilt start` seeds the observed snapshot to the current tree, so anything
-   already dirty stays **unclaimed** (e.g. formatter output, generated locks).
-4. Reservations and attribution are **symbol-aware**: claim `utils.js#formatPrice`
-   so two actors editing different functions in one file never contend.
-
-`commit --mine` then diffs `HEAD → worktree`, keeps only the **lines you own**
-(even when they share a hunk with another actor's changes: your lines commit,
-theirs stay in the tree), applies that patch to a throwaway temporary index
-(`GIT_INDEX_FILE` + `git apply --cached` + `write-tree` + `commit-tree` +
-`update-ref`), and produces a normal Git commit. Your real index and the working
-tree are never rewritten; other actors' changes stay exactly where they were.
-
-This means: **run a `quilt` command around your edit batch** (the intended
-agent workflow, call `status` before and after editing) so Quilt captures your
-delta before another actor's.
-
-### Limitations (honest)
-
-Quilt is designed to fail **safe**: every limitation below degrades to
-best-effort attribution or a surfaced warning — it never silently loses or
-corrupts your work.
-
-- **Capture is best-effort, and it can go quiet.** The native-edit hooks fail
-  open (they must never block an agent's edit), so if capture stops — an agent
-  without a `QUILT_ACTOR`, a Claude Code update that changes the hook payload, an
-  unparseable file — edits fall back to Quilt's line-inference instead of the
-  precise ledger. Nothing is lost, but attribution gets coarser. Run
-  **`quilt doctor`** to confirm capture is actually flowing (it reports how many
-  edits have been recorded).
-- **Identity is per-process.** The hooks attribute an edit to the `QUILT_ACTOR`
-  of the process that made it. Give each agent its own; several sub-agents inside
-  **one** process share one id, so for that topology use the MCP `quilt_edit` /
-  per-call-`actor` path instead of the hooks.
-- **Attribution keys on symbol + line content** (blank lines and lone
-  braces/punctuation are ignored so they don't false-conflict). Identical lines in
-  *different* functions are kept distinct; two identical lines in the *same*
-  function can still collapse — rare, and conservative by design.
-- Symbol parsing covers **JavaScript, TypeScript, JSX/TSX, Python, Go, Rust, Java, Ruby, C, and C++**
-  (tree-sitter). Other languages fall back to whole-file claims and line-level
-  attribution.
-- Push-awareness is **advisory and name-based**; a cross-file reference to a
-  same-named symbol can false-positive. Import resolution is a future refinement.
-- No automatic conflict resolution: Quilt surfaces, it does not merge.
-- Binary files are never attributed or committed by Quilt.
-- POSIX-first. CRLF / `core.autocrlf` repos on Windows aren't handled yet.
-- The fleet/status view reflects the **last reconcile**, not live state, unless
-  `quilt watch` is running.
-
-**On the roadmap:** import-resolution for push-awareness; pruning of the older
-state logs (the authorship log already compacts; `ledger.jsonl` and preserved
-clobber snapshots still grow); more languages; Windows/CRLF support.
-
----
-
-## State layout
-
-```
-.quilt/
-  config.json        # repo config
-  actors.json        # known actors
-  sessions/*.json    # sessions
-  current            # active session pointer for this checkout
-  observed.json      # last-observed worktree snapshot (reconcile baseline)
-  ownership.json     # per-file line ownership + conflicts
-  clobbers.json      # records of overwritten work, preserved for restore
-  snapshots/         # preserved pre-clobber file content
-  watcher.pid        # pidfile for a running `quilt watch`
-  ledger.jsonl       # append-only event log (sessions, claims, clobbers, …)
-  authorship.log             # captured edits — who authored which lines (the ledger)
-  authorship.checkpoint.json # compacted fold of old authorship events
-  hooks/             # pre→post hook snapshots (pre-edit file content)
-```
-
-`.quilt/` is git-ignored automatically.
-
----
-
-## Development
-
-```bash
-npm run build   # tsc -> dist/
-npm test        # build + run the acceptance suite against fixture repos
-npm run bench   # run the eval ladder (WITH vs WITHOUT Quilt)
-npm run dev -- status   # run the CLI from source via tsx
-```
-
----
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
