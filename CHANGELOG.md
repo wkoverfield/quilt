@@ -4,6 +4,18 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-07-01
+
+Makes Quilt publishable to the official MCP Registry, so directories that crawl
+the registry (Glama, PulseMCP, Smithery) can list it. No behavior changes.
+
+### Added
+
+- A `server.json` describing the `quilt mcp` stdio server, an `mcpName`
+  (`io.github.wkoverfield/quilt`) in `package.json`, and the matching `mcp-name`
+  marker in the README. These are what the registry uses to verify ownership and
+  register the server.
+
 ## [0.3.2] - 2026-07-01
 
 Another documentation-only release, so the README shown on npm matches the one on
@@ -182,6 +194,7 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `@quilt-dev/cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
+[0.3.3]: https://github.com/wkoverfield/quilt/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/wkoverfield/quilt/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/wkoverfield/quilt/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.3.0

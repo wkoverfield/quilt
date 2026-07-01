@@ -1,5 +1,7 @@
 # Quilt
 
+<!-- mcp-name: io.github.wkoverfield/quilt -->
+
 [![CI](https://github.com/wkoverfield/quilt/actions/workflows/ci.yml/badge.svg)](https://github.com/wkoverfield/quilt/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/@quilt-dev/cli)](https://www.npmjs.com/package/@quilt-dev/cli)
 [![downloads](https://img.shields.io/npm/dm/@quilt-dev/cli)](https://www.npmjs.com/package/@quilt-dev/cli)
