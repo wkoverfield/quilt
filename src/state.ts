@@ -175,9 +175,11 @@ export class Store {
   /**
    * Run `fn` while holding an exclusive lock on .quilt, so concurrent actor
    * processes can't interleave read-modify-write of ownership/observed state
-   * and lose each other's claims. The lock auto-expires after 10s (a crashed
-   * process never wedges the repo); after ~5s of contention we proceed anyway
-   * rather than block a developer's command indefinitely.
+   * and lose each other's claims. We never steal the lock from a *live* holder
+   * on a timer; it's reclaimed only when the holding process is gone (pid not
+   * alive) or as an absolute backstop when the lockfile is very old (>120s, guards
+   * against pid reuse). If a live holder keeps it past ~30s we throw rather than
+   * run unlocked and risk corrupting state.
    */
   withLock<T>(fn: () => T): T {
     // The lock is NOT reentrant: nesting would spin against our own pid until the
