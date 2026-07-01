@@ -4,6 +4,24 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-07-01
+
+A documentation and repository release. No code changes, so the CLI behaves
+exactly as it does in 0.3.0. This release exists so the version published to npm
+carries the rewritten README.
+
+### Changed
+
+- Rewrote the README as a shorter launchpad: a plain one-line description of what
+  Quilt is at the top, the two-agent contrast demo as the lead with the seven-agent
+  fleet run as the scale proof, and the full command reference moved into
+  `docs/reference.md`.
+
+### Added
+
+- A CONTRIBUTING guide, a SECURITY policy, pull request and issue templates, and a
+  Dependabot config for grouped weekly dependency and Actions updates.
+
 ## [0.3.0] - 2026-06-30
 
 The capture release: agents edit with their native tools and Quilt records who
@@ -154,6 +172,7 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `@quilt-dev/cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
+[0.3.1]: https://github.com/wkoverfield/quilt/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.3.0
 [0.2.0]: https://github.com/wkoverfield/quilt/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/wkoverfield/quilt/releases/tag/v0.1.0
