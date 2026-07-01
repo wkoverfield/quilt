@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import { changedPaths, headBlob } from "./git.js";
+import { changedPaths, headBlobs } from "./git.js";
 import {
   buildHunks,
   isTrivialLine,
@@ -173,9 +173,13 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     else (symbolClaimed.get(c.path) ?? setIn(symbolClaimed, c.path)).add(c.symbol);
   }
 
-  for (const path of relevantPaths(store)) {
+  // Read every relevant file's HEAD content in one batched git call up front,
+  // instead of a subprocess per path inside the loop (the reconcile hot path).
+  const paths = relevantPaths(store);
+  const headByPath = headBlobs(repoRoot, paths);
+  for (const path of paths) {
     if (wholeFileClaimed.has(path)) continue;
-    const head = headBlob(repoRoot, path);
+    const head = headByPath.get(path) ?? null;
     const current = readWorktree(repoRoot, path);
 
     // Lines inside symbols another actor has claimed are off-limits for
@@ -458,8 +462,10 @@ export function buildModel(
   const ownership = store.readOwnership();
   const files: FileModel[] = [];
 
-  for (const path of changedPaths(repoRoot)) {
-    const head = headBlob(repoRoot, path);
+  const paths = changedPaths(repoRoot);
+  const headByPath = headBlobs(repoRoot, paths);
+  for (const path of paths) {
+    const head = headByPath.get(path) ?? null;
     const current = readWorktree(repoRoot, path);
     if (head === current) continue;
 

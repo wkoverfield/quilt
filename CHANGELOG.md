@@ -6,6 +6,14 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Performance
+
+- **`reconcile` no longer scales with changed-file count.** It read each changed
+  file's HEAD content in a separate `git` subprocess (~19 ms/file — up to ~2.9 s on
+  a churny 150-file repo). It now batches all those reads into one `git cat-file
+  --batch`, so a 150-file reconcile drops from ~2.9 s to ~70 ms (~43×). `reconcile`
+  runs on every Quilt command, so this is a whole-loop speedup on large repos.
+
 ### Changed
 
 - **The capture ledger is now the primary attribution source; content-key
