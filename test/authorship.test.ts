@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
@@ -6,6 +6,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/state.js";
 import { reconcile } from "../src/engine.js";
+import { acquireClaims } from "../src/claims.js";
+import { initSymbols } from "../src/symbols.js";
+
+before(async () => {
+  await initSymbols(); // prevention checks parse symbols to find the touched ones
+});
 import {
   computeDelta,
   recordAuthorship,
@@ -145,6 +151,49 @@ test("ledger overrides inference in reconcile: a captured edit keeps its author 
       "X",
       "the ledger keeps X as the author despite Y reconciling first",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("prevention: an edit to a symbol another actor holds is DENIED with their intent (no write)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-prev-"));
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    const src = "function foo() {\n  return 0;\n}\nfunction bar() {\n  return 0;\n}\n";
+    writeFileSync(join(dir, "m.js"), src);
+    acquireClaims(s, "Y", null, ["m.js#foo"], Date.now(), "PERF-1: refactor foo");
+
+    // X tries to edit foo (held by Y) -> denied, with Y's intent.
+    const denied = applyAndRecordEdit(s, { actor: "X", path: "m.js", oldString: "function foo() {\n  return 0;\n}", newString: "function foo() {\n  return 9;\n}" });
+    assert.equal(denied.ok, false);
+    assert.ok("heldBy" in denied && denied.heldBy === "Y");
+    assert.ok("holderIntent" in denied && denied.holderIntent === "PERF-1: refactor foo");
+    assert.equal(readFileSync(join(dir, "m.js"), "utf8"), src, "file untouched on denial");
+    assert.equal(readAuthorship(s).length, 0, "no event on a denied edit");
+
+    // X edits bar (free) -> allowed and captured.
+    const okEdit = applyAndRecordEdit(s, { actor: "X", path: "m.js", oldString: "function bar() {\n  return 0;\n}", newString: "function bar() {\n  return 7;\n}" });
+    assert.ok(okEdit.ok);
+    assert.equal(readAuthorship(s)[0]!.actor, "X");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("prevention: a whole-file write that would remove a claimed symbol is DENIED", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-prevw-"));
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    writeFileSync(join(dir, "m.js"), "function foo() {\n  return 0;\n}\nfunction bar() {\n  return 0;\n}\n");
+    acquireClaims(s, "Y", null, ["m.js#foo"], Date.now(), "owns foo");
+    // X overwrites the file WITHOUT foo — must still be denied (removing held code).
+    const r = applyAndRecordWrite(s, { actor: "X", path: "m.js", content: "function bar() {\n  return 9;\n}\n" });
+    assert.equal(r.ok, false);
+    assert.ok("heldBy" in r && r.heldBy === "Y");
+    assert.match(readFileSync(join(dir, "m.js"), "utf8"), /function foo/, "held code not deleted");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

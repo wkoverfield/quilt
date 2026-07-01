@@ -10,7 +10,18 @@ import { appendFileSync, existsSync, lstatSync, readFileSync, renameSync, writeF
 import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
+import { parseSymbols } from "./symbols.js";
+import { claimHeldByOther } from "./claims.js";
 import type { Store } from "./state.js";
+
+/** A denial: another actor holds the code this edit would touch. */
+export interface EditDenied {
+  ok: false;
+  error: string;
+  /** the actor holding the conflicting claim, and their stated why. */
+  heldBy: string;
+  holderIntent?: string;
+}
 
 /**
  * Resolve a repo-relative path to an absolute one, refusing anything that escapes
@@ -48,6 +59,25 @@ export interface AuthorshipEvent {
   intent?: string;
   /** true for a whole-file write/create. */
   whole?: boolean;
+}
+
+/** The symbol names an edit touches, then whether another actor holds any of them. */
+function checkHeld(
+  store: Store,
+  actor: string,
+  path: string,
+  before: string,
+  idx: number,
+  oldString: string,
+): EditDenied | null {
+  const startLine = before.slice(0, idx).split("\n").length; // 1-based start of the match
+  const endLine = startLine + oldString.split("\n").length - 1;
+  const touched = parseSymbols(path, before)
+    .filter((s) => !(s.endLine < startLine || s.startLine > endLine))
+    .map((s) => s.name);
+  const held = claimHeldByOther(store, actor, path, touched, Date.now());
+  if (!held) return null;
+  return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
 }
 
 function splitLines(s: string): string[] {
@@ -155,7 +185,7 @@ function lineBefore(text: string, idx: number): string | null {
 export function applyAndRecordEdit(
   store: Store,
   args: { actor: string; path: string; oldString: string; newString: string; intent?: string },
-): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } {
+): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
   const abs = safeAbs(store.paths.repoRoot, args.path);
   if (!abs) return { ok: false, error: "path escapes the repository" };
   if (!existsSync(abs)) return { ok: false, error: `file not found: ${args.path}` };
@@ -165,6 +195,11 @@ export function applyAndRecordEdit(
   if (before.indexOf(args.oldString, idx + 1) !== -1) {
     return { ok: false, error: "old_string is not unique; include more context" };
   }
+  // PREVENTION: if another actor holds the symbol(s) this edit touches, deny the
+  // write before any bytes change and hand back their intent — the earliest
+  // possible encounter point (earlier than commit), so the agent resolves in-band.
+  const denied = checkHeld(store, args.actor, args.path, before, idx, args.oldString);
+  if (denied) return denied;
   const after = before.slice(0, idx) + args.newString + before.slice(idx + args.oldString.length);
   atomicWrite(abs, after);
   // Diff the FULL before->after content (computed in-memory from the bytes this
@@ -186,9 +221,17 @@ export function applyAndRecordEdit(
 export function applyAndRecordWrite(
   store: Store,
   args: { actor: string; path: string; content: string; intent?: string },
-): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } {
+): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
   const abs = safeAbs(store.paths.repoRoot, args.path);
   if (!abs) return { ok: false, error: "path escapes the repository" };
+  // A whole-file write collides with any other actor's claim on this path. Check
+  // symbols in BOTH the new content and the existing file — overwriting a file in
+  // a way that removes a claimed symbol must still be denied (else it silently
+  // deletes the held code).
+  const symbols = new Set(parseSymbols(args.path, args.content).map((s) => s.name));
+  if (existsSync(abs)) for (const s of parseSymbols(args.path, readFileSync(abs, "utf8"))) symbols.add(s.name);
+  const held = claimHeldByOther(store, args.actor, args.path, [...symbols], Date.now());
+  if (held) return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
   atomicWrite(abs, args.content);
   const event = recordAuthorship(store, {
     actor: args.actor,
