@@ -35,8 +35,12 @@ export interface ActorsFile {
  * record which actor owns each added / removed line. The key is `symbol\0text`
  * (see symbols.ts#ownKey): the enclosing symbol scope plus the line content.
  * Keying on content (not fixed line numbers) keeps ownership stable as line
- * numbers shift; adding the symbol scope stops identical lines in two different
- * functions (e.g. `  return null;`) from collapsing to one owner.
+ * numbers shift; the symbol scope stops identical lines in two different
+ * functions (e.g. `  return null;`) from collapsing to one owner or one false
+ * conflict. Added lines scope from the working tree (shared by every reader);
+ * removed lines scope from the old side (baseline in reconcile, HEAD elsewhere) —
+ * equal except across an uncommitted function rename, where a removal degrades to
+ * unclaimed (benign, never misattributed).
  */
 export interface FileOwnership {
   /** ownership key (symbol\0text) -> owning actorId, for added lines */

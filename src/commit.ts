@@ -73,7 +73,7 @@ function buildOwnedText(
   includeUnclaimed: boolean,
 ): OwnedBuild {
   const ops = lineDiff(headText ?? "", worktreeText ?? "");
-  // Key each line the same way reconcile did: adds by their scope in the
+  // Key each line the same way reconcile did: adds by their symbol scope in the
   // worktree, removals by their scope in HEAD.
   const keyOf = opKeyer(symbolLocator(path, worktreeText ?? ""), symbolLocator(path, headText ?? ""));
   const out: string[] = [];

@@ -369,9 +369,10 @@ export function keyText(key: string): string {
  * Build a line-number -> enclosing-symbol lookup for a file's content, so callers
  * can compute ownership keys while walking a diff. Parses once; the returned
  * function maps a 1-based line number to the innermost symbol containing it (a
- * method beats its class), or "" when the line is top-level or the file doesn't
- * parse. Empty content or an unsupported language yields "" for every line, i.e.
- * plain text keying — a safe degrade.
+ * method beats its class — smallest span wins, ties broken by document order),
+ * or "" when the line is top-level or the file doesn't parse. Empty content or an
+ * unsupported language yields "" for every line, i.e. plain text keying — a safe
+ * degrade.
  */
 export function symbolLocator(path: string, content: string): (line: number) => string {
   const symbols = parseSymbols(path, content);
@@ -398,7 +399,14 @@ export function symbolLocator(path: string, content: string): (line: number) => 
  * hunk's `newStart`/`oldStart` (default 1 for a whole-file diff). Call it on
  * EVERY op in order: `eq` advances both cursors and returns null; `add`/`del`
  * return the line's `symbol\0text` key. Added lines scope to the new side (where
- * they live), removed lines to the old side — matching how the ledger keys them.
+ * they live), removed lines to the old side.
+ *
+ * Consistency note: reconcile keys a removed line from its scope in the
+ * last-observed baseline, while commit/undo/fleet key it from HEAD. These match
+ * unless the enclosing function was RENAMED between HEAD and the baseline (a rare
+ * uncommitted-rename case); if they diverge the removal is treated as unclaimed
+ * (benign — never misattributed or lost). Added lines have no such split (every
+ * reader scopes them from the shared working tree).
  */
 export function opKeyer(
   addLoc: (line: number) => string,

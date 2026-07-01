@@ -92,11 +92,12 @@ and two owners, instead of colliding into one (a false conflict / misattribution
 Added lines take their scope from the new side (where they live), removed lines
 from the old side, so reconcile / commit / undo / fleet all key the same way, and
 the ledger events carry the keys so the primary path disambiguates too. Removals
-now delete their exact key, so compaction prunes removed lines instead of leaving
-stale entries. Residual edge: two identical lines in the SAME function still
-collapse (rare), and a removed line's scope is read from `baseline` in reconcile
-vs `head` elsewhere — equal in the common case, benign (treated as unclaimed) if
-they diverge.
+delete their exact key, so compaction prunes removed lines instead of leaving
+stale entries. Residual edges (both rare, both benign — never misattribute or
+lose a line): two identical lines in the SAME function still collapse; and a
+removed line's scope is read from `baseline` in reconcile vs `head` elsewhere, so
+across an uncommitted function *rename* a removal can degrade to unclaimed (left
+out of that actor's commit split, not misattributed).
 
 ## Deferred / caveats
 

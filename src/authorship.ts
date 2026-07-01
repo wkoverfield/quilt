@@ -167,9 +167,11 @@ function foldEvents(byPath: Map<string, Map<string, string>>, events: Authorship
     // bare-text key (empty symbol scope), matching how top-level lines key.
     const addedKeys = ev.addedKeys ?? ev.added.map((t) => ownKey("", t));
     for (const key of addedKeys) m.set(key, ev.actor);
-    // A captured removal drops the line's ownership. Safe now that keys are
-    // position-qualified: deleting one symbol's line can't drop an identical
-    // line in another symbol.
+    // A captured removal drops the line's ownership — the line is gone from the
+    // file as of this event. Events are appended in real order under the store
+    // lock, so a later re-add (which re-sets the key) always wins over an earlier
+    // removal, and vice versa; no owner-guard is needed or correct here (a removal
+    // by another actor still means the line is gone).
     for (const key of ev.removedKeys ?? []) m.delete(key);
   }
 }

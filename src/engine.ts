@@ -228,7 +228,7 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       const conflicts = ownership.conflicts;
       // Symbol scope for the ownership key: added lines live in `current`, removed
       // lines in `baseline`. Keying `symbol\0text` keeps identical text in two
-      // different functions from collapsing to one owner.
+      // different functions from collapsing to one owner (or one false conflict).
       const addLoc = symbolLocator(path, current ?? "");
       const delLoc = symbolLocator(path, baseline ?? "");
 
@@ -357,8 +357,10 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     // Ledger overlay: the ledger is authoritative, so a captured line is
     // attributed to its RECORDED author, replacing whatever the inference floor
     // above guessed (this is the fix for "whoever reconciled first owns it").
-    // Only applies to lines actually present in the current diff; un-captured
-    // lines keep their inferred owner — inference is the fallback floor.
+    // Only applies to ADDED lines present in the current diff; un-captured lines
+    // keep their inferred owner — inference is the fallback floor. (Removed-line
+    // attribution stays inference-only — the overlay writes f.added, not
+    // f.removed; that only feeds commit's deletion split, benignly.)
     const ledgerForPath = ledgerOwn.get(path);
     if (ledgerForPath) {
       const f = (ownership.files[path] ??= { added: {}, removed: {} });
@@ -424,8 +426,8 @@ function hunkOverlap(
       continue;
     }
     if (isTrivialLine(op.text)) continue;
-    if (op.type === "del") delOwners.push(file?.removed?.[key!]);
-    else addOwners.push(file?.added?.[key!]);
+    if (op.type === "del") delOwners.push(file?.removed[key!]);
+    else addOwners.push(file?.added[key!]);
   }
   flushRegion();
   return contended ? "contended" : "adjacent";
@@ -446,8 +448,7 @@ function classifyHunk(
   let conflicted = false;
 
   // A fresh keyer per hunk, started at the hunk's line offsets. Called on every
-  // op (incl. eq/trivial) so the symbol\0text keys line up with what reconcile
-  // recorded.
+  // op (incl. eq/trivial) so the keys line up with what reconcile recorded.
   const keyOf = opKeyer(addLoc, delLoc, hunk.newStart, hunk.oldStart);
   for (const op of hunk.ops) {
     const key = keyOf(op);
