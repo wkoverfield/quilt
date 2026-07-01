@@ -6,6 +6,16 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **Ownership is now keyed by symbol scope + line text, not bare text.** Two
+  identical lines in different functions (e.g. `  return null;`) no longer
+  collapse to one owner — each gets its own attribution, closing a class of false
+  conflicts and misattributions. Applies across reconcile, commit, undo, the
+  fleet view, and the capture ledger. A captured removal now drops exactly that
+  line's ownership, so log compaction prunes removed lines instead of retaining
+  stale entries.
+
 ### Performance
 
 - **`reconcile` no longer scales with changed-file count.** It read each changed

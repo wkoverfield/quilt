@@ -9,8 +9,9 @@ import {
   looksBinary,
   MAX_LCS_CELLS,
   type Hunk,
+  type DiffOp,
 } from "./diff.js";
-import { parseSymbols } from "./symbols.js";
+import { parseSymbols, ownKey, keyText, symbolLocator, opKeyer } from "./symbols.js";
 import { foldedAuthorship } from "./authorship.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
@@ -113,16 +114,22 @@ function relevantPaths(store: Store): string[] {
   return [...set].sort();
 }
 
-function changedLineSets(oldText: string | null, newText: string | null): {
+/** The ownership KEYS (symbol scope + text) added/removed between two texts, for
+ * pruning ownership down to lines still in the diff. Keyed the same way reconcile
+ * records them: adds scope to the new side, removes to the old side. */
+function changedLineSets(path: string, oldText: string | null, newText: string | null): {
   added: Set<string>;
   removed: Set<string>;
 } {
   const ops = lineDiff(oldText ?? "", newText ?? "");
+  const keyOf = opKeyer(symbolLocator(path, newText ?? ""), symbolLocator(path, oldText ?? ""));
   const added = new Set<string>();
   const removed = new Set<string>();
   for (const op of ops) {
-    if (op.type === "add") added.add(op.text);
-    else if (op.type === "del") removed.add(op.text);
+    const key = keyOf(op);
+    if (key === null) continue;
+    if (op.type === "add") added.add(key);
+    else removed.add(key);
   }
   return { added, removed };
 }
@@ -219,6 +226,11 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       const delta = lineDiff(baseline ?? "", current ?? "");
       const file = (ownership.files[path] ??= { added: {}, removed: {} });
       const conflicts = ownership.conflicts;
+      // Symbol scope for the ownership key: added lines live in `current`, removed
+      // lines in `baseline`. Keying `symbol\0text` keeps identical text in two
+      // different functions from collapsing to one owner.
+      const addLoc = symbolLocator(path, current ?? "");
+      const delLoc = symbolLocator(path, baseline ?? "");
 
       // Clobber detection: the active actor is removing lines that ANOTHER actor
       // owns (uncommitted). Preserve the victim's pre-clobber content so it can
@@ -239,8 +251,10 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         // Whose line is being deleted? Prefer the authoritative ledger author —
         // it knows the true author even when this actor's reconcile hasn't yet
         // overlaid it onto file.added, so a captured-but-unreconciled line still
-        // names the right clobber victim.
-        const owner = ledgerOwn.get(path)?.get(op.text) ?? file.added[op.text];
+        // names the right clobber victim. The victim added the line (keyed by its
+        // scope), so look it up by the same symbol-qualified key.
+        const delKey = ownKey(delLoc(bLine), op.text);
+        const owner = ledgerOwn.get(path)?.get(delKey) ?? file.added[delKey];
         if (owner && owner !== activeActorId) {
           const sample = victims.get(owner) ?? [];
           if (sample.length < 3) sample.push(op.text);
@@ -294,14 +308,15 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         }
         if (isTrivialLine(op.text)) continue;
         const map = op.type === "add" ? file.added : file.removed;
-        const existing = map[op.text];
+        const key = op.type === "add" ? ownKey(addLoc(curLine), op.text) : ownKey(delLoc(baseLine), op.text);
+        const existing = map[key];
         if (existing && existing !== activeActorId) {
           const fileConflicts = (conflicts[path] ??= {});
-          const list: string[] = fileConflicts[op.text] ?? [existing];
+          const list: string[] = fileConflicts[key] ?? [existing];
           if (!list.includes(activeActorId)) list.push(activeActorId);
-          fileConflicts[op.text] = list;
+          fileConflicts[key] = list;
         } else if (!existing) {
-          map[op.text] = activeActorId;
+          map[key] = activeActorId;
         }
       }
     }
@@ -313,7 +328,7 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     if (!claimedHere) observed.files[path] = current;
 
     // Prune ownership/conflicts for lines no longer in the working diff.
-    const { added, removed } = changedLineSets(head, current);
+    const { added, removed } = changedLineSets(path, head, current);
     const file = ownership.files[path];
     if (file) {
       for (const text of Object.keys(file.added)) {
@@ -347,10 +362,10 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     const ledgerForPath = ledgerOwn.get(path);
     if (ledgerForPath) {
       const f = (ownership.files[path] ??= { added: {}, removed: {} });
-      for (const [text, actor] of ledgerForPath) {
-        if (!added.has(text) || isTrivialLine(text)) continue;
-        f.added[text] = actor;
-        if (ownership.conflicts[path]?.[text]) delete ownership.conflicts[path]![text];
+      for (const [key, actor] of ledgerForPath) {
+        if (!added.has(key) || isTrivialLine(keyText(key))) continue;
+        f.added[key] = actor;
+        if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
       }
     }
   }
@@ -382,7 +397,12 @@ type FileOwnership = OwnershipFile["files"][string];
  * replaced by someone else's. Adjacent edits, by contrast, pair each actor's own
  * delete with its own add, so no cross-owner pair appears.
  */
-function hunkOverlap(hunk: Hunk, file: FileOwnership | undefined, conflicted: boolean): HunkOverlap {
+function hunkOverlap(
+  hunk: Hunk,
+  file: FileOwnership | undefined,
+  conflicted: boolean,
+  keyOf: (op: DiffOp) => string | null,
+): HunkOverlap {
   if (conflicted) return "contended"; // identical line added/removed by two actors
   let delOwners: (string | undefined)[] = [];
   let addOwners: (string | undefined)[] = [];
@@ -398,13 +418,14 @@ function hunkOverlap(hunk: Hunk, file: FileOwnership | undefined, conflicted: bo
     addOwners = [];
   };
   for (const op of hunk.ops) {
+    const key = keyOf(op); // call for EVERY op so the line cursor stays aligned
     if (op.type === "eq") {
       flushRegion();
       continue;
     }
     if (isTrivialLine(op.text)) continue;
-    if (op.type === "del") delOwners.push(file?.removed?.[op.text]);
-    else addOwners.push(file?.added?.[op.text]);
+    if (op.type === "del") delOwners.push(file?.removed?.[key!]);
+    else addOwners.push(file?.added?.[key!]);
   }
   flushRegion();
   return contended ? "contended" : "adjacent";
@@ -415,6 +436,8 @@ function classifyHunk(
   path: string,
   ownership: OwnershipFile,
   activeActorId: string | null,
+  addLoc: (line: number) => string,
+  delLoc: (line: number) => string,
 ): OwnedHunk {
   const file = ownership.files[path];
   const fileConflicts = ownership.conflicts[path] ?? {};
@@ -422,18 +445,23 @@ function classifyHunk(
   let unowned = false;
   let conflicted = false;
 
+  // A fresh keyer per hunk, started at the hunk's line offsets. Called on every
+  // op (incl. eq/trivial) so the symbol\0text keys line up with what reconcile
+  // recorded.
+  const keyOf = opKeyer(addLoc, delLoc, hunk.newStart, hunk.oldStart);
   for (const op of hunk.ops) {
+    const key = keyOf(op);
     if (op.type === "eq") continue;
     // Trivial lines (braces, blanks) are neither owned nor counted as
     // unattributed — they ride along with the hunk's substantive changes.
     if (isTrivialLine(op.text)) continue;
     const map = op.type === "add" ? file?.added : file?.removed;
-    const owner = map?.[op.text];
+    const owner = map?.[key!];
     if (owner) owners.add(owner);
     else unowned = true;
-    if (fileConflicts[op.text]) {
+    if (fileConflicts[key!]) {
       conflicted = true;
-      for (const a of fileConflicts[op.text]!) owners.add(a);
+      for (const a of fileConflicts[key!]!) owners.add(a);
     }
   }
 
@@ -449,7 +477,10 @@ function classifyHunk(
     else ownership_ = "other";
   }
 
-  const overlap = ownership_ === "shared" ? hunkOverlap(hunk, file, conflicted) : undefined;
+  const overlap =
+    ownership_ === "shared"
+      ? hunkOverlap(hunk, file, conflicted, opKeyer(addLoc, delLoc, hunk.newStart, hunk.oldStart))
+      : undefined;
   return { hunk, ownership: ownership_, actors, conflicted, overlap };
 }
 
@@ -485,9 +516,12 @@ export function buildModel(
     };
 
     if (!binary) {
+      // Symbol scopes for keying: adds live in `current`, removals in `head`.
+      const addLoc = symbolLocator(path, current ?? "");
+      const delLoc = symbolLocator(path, head ?? "");
       const ops = lineDiff(head ?? "", current ?? "");
       for (const hunk of buildHunks(ops)) {
-        model.hunks.push(classifyHunk(hunk, path, ownership, activeActorId));
+        model.hunks.push(classifyHunk(hunk, path, ownership, activeActorId, addLoc, delLoc));
       }
     }
     files.push(model);

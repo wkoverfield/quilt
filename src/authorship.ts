@@ -10,7 +10,7 @@ import { appendFileSync, existsSync, lstatSync, readFileSync, renameSync, writeF
 import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
-import { parseSymbols } from "./symbols.js";
+import { parseSymbols, ownKey, symbolLocator } from "./symbols.js";
 import { claimHeldByOther } from "./claims.js";
 import type { Store } from "./state.js";
 
@@ -52,6 +52,13 @@ export interface AuthorshipEvent {
   added: string[];
   /** lines this edit removed. */
   removed: string[];
+  /** ownership keys (symbol scope + text) for the added lines, so identical text
+   * in different symbols doesn't collapse to one owner. Parallel to `added`.
+   * Absent on pre-symbol-keying events; the fold falls back to a bare-text key. */
+  addedKeys?: string[];
+  /** ownership keys for the removed lines — the fold deletes these, so a captured
+   * removal drops the line's ownership (and lets compaction prune it). */
+  removedKeys?: string[];
   /** a context line just before the change, for positional replay. */
   anchor: string | null;
   /** sha256 of the pre-image region — the prevention primitive (phase 3). */
@@ -143,22 +150,27 @@ export function readAuthorship(store: Store): AuthorshipEvent[] {
 }
 
 /**
- * Fold a run of events into an existing `path -> (lineText -> actor)` map, later
- * event winning for the same line. The one place the fold rule lives, so the
+ * Fold a run of events into an existing `path -> (ownKey -> actor)` map, later
+ * event winning for the same key. The one place the fold rule lives, so the
  * log-fold and the checkpoint-fold can't drift.
  *
- * Tracks only ADDED-line authorship; `removed` is not processed. Removing a line
- * doesn't drop its entry — under text keying that would be unsafe (an identical
- * line elsewhere shares the key). Reconcile filters to lines actually in the
- * current diff, so a stale entry is never written to ownership; it just lingers
- * in the checkpoint (a bounded space cost). Positional keying (deferred) would
- * let compaction prune removed lines safely.
+ * Keys are `symbol\0text` (event.addedKeys/removedKeys), so an added line is
+ * owned under its symbol scope and a removal deletes exactly that line's entry —
+ * an identical line in another symbol has a different key and is untouched. That
+ * lets compaction prune removed lines instead of accumulating stale entries.
  */
 function foldEvents(byPath: Map<string, Map<string, string>>, events: AuthorshipEvent[]): void {
   for (const ev of events) {
     let m = byPath.get(ev.path);
     if (!m) byPath.set(ev.path, (m = new Map()));
-    for (const line of ev.added) m.set(line, ev.actor);
+    // Legacy events (pre-symbol-keying) have no addedKeys — fall back to a
+    // bare-text key (empty symbol scope), matching how top-level lines key.
+    const addedKeys = ev.addedKeys ?? ev.added.map((t) => ownKey("", t));
+    for (const key of addedKeys) m.set(key, ev.actor);
+    // A captured removal drops the line's ownership. Safe now that keys are
+    // position-qualified: deleting one symbol's line can't drop an identical
+    // line in another symbol.
+    for (const key of ev.removedKeys ?? []) m.delete(key);
   }
 }
 
@@ -247,6 +259,50 @@ export function computeDelta(oldText: string, newText: string): { added: string[
   };
 }
 
+interface KeyedDelta {
+  added: string[];
+  removed: string[];
+  addedKeys: string[];
+  removedKeys: string[];
+}
+
+/**
+ * The delta plus each line's symbol-qualified ownership key. Added lines take
+ * their scope from the post-image (`newText`), removed lines from the pre-image
+ * (`oldText`) — each is where that line physically lives — so the fold keys the
+ * same way reconcile does. A whole write is all-adds against the new content.
+ */
+function keyedDelta(path: string, oldText: string, newText: string, whole: boolean): KeyedDelta {
+  if (whole) {
+    const loc = symbolLocator(path, newText);
+    const added = splitLines(newText);
+    return { added, removed: [], addedKeys: added.map((t, i) => ownKey(loc(i + 1), t)), removedKeys: [] };
+  }
+  const addLoc = symbolLocator(path, newText);
+  const delLoc = symbolLocator(path, oldText);
+  const added: string[] = [];
+  const removed: string[] = [];
+  const addedKeys: string[] = [];
+  const removedKeys: string[] = [];
+  let newLine = 0;
+  let oldLine = 0;
+  for (const op of lineDiff(oldText, newText)) {
+    if (op.type === "eq") {
+      newLine++;
+      oldLine++;
+    } else if (op.type === "add") {
+      newLine++;
+      added.push(op.text);
+      addedKeys.push(ownKey(addLoc(newLine), op.text));
+    } else {
+      oldLine++;
+      removed.push(op.text);
+      removedKeys.push(ownKey(delLoc(oldLine), op.text));
+    }
+  }
+  return { added, removed, addedKeys, removedKeys };
+}
+
 /**
  * Append one authorship event, derived from the edit payload. The seq is the
  * current event count (assigned under the lock so concurrent appends stay
@@ -268,9 +324,7 @@ export function recordAuthorship(
   const { actor, path, oldText, newText, intent, whole } = args;
   return store.withLock(() => {
     const events = readAuthorship(store);
-    const { added, removed } = whole
-      ? { added: splitLines(newText), removed: [] }
-      : computeDelta(oldText, newText);
+    const { added, removed, addedKeys, removedKeys } = keyedDelta(path, oldText, newText, !!whole);
     const ev: AuthorshipEvent = {
       // seq spans the compacted history too, so it stays monotonic after a
       // truncation resets the log to empty.
@@ -280,6 +334,8 @@ export function recordAuthorship(
       path,
       added,
       removed,
+      addedKeys,
+      removedKeys: removedKeys.length ? removedKeys : undefined,
       anchor: whole ? null : args.anchor ?? null,
       preHash: whole ? null : sha(oldText),
       intent: intent?.trim() ? intent.trim() : undefined,

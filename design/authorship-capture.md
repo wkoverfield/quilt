@@ -83,12 +83,25 @@ file, no daemon), Git stays truth, Quilt calls no LLM (intent is the agent's own
    before the truncate, and the fold is idempotent, so a crash in between re-folds
    rather than losing authorship.
 
+## Symbol-scoped keying (done)
+
+Ownership keys are `symbol\0text` (the enclosing symbol scope plus the line
+text), not bare text. This closes the duplicate-one-liner collapse — an identical
+line like `  return null;` in two different functions now has two distinct keys
+and two owners, instead of colliding into one (a false conflict / misattribution).
+Added lines take their scope from the new side (where they live), removed lines
+from the old side, so reconcile / commit / undo / fleet all key the same way, and
+the ledger events carry the keys so the primary path disambiguates too. Removals
+now delete their exact key, so compaction prunes removed lines instead of leaving
+stale entries. Residual edge: two identical lines in the SAME function still
+collapse (rare), and a removed line's scope is read from `baseline` in reconcile
+vs `head` elsewhere — equal in the common case, benign (treated as unclaimed) if
+they diverge.
+
 ## Deferred / caveats
 
 - Coverage is settled for Claude fleets; still worth checking Codex and agents
   *explicitly* told to use shell.
-- Positional keying (anchor + postHash) for identical lines across functions —
-  still latest-by-text today; the duplicate-one-liner collapse is the known edge.
 - Real Claude-Code live run of the hook + a 4th eval path in `bench/authorship/`.
 - B-style run-boundary capture kept on the shelf as a fallback for harnesses with
   no capturable edit tool.

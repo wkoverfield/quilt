@@ -32,14 +32,16 @@ export interface ActorsFile {
 
 /**
  * Ownership of working-tree edits, keyed by repo-relative path. For each file we
- * record which actor owns each added / removed line of content. Keying on line
- * content (rather than fixed line numbers) keeps ownership stable as the file is
- * edited and line numbers shift.
+ * record which actor owns each added / removed line. The key is `symbol\0text`
+ * (see symbols.ts#ownKey): the enclosing symbol scope plus the line content.
+ * Keying on content (not fixed line numbers) keeps ownership stable as line
+ * numbers shift; adding the symbol scope stops identical lines in two different
+ * functions (e.g. `  return null;`) from collapsing to one owner.
  */
 export interface FileOwnership {
-  /** added line text -> owning actorId */
+  /** ownership key (symbol\0text) -> owning actorId, for added lines */
   added: Record<string, string>;
-  /** removed line text -> owning actorId */
+  /** ownership key (symbol\0text) -> owning actorId, for removed lines */
   removed: Record<string, string>;
 }
 
@@ -48,7 +50,7 @@ export interface OwnershipFile {
   files: Record<string, FileOwnership>;
   /**
    * Lines claimed by more than one actor, surfaced as conflicts.
-   * relPath -> { line -> [actorId, ...] }
+   * relPath -> { symbol\0text -> [actorId, ...] }
    */
   conflicts: Record<string, Record<string, string[]>>;
 }
