@@ -192,7 +192,14 @@ test("quilt setup wires a fresh repo and is idempotent", () => {
 test("quilt setup --dry-run writes nothing", () => {
   const dir = tmpRepo();
   try {
-    const r = spawnSync("node", [CLI, "setup", "--dry-run"], { cwd: dir, encoding: "utf8" });
+    // NO_COLOR keeps stdout plain: picocolors force-enables ANSI when CI is set
+    // (GitHub Actions), which would otherwise split "would " and "create" with a
+    // reset code and break the substring match.
+    const r = spawnSync("node", [CLI, "setup", "--dry-run"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1" },
+    });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /would create \.mcp\.json/);
     assert.equal(existsSync(join(dir, ".mcp.json")), false, "dry-run wrote no .mcp.json");
