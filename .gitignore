@@ -13,3 +13,4 @@ examples/contrast-with.gif
 # Local artifacts from dogfooding `quilt setup` on this repo — keep out of the public tree
 .mcp.json
 .claude/
+CLAUDE.md
