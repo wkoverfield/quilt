@@ -224,9 +224,13 @@ export function applyAndRecordWrite(
 ): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
   const abs = safeAbs(store.paths.repoRoot, args.path);
   if (!abs) return { ok: false, error: "path escapes the repository" };
-  // A whole-file write collides with any other actor's claim on this path.
-  const symbols = parseSymbols(args.path, args.content).map((s) => s.name);
-  const held = claimHeldByOther(store, args.actor, args.path, symbols, Date.now());
+  // A whole-file write collides with any other actor's claim on this path. Check
+  // symbols in BOTH the new content and the existing file — overwriting a file in
+  // a way that removes a claimed symbol must still be denied (else it silently
+  // deletes the held code).
+  const symbols = new Set(parseSymbols(args.path, args.content).map((s) => s.name));
+  if (existsSync(abs)) for (const s of parseSymbols(args.path, readFileSync(abs, "utf8"))) symbols.add(s.name);
+  const held = claimHeldByOther(store, args.actor, args.path, [...symbols], Date.now());
   if (held) return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
   atomicWrite(abs, args.content);
   const event = recordAuthorship(store, {

@@ -182,6 +182,23 @@ test("prevention: an edit to a symbol another actor holds is DENIED with their i
   }
 });
 
+test("prevention: a whole-file write that would remove a claimed symbol is DENIED", () => {
+  const dir = mkdtempSync(join(tmpdir(), "quilt-prevw-"));
+  const s = new Store(dir);
+  s.ensureDirs();
+  try {
+    writeFileSync(join(dir, "m.js"), "function foo() {\n  return 0;\n}\nfunction bar() {\n  return 0;\n}\n");
+    acquireClaims(s, "Y", null, ["m.js#foo"], Date.now(), "owns foo");
+    // X overwrites the file WITHOUT foo — must still be denied (removing held code).
+    const r = applyAndRecordWrite(s, { actor: "X", path: "m.js", content: "function bar() {\n  return 9;\n}\n" });
+    assert.equal(r.ok, false);
+    assert.ok("heldBy" in r && r.heldBy === "Y");
+    assert.match(readFileSync(join(dir, "m.js"), "utf8"), /function foo/, "held code not deleted");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("applyAndRecordWrite captures a whole-file create", () => {
   const { s, dir } = newStore();
   try {
