@@ -349,3 +349,28 @@ test("MCP: claim returns push-awareness warnings at reservation time", async () 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("zero-config identity: unnamed calls get a per-connection auto actor", async () => {
+  const dir = makeRepo();
+  const client = await connect(dir);
+  try {
+    write(dir, "auto.js", "function f() { return 1; }\n");
+    // No start_session, no QUILT_ACTOR, no per-call actor: the connection's
+    // auto id (derived from the client handshake name) takes over.
+    const claim = parse(await client.callTool({ name: "claim", arguments: { paths: ["auto.js"] } }));
+    assert.equal(claim.results[0].granted, true);
+    const commit = parse(
+      await client.callTool({ name: "commit_mine", arguments: { message: "auto work" } }),
+    );
+    assert.equal(commit.committed, true);
+    // The commit is attributed to the auto id, which carries the client name.
+    const author = gitOut(dir, ["log", "-1", "--format=%an"]);
+    assert.match(author, /^quilt-test-[0-9a-f]{4}$/, `auto actor from clientInfo, got: ${author}`);
+    // And it's ONE stable id per connection, not a new one per call.
+    const claims = parse(await client.callTool({ name: "get_status", arguments: {} }));
+    assert.ok(claims, "status still works identity-less");
+  } finally {
+    await client.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -65,7 +65,9 @@ quilt setup      # wire Quilt into the repo (MCP server, hooks, coordination)
 quilt doctor     # confirm it's wired and capture is flowing
 ```
 
-Give each agent process its own id, so Quilt can tell them apart:
+That's it. Agents are named automatically: each Claude Code session or MCP
+connection gets its own id, so parallel agents are told apart with no setup.
+Set an explicit id when you want one that is stable across sessions:
 
 ```bash
 QUILT_ACTOR=auth-agent claude    # this agent's edits are attributed to auth-agent
@@ -107,9 +109,10 @@ independent, long-running work, Quilt for agents in the same code at once.
 `quilt setup` wires the capture hooks and a shared MCP server. On Claude Code the
 hooks let agents use the built-in Edit and Write tools normally while Quilt
 records each change's author and blocks a write into code another agent holds,
-with no protocol for the agent to follow. Each agent just carries its own id in
-`QUILT_ACTOR`. For other runtimes, the same capture and prevention is available as
-MCP tools.
+with no protocol for the agent to follow and no setup: each session is named
+automatically, or carries its own `QUILT_ACTOR` for a stable id. For other
+runtimes, the same capture and prevention is available as MCP tools, with each
+connection named automatically the same way.
 
 See [docs/orchestrators.md](docs/orchestrators.md) for Codex, Cursor, Aider, and
 the difference between process-per-agent and many-agents-in-one-process setups.

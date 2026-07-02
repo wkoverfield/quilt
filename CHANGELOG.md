@@ -4,6 +4,24 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-07-01
+
+Zero-config identity: agents no longer need to be named for capture to flow.
+
+### Added
+
+- **Automatic actor ids.** When no identity is set, Quilt derives one instead of
+  capturing nothing: the Claude Code hooks name each session from its session id
+  (`claude-1a2b3c4d`), and the MCP server names each connection from the client's
+  handshake name (`cursor-3fa2`). Parallel agents get distinct ids with no setup.
+  An explicit `QUILT_ACTOR` (or per-call `actor`) always wins, and remains the way
+  to keep one id across sessions or to tell apart several subagents sharing one
+  process or connection, which no ambient signal can split.
+  - Identity-optional reads (`get_status` with no actor) stay identity-less
+    rather than minting an id, so the fleet view only shows actors that acted.
+- `quilt doctor` and `quilt setup` now describe the unset-`QUILT_ACTOR` state as
+  auto-naming instead of a missing requirement.
+
 ## [0.3.3] - 2026-07-01
 
 Makes Quilt publishable to the official MCP Registry, so directories that crawl
@@ -194,6 +212,7 @@ worktree. Every commit Quilt makes is an ordinary Git commit.
 - Published on npm as `@quilt-dev/cli`, providing the `quilt` command.
 - Requires Node 20+ and `git` on the PATH.
 
+[0.4.0]: https://github.com/wkoverfield/quilt/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/wkoverfield/quilt/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/wkoverfield/quilt/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/wkoverfield/quilt/compare/v0.3.0...v0.3.1

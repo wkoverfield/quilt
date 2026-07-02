@@ -74,9 +74,10 @@ export function diagnose(store: Store, opts: { actorEnv?: string } = {}): Doctor
         },
   );
 
-  // Identity. The doctor usually runs in the human's shell, where QUILT_ACTOR is
-  // legitimately unset — so this is informational, not a warning. The point is to
-  // remind that each AGENT process needs its own id or the hooks capture nothing.
+  // Identity. Capture no longer depends on QUILT_ACTOR — the hooks fall back to
+  // a per-session auto id (claude-xxxxxxxx) and the MCP server to a
+  // per-connection one — so unset is informational: it means auto-naming, not
+  // no-capture. An explicit id is what buys continuity across sessions.
   const actor = opts.actorEnv?.trim();
   checks.push(
     actor
@@ -84,8 +85,8 @@ export function diagnose(store: Store, opts: { actorEnv?: string } = {}): Doctor
       : {
           label: "Identity",
           status: "info",
-          detail: "QUILT_ACTOR not set in this shell",
-          hint: "expected for you; each agent process needs its own QUILT_ACTOR for the hooks to attribute it",
+          detail: "QUILT_ACTOR not set — agents get auto ids per session",
+          hint: "fine for most use; set QUILT_ACTOR for a stable id that persists across sessions",
         },
   );
 

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { Store } from "./state.js";
 import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
@@ -38,22 +38,43 @@ export async function runMcpServer(store: Store): Promise<void> {
   }
 
   /**
+   * The zero-config fallback: an auto id minted once per connection from the
+   * client's handshake name (e.g. `cursor-3fa2`). Stdio servers are spawned per
+   * client process, so this is stable for that agent's whole run — the common
+   * one-agent-per-process case just works with no naming at all. Several
+   * subagents sharing ONE connection still need per-call `actor` ids (there's no
+   * ambient signal to tell them apart), and an explicit id is what gives
+   * continuity across runs.
+   */
+  let connectionActorId: string | null = null;
+  const connectionActor = (): string => {
+    if (!connectionActorId) {
+      const client = server.server.getClientVersion()?.name ?? "agent";
+      const base =
+        client
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "agent";
+      connectionActorId = `${base}-${randomBytes(2).toString("hex")}`;
+    }
+    return connectionActorId;
+  };
+
+  /**
    * Resolve who a tool call acts as. Precedence: an explicit per-call `actor`
-   * argument > the env/start_session `active` actor. The per-call form is what
-   * lets ONE shared server (e.g. Claude Code or Codex running several subagents
-   * against one `quilt mcp` process) attribute each subagent correctly — there
-   * is no single global "active" agent to clobber. An actor named for the first
-   * time is auto-registered, so a subagent can just pass its id without a
-   * separate start_session.
+   * argument > the env/start_session `active` actor > (for calls that NEED an
+   * identity) the per-connection auto id. The per-call form is what lets ONE
+   * shared server (e.g. Claude Code or Codex running several subagents against
+   * one `quilt mcp` process) attribute each subagent correctly — there is no
+   * single global "active" agent to clobber. An actor named for the first time
+   * is auto-registered, so a subagent can just pass its id without a separate
+   * start_session. Optional-identity reads (get_status without an actor) stay
+   * identity-less rather than minting an auto id, so the fleet view doesn't fill
+   * with actors that never edited.
    */
   const resolveActor = (explicit: string | undefined, required: boolean): string | null => {
-    const id = explicit ?? active?.actorId ?? null;
-    if (!id) {
-      if (required) {
-        throw new Error("no actor — pass `actor`, or call start_session first");
-      }
-      return null;
-    }
+    const id = explicit ?? active?.actorId ?? (required ? connectionActor() : null);
+    if (!id) return null;
     if (!store.findActor(id)) {
       store.upsertActor({
         id,
@@ -73,7 +94,7 @@ export async function runMcpServer(store: Store): Promise<void> {
     .string()
     .optional()
     .describe(
-      "actor id to act as. Required when several agents share one server (each subagent passes its own id, e.g. its role/task name); optional if identity is pinned via start_session or QUILT_ACTOR.",
+      "actor id to act as. Auto-derived per connection when omitted (from the client name, e.g. cursor-3fa2), so naming is optional for a single agent. Pass an explicit id (your role/task name) when several subagents share one server — they have no ambient identity to tell them apart — or when you want a stable id across runs.",
     );
 
   const server = new McpServer({ name: "quilt", version: "0.3.0" });

@@ -2,12 +2,14 @@ import { test, before } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { Store } from "../src/state.js";
 import { acquireClaims } from "../src/claims.js";
 import { initSymbols } from "../src/symbols.js";
 import { readAuthorship } from "../src/authorship.js";
-import { parseHookInput, runHookPre, runHookPost, type HookInput } from "../src/hooks.js";
+import { parseHookInput, runHookPre, runHookPost, sessionActorId, type HookInput } from "../src/hooks.js";
 
 before(async () => {
   await initSymbols(); // prevention parses symbols to find the touched ones
@@ -34,7 +36,24 @@ test("parseHookInput normalizes an Edit payload (old_string/new_string)", () => 
     tool_name: "Edit",
     tool_input: { file_path: "m.js", old_string: "a", new_string: "b" },
   });
-  assert.deepEqual(p, { tool: "Edit", path: "m.js", edits: [{ oldString: "a", newString: "b" }], content: null });
+  assert.deepEqual(p, {
+    tool: "Edit",
+    path: "m.js",
+    edits: [{ oldString: "a", newString: "b" }],
+    content: null,
+    sessionId: null,
+  });
+});
+
+test("parseHookInput carries session_id for auto identity, and sessionActorId derives from it", () => {
+  const p = parseHookInput({
+    tool_name: "Edit",
+    session_id: "AB12cd34-9999-4abc-8def-000011112222",
+    tool_input: { file_path: "m.js", old_string: "a", new_string: "b" },
+  });
+  assert.equal(p!.sessionId, "AB12cd34-9999-4abc-8def-000011112222");
+  assert.equal(sessionActorId(p!.sessionId!), "claude-ab12cd34");
+  assert.equal(sessionActorId("!!!"), null, "no derivable id from junk");
 });
 
 test("parseHookInput accepts the alternate old_str/new_str/file_text spellings", () => {
@@ -46,7 +65,7 @@ test("parseHookInput accepts the alternate old_str/new_str/file_text spellings",
 
 test("parseHookInput handles a Write (content) and a MultiEdit (edits[])", () => {
   const w = parseHookInput({ tool_name: "Write", tool_input: { file_path: "m.js", content: "hello\n" } });
-  assert.deepEqual(w, { tool: "Write", path: "m.js", edits: [], content: "hello\n" });
+  assert.deepEqual(w, { tool: "Write", path: "m.js", edits: [], content: "hello\n", sessionId: null });
   const m = parseHookInput({
     tool_name: "MultiEdit",
     tool_input: { file_path: "m.js", edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "d" }] },
@@ -257,6 +276,57 @@ test("snapshot is consumed after Post (a second Post is a no-op)", () => {
     runHookPost(s, "a", input);
     runHookPost(s, "a", input); // snapshot already consumed
     assert.equal(readAuthorship(s).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- zero-config identity through the real CLI hook commands ----
+
+test("hooks auto-name the actor from the Claude session id when QUILT_ACTOR is unset", () => {
+  const CLI = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
+  const dir = mkdtempSync(join(tmpdir(), "quilt-autoactor-"));
+  const g = (args: string[]) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  try {
+    g(["init", "-q"]);
+    writeFileSync(join(dir, "m.js"), "function f() { return 1; }\n");
+    g(["add", "-A"]);
+    spawnSync("node", [CLI, "init"], { cwd: dir });
+
+    // Claude Code always sends session_id in the hook payload. No QUILT_ACTOR.
+    const env = { ...process.env } as Record<string, string>;
+    delete env.QUILT_ACTOR;
+    delete env.QUILT_SESSION;
+    const payload = JSON.stringify({
+      tool_name: "Edit",
+      session_id: "deadbeef-1234-4abc-8def-000011112222",
+      tool_input: { file_path: "m.js", old_string: "return 1;", new_string: "return 2;" },
+    });
+    const pre = spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", input: payload, env });
+    assert.equal(pre.status, 0, pre.stderr);
+    writeFileSync(join(dir, "m.js"), "function f() { return 2; }\n");
+    const post = spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", input: payload, env });
+    assert.equal(post.status, 0, post.stderr);
+
+    // The edit is captured, attributed to the derived per-session id.
+    const s = new Store(dir);
+    const ev = readAuthorship(s);
+    assert.equal(ev.length, 1, "capture flowed with zero config");
+    assert.equal(ev[0].actor, "claude-deadbeef");
+
+    // An explicit QUILT_ACTOR still wins over the session id.
+    const payload2 = JSON.stringify({
+      tool_name: "Edit",
+      session_id: "deadbeef-1234-4abc-8def-000011112222",
+      tool_input: { file_path: "m.js", old_string: "return 2;", new_string: "return 3;" },
+    });
+    const env2 = { ...env, QUILT_ACTOR: "named-agent" };
+    spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", input: payload2, env: env2 });
+    writeFileSync(join(dir, "m.js"), "function f() { return 3; }\n");
+    spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", input: payload2, env: env2 });
+    const ev2 = readAuthorship(s);
+    assert.equal(ev2.length, 2);
+    assert.equal(ev2[1].actor, "named-agent", "explicit id beats the auto id");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

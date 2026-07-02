@@ -35,6 +35,8 @@ export interface HookInput {
   edits: HookEdit[];
   /** present for Write (whole-file content). */
   content: string | null;
+  /** Claude Code session id — the auto-identity fallback when QUILT_ACTOR is unset. */
+  sessionId: string | null;
 }
 
 function str(v: unknown): string | null {
@@ -76,7 +78,21 @@ export function parseHookInput(raw: unknown): HookInput | null {
   }
 
   const content = str(input.content) ?? str(input.file_text);
-  return { tool, path, edits, content };
+  const sessionId = str(o.session_id);
+  return { tool, path, edits, content, sessionId };
+}
+
+/**
+ * Derive a per-session auto actor id from a Claude Code session id, so capture
+ * flows with ZERO config: no QUILT_ACTOR, no instructions. Parallel sessions get
+ * distinct ids for free (each session has its own id). The trade-off is
+ * continuity — a new session on the same task is a new actor — so QUILT_ACTOR
+ * stays the way to pin a stable id, and always wins over this fallback.
+ */
+export function sessionActorId(sessionId: string): string | null {
+  const clean = sessionId.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!clean) return null;
+  return `claude-${clean.slice(0, 8)}`;
 }
 
 function snapshotKey(actor: string, path: string): string {
