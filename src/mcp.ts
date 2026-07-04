@@ -7,7 +7,7 @@ import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, releaseClaims, listClaims, pathsClaimedByOthers } from "./claims.js";
+import { acquireClaims, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
 import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
 import { VERSION } from "./version.js";
@@ -182,7 +182,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), { pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()) }), false));
+      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), { pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()), pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()) }), false));
     },
   );
 
@@ -219,9 +219,12 @@ export async function runMcpServer(store: Store): Promise<void> {
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
         pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
+        pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()),
       });
       return ok({
         patch: sel.patch,
+        wholeFiles: sel.wholeFiles,
+        skippedBinary: sel.skippedBinary,
         files: sel.files,
         totalAdded: sel.totalAdded,
         totalRemoved: sel.totalRemoved,
@@ -249,9 +252,16 @@ export async function runMcpServer(store: Store): Promise<void> {
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
         pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
+        pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()),
       });
-      if (sel.files.length === 0) {
-        return ok({ committed: false, reason: "no owned changes to commit" });
+      if (sel.files.length === 0 && sel.wholeFiles.length === 0) {
+        return ok({
+          committed: false,
+          reason: "no owned changes to commit",
+          ...(sel.skippedBinary.length
+            ? { skippedBinary: sel.skippedBinary, note: "binary/too-large files need a claim to commit whole" }
+            : {}),
+        });
       }
       const res = commitSelection(repoRoot, sel, actor, message);
       let releasedClaims = 0;
@@ -260,7 +270,7 @@ export async function runMcpServer(store: Store): Promise<void> {
         // the response, or the protocol's trailing `release` reads as a
         // failure (`released: 0` burned a status call for every single
         // dogfood agent).
-        releasedClaims = releaseClaims(store, actorId, sel.files.map((f) => f.path)).released;
+        releasedClaims = releaseClaims(store, actorId, [...sel.files.map((f) => f.path), ...sel.wholeFiles]).released;
         reconcile(store, actorId);
         store.appendLedger({
           ts: nowIso(),
@@ -273,7 +283,18 @@ export async function runMcpServer(store: Store): Promise<void> {
       }
       return ok(
         res.committed
-          ? { ...res, releasedClaims, note: "committed files' claims were auto-released — no separate release call needed" }
+          ? {
+              ...res,
+              releasedClaims,
+              wholeFiles: sel.wholeFiles,
+              skippedBinary: sel.skippedBinary,
+              note:
+                "committed files' claims were auto-released — no separate release call needed" +
+                (sel.skippedBinary.length
+                  ? "; WARNING: unclaimed binary/too-large files were SKIPPED (claim them to commit them whole): " +
+                    sel.skippedBinary.join(", ")
+                  : ""),
+            }
           : res,
       );
     },

@@ -126,6 +126,26 @@ The dogfood fleets earned these rules the hard way:
    git's view, so an untracked test snapshot your tooling drops is a real
    new file to quilt.
 
+### Rebinding, and the deadlock-break play
+
+Attribution rebinding is asymmetric, and both halves matter:
+
+- **Unclaimed → you: works.** If you release a claim before committing, your
+  working-tree hunks drop to unclaimed; RE-claiming the file rebinds them to
+  you (lazy inference resolves uncontested hunks to the sole claimant).
+- **Wrong actor → you: does not work.** Once an edit was CAPTURED under some
+  other id, the ledger is authoritative and re-claiming never re-attributes
+  it. The recovery is: revert the hunk, re-apply it via `quilt_edit` with the
+  right `actor` (or under your claim), commit clean.
+
+That asymmetry is what makes the **deadlock-break play** safe when two actors
+each hold files the other needs: commit the granted 90% of your scope,
+release everything, let the other actor layer their work and commit, then
+re-claim the remainder and rebind your leftover hunks. The dogfood fleet
+converged on this pattern without orchestrator involvement — it's the
+recommended move for mutual contention, and it never loses attribution
+because unclaimed-to-claimant rebinding is reliable.
+
 ## 1. Add the shared server
 
 One `quilt mcp` process serves the whole fleet. Don't pin it to an identity

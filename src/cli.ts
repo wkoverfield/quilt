@@ -17,7 +17,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers } from "./claims.js";
+import { acquireClaims, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
@@ -552,6 +552,7 @@ program
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
       pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
+      pathClaimedBySelf: pathsClaimedBySelf(store, ctx.actorId, Date.now()),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, true), null, 2) + "\n");
@@ -599,9 +600,17 @@ program
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
       pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
+      pathClaimedBySelf: pathsClaimedBySelf(store, ctx.actorId, Date.now()),
     });
 
-    if (selection.files.length === 0) {
+    if (selection.files.length === 0 && selection.wholeFiles.length === 0) {
+      if (selection.skippedBinary.length) {
+        fail(
+          "nothing committable at line level, and these binary/too-large files are unclaimed: " +
+            selection.skippedBinary.join(", ") +
+            " — claim them (quilt claim <path>) to commit them whole.",
+        );
+      }
       fail("you don't own any committable changes. See `quilt status`.");
     }
 
@@ -630,14 +639,14 @@ program
     // The work landed, so the reservations on it are spent — release them, as
     // the MCP commit_mine already does, so the fleet view doesn't keep showing
     // this actor as holding claims on files it already committed.
-    const rel = releaseClaims(store, ctx.actorId!, selection.files.map((f) => f.path));
+    const rel = releaseClaims(store, ctx.actorId!, [...selection.files.map((f) => f.path), ...selection.wholeFiles]);
     store.appendLedger({
       ts: nowIso(),
       type: "commit.mine",
       actorId: ctx.actorId,
       sessionId: ctx.session?.id ?? null,
       commitSha: res.commitSha,
-      files: selection.files.map((f) => f.path),
+      files: [...selection.files.map((f) => f.path), ...selection.wholeFiles],
     });
     // Re-observe so the freshly committed lines drop out of ownership.
     reconcile(store, ctx.actorId);
@@ -651,6 +660,18 @@ program
           ? pc.dim(`  Auto-released ${rel.released} claim(s) on the committed files.\n`)
           : ""),
     );
+    if (selection.wholeFiles.length) {
+      process.stdout.write(
+        pc.dim(`  Committed whole (claimed binary/too-large): ${selection.wholeFiles.join(", ")}\n`),
+      );
+    }
+    if (selection.skippedBinary.length) {
+      process.stdout.write(
+        pc.yellow("  ⚠ Skipped binary/too-large files nobody claimed: ") +
+          selection.skippedBinary.join(", ") +
+          pc.yellow("\n    (claim a file to commit it whole: quilt claim <path>)\n"),
+      );
+    }
     if (selection.blockedFiles.length) {
       process.stdout.write(
         pc.dim(`  Left untouched in shared files: ${selection.blockedFiles.join(", ")}\n`),

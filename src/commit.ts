@@ -28,7 +28,12 @@ export interface Selection {
   files: SelectedFile[];
   /** Files that have owned hunks but also unresolved blockers in the same file. */
   blockedFiles: string[];
-  /** True if any selectable hunk was "mixed" (mine + unattributed). */
+  /** Binary or too-large-to-diff files CLAIMED by the actor — staged whole
+   * into the commit (no line-level split is possible for them). */
+  wholeFiles: string[];
+  /** Binary/too-large files skipped because nobody claimed them. Surfaced
+   * LOUDLY: a silently dropped lockfile is a broken build for everyone. */
+  skippedBinary: string[];
   hasMixed: boolean;
   totalAdded: number;
   totalRemoved: number;
@@ -215,18 +220,34 @@ export function selectOwned(
      * applies there (their mid-flight hunks can read "unclaimed" while
      * attribution is pending, and must not be sweepable on that label). */
     pathClaimedByOther?: (path: string) => boolean;
+    /** paths covered by the ACTOR'S OWN live claim (whole-file or directory) —
+     * lets a binary/too-large file (a lockfile, an asset) ride into the commit
+     * whole, since no line-level split exists for it. */
+    pathClaimedBySelf?: (path: string) => boolean;
   } = {},
 ): Selection {
   const actor = model.activeActorId;
   const patches: string[] = [];
   const files: SelectedFile[] = [];
   const blockedFiles: string[] = [];
+  const wholeFiles: string[] = [];
+  const skippedBinary: string[] = [];
   let hasMixed = false;
   let totalAdded = 0;
   let totalRemoved = 0;
 
   for (const file of model.files) {
-    if (file.binary || actor === null) continue;
+    if (actor === null) continue;
+    if (file.binary) {
+      // No line-level ownership exists for a binary or too-large file
+      // (package-lock.json is the canonical case). A claim is the ownership
+      // signal at file granularity: claimed by this actor → commit it whole;
+      // otherwise skip it VISIBLY — the dogfood fleet lost a lockfile to a
+      // silent skip and shipped a broken build.
+      if (opts.pathClaimedBySelf?.(file.path)) wholeFiles.push(file.path);
+      else skippedBinary.push(file.path);
+      continue;
+    }
     const includeMixedHere =
       (opts.includeMixed ?? false) && !(opts.pathClaimedByOther?.(file.path) ?? false);
     const built = buildOwnedText(
@@ -278,7 +299,16 @@ export function selectOwned(
     if (built.hasOther) blockedFiles.push(file.path);
   }
 
-  return { patch: patches.join(""), files, blockedFiles, hasMixed, totalAdded, totalRemoved };
+  return {
+    patch: patches.join(""),
+    files,
+    blockedFiles,
+    wholeFiles,
+    skippedBinary,
+    hasMixed,
+    totalAdded,
+    totalRemoved,
+  };
 }
 
 export interface CommitResult {
@@ -300,7 +330,7 @@ export function commitSelection(
   message: string,
   opts: { dryRun?: boolean } = {},
 ): CommitResult {
-  if (!selection.patch.trim()) {
+  if (!selection.patch.trim() && selection.wholeFiles.length === 0) {
     return { committed: false, reason: "no owned changes to commit" };
   }
 
@@ -328,15 +358,30 @@ export function commitSelection(
     }
 
     // Stage only the owned hunks into the temp index.
-    const apply = git(
-      ["apply", "--cached", "--whitespace=nowarn", patchFile],
-      { cwd: repoRoot, env, check: false },
-    );
-    if (apply.status !== 0) {
-      return {
-        committed: false,
-        reason: `patch did not apply cleanly:\n${apply.stderr.trim()}`,
-      };
+    if (selection.patch.trim()) {
+      const apply = git(
+        ["apply", "--cached", "--whitespace=nowarn", patchFile],
+        { cwd: repoRoot, env, check: false },
+      );
+      if (apply.status !== 0) {
+        return {
+          committed: false,
+          reason: `patch did not apply cleanly:\n${apply.stderr.trim()}`,
+        };
+      }
+    }
+
+    // Stage claimed binary/too-large files whole (worktree bytes verbatim) —
+    // patches can't express them, but the temp index can hold their blobs.
+    for (const rel of selection.wholeFiles) {
+      const abs = join(repoRoot, rel);
+      if (!existsSync(abs)) {
+        git(["update-index", "--force-remove", "--", rel], { cwd: repoRoot, env, check: false });
+        continue;
+      }
+      const sha = git(["hash-object", "-w", "--", rel], { cwd: repoRoot, env }).stdout.trim();
+      const mode = worktreeMode(repoRoot, rel);
+      git(["update-index", "--add", "--cacheinfo", `${mode},${sha},${rel}`], { cwd: repoRoot, env });
     }
 
     const tree = git(["write-tree"], { cwd: repoRoot, env }).stdout.trim();
@@ -380,7 +425,7 @@ export function commitSelection(
     // doesn't show the just-committed hunks as a staged "reversal". The working
     // tree is never touched, so other actors' uncommitted edits stay put. Chunk
     // the paths so a very large commit can't blow past the argv length limit.
-    const paths = selection.files.map((f) => f.path);
+    const paths = [...selection.files.map((f) => f.path), ...selection.wholeFiles];
     for (let i = 0; i < paths.length; i += 200) {
       git(["reset", "-q", "--", ...paths.slice(i, i + 200)], {
         cwd: repoRoot,
