@@ -35,9 +35,20 @@ attribution clean, prevents collisions, and gives each agent its own clean commi
 And it holds as you add agents. Here are seven fanning out on one repo, run head
 to head:
 
-![Seven agents fan out on one repo. Without Quilt, their work collapses into one tangled commit and a collision silently overwrites an agent's change. With Quilt, each agent lands a clean, correctly-attributed commit and the collision is prevented.](examples/fleet.gif)
+`./examples/fleet.sh` runs seven agents against one checkout, head to head,
+on the real machinery. The two endings:
 
-That is `./examples/fleet.sh`. It uses the quilt system, and you can also run it yourself.
+```txt
+WITHOUT quilt   1 commit for 7 agents — six got "nothing to commit", their
+                work swept into the first agent's blob. a7 silently
+                overwrote a1's change to getUser. a1's work is gone.
+
+WITH quilt      6 clean commits, one per agent, each exactly its own lines.
+                a7's write into a1's claimed function was denied before any
+                bytes changed, with a1's stated intent in the denial.
+```
+
+Run it yourself — nothing in it is staged.
 
 ## When two agents want the same file
 
