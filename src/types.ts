@@ -110,11 +110,17 @@ export interface Claim {
    * reserve different symbols in the same file without contending.
    */
   symbol?: string;
+  /** True for a DIRECTORY claim (`convex/_generated/`): reserves every path
+   * under the prefix. The codegen case — one claim instead of guessing the
+   * output file list in advance. */
+  dir?: boolean;
   actor: string;
   session: string | null;
   acquiredAt: string;
   /** epoch ms; the claim is ignored once now > expiresAt. */
   expiresAt: number;
+  /** the same instant as expiresAt, human-readable (acquiredAt is ISO too). */
+  expiresAtIso?: string;
   /**
    * Optional short "why" for this claim (e.g. "PERF-412: raise for peak load").
    * Surfaced to an actor whose overlapping claim is denied, so it can resolve a

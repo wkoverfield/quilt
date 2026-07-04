@@ -4,9 +4,36 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.4.1] - 2026-07-04
 
 ### Fixed
+
+- **Symbol claims that bind nothing are now denied** (the 20-hour dogfood's
+  #1 finding). A symbol claim naming nothing real in the file — a typo, a
+  schema table property, an unparseable file type — was granted but bound
+  nothing: the claimant's external edits attributed elsewhere and its
+  `commit_mine` silently dropped the file. Such claims now deny with a
+  near-miss suggestion (`did you mean "formatPrice"?`) and guidance to claim
+  the whole file. Pre-claiming a symbol you're about to ADD is still possible
+  with the explicit `creating: true` (CLI `--creating`) opt-in — it binds when
+  the symbol appears.
+- **`includeUnclaimed` never touches another actor's claimed paths.** External
+  edits attribute lazily, so a peer's mid-flight hunks can read "unclaimed"
+  while their claim is live — sweeping them on that label stole live work.
+  Claimed paths are now categorically off-limits to `--include-unclaimed`.
+- **The read layer tells the truth mid-flight**: unattributed hunks on a path
+  exactly one other actor has claimed are classed `other` with that actor
+  named (attribution pending), not `unclaimed`. Status files also carry a
+  file-level `actors` union — the side-effect-free "who holds what" view.
+- **Clobber false positives eliminated**: a file whose worktree matches HEAD
+  has nothing uncommitted to clobber (stale-baseline deltas are history that
+  landed), and a deleted line still present at HEAD is landed code being
+  rewritten — normal editing, never a clobber. Only uncommitted work counts
+  as a victim.
+- **Clobber lifecycle**: an open record whose sampled victim lines all exist
+  at HEAD or in the worktree auto-resolves — stale alarms no longer greet
+  every new actor for hours (which trained agents to ignore the one signal
+  that matters most).
 
 - **`.quilt/current` no longer binds hook capture (pilot root cause).** The
   session pointer is checkout-GLOBAL, so whoever ran `quilt start` last owned
@@ -79,23 +106,21 @@ All notable changes to Quilt are documented here. The format is based on
   as the MCP `commit_mine` already did, so the fleet view stops showing spent
   reservations.
 
-### Added
-
-- Claiming a symbol that doesn't exist in the file warns with a near-miss
-  suggestion (`did you mean "formatPrice"?`) instead of silently reserving
-  nothing. Still granted — pre-claiming a symbol you're about to add is legal.
-  Surfaced in the CLI, `--json`, and the MCP `claim` tool (`symbolWarnings`).
-- `quilt setup` wires Cursor too: a repo with `.cursor/` gets the quilt server
-  in `.cursor/mcp.json`, and an existing `AGENTS.md` (Cursor/Codex-family)
-  receives the coordination snippet.
-- `quilt setup` attributes its own generated files to a `quilt-setup` actor, so
-  the first `quilt status` shows them as owned instead of flagging Quilt's own
-  wiring as suspicious unattributed changes.
-- `quilt setup` warns when `quilt` doesn't resolve on PATH (hooks and the MCP
-  server would silently do nothing), and its epilogue now says to commit the
-  generated config files and links the full docs URL.
-
 ### Changed
+
+- **Claim TTL raised to 30 minutes, and claims renew on any activity.** Every
+  quilt call (status, edit, commit — they all reconcile) refreshes the active
+  actor's claims, so leases can't silently lapse mid-task or while blocked
+  waiting on someone else. `release` reports lapsed claims separately
+  (`expired: N`) instead of folding them into a confusing count.
+- **`commit_mine` says it auto-released** the committed files' claims
+  (`releasedClaims: N` + note). `release` with nothing held explains the
+  auto-release instead of a bare `released: 0` — the paper cut every single
+  dogfood agent hit.
+- **Denials carry the holder's claim expiry** (`holderExpiresAt`), so a
+  blocked actor can pace retries instead of guessing.
+- Claims carry `expiresAtIso` alongside the epoch `expiresAt`, matching
+  `acquiredAt`'s format.
 
 - One identity story everywhere: agents are auto-named; `QUILT_ACTOR` pins a
   stable id. `quilt status`, `whoami`, error messages, and a bare `quilt start`
@@ -105,6 +130,26 @@ All notable changes to Quilt are documented here. The format is based on
   (`utils.js#formatPrice`), not just the file, in hooks and MCP responses.
 - `quilt status` labels unattributed changes "not captured — edited outside
   agent tooling" instead of the cryptic "pre-existing / generated?".
+
+### Added
+
+- **Directory claims**: a trailing slash (`convex/_generated/`) reserves every
+  current and future path under the prefix — one claim for codegen output
+  instead of guessing filenames in advance.
+- The coordination snippet and docs now teach the binding rules the dogfood
+  fleet learned the hard way: whole-file claims BEFORE editing, attribution is
+  edit-time and never retroactive, commit auto-releases, shared-tree proof
+  discipline, gitignore tooling artifacts.
+
+- `quilt setup` wires Cursor too: a repo with `.cursor/` gets the quilt server
+  in `.cursor/mcp.json`, and an existing `AGENTS.md` (Cursor/Codex-family)
+  receives the coordination snippet.
+- `quilt setup` attributes its own generated files to a `quilt-setup` actor, so
+  the first `quilt status` shows them as owned instead of flagging Quilt's own
+  wiring as suspicious unattributed changes.
+- `quilt setup` warns when `quilt` doesn't resolve on PATH (hooks and the MCP
+  server would silently do nothing), and its epilogue now says to commit the
+  generated config files and links the full docs URL.
 
 ## [0.4.0] - 2026-07-01
 

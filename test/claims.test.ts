@@ -54,7 +54,7 @@ test("claims: acquire, deny another actor, release, re-acquire", () => {
     assert.equal(r[0]!.granted, false);
     assert.equal(r[0]!.holder, "alice");
 
-    releaseClaims(s, "alice", ["a.ts"]);
+    releaseClaims(s, "alice", ["a.ts"], t0);
     r = acquireClaims(s, "bob", "sessB", ["a.ts"], t0);
     assert.equal(r[0]!.granted, true, "freed path is claimable");
 
@@ -84,8 +84,8 @@ test("claims: release all of an actor's claims", () => {
   try {
     const t0 = 1000;
     acquireClaims(s, "alice", null, ["a", "b", "c"], t0);
-    const n = releaseClaims(s, "alice", null);
-    assert.equal(n, 3);
+    const n = releaseClaims(s, "alice", null, t0);
+    assert.equal(n.released, 3);
     assert.equal(listClaims(s, t0).length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -96,8 +96,8 @@ test("claims: releasing with an empty array releases nothing", () => {
   const { s, dir } = newStore();
   try {
     acquireClaims(s, "alice", null, ["a", "b"], 1000);
-    const n = releaseClaims(s, "alice", []);
-    assert.equal(n, 0, "empty array is a no-op, not release-all");
+    const n = releaseClaims(s, "alice", [], 1000);
+    assert.equal(n.released, 0, "empty array is a no-op, not release-all");
     assert.equal(listClaims(s, 1000).length, 2);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -172,7 +172,7 @@ test("claims: an absolute path inside the repo is stored repo-relative and colli
     assert.equal(denied!.granted, false);
     assert.equal(denied!.holder, "alice");
     // Releasing by the absolute spelling frees the relative claim.
-    assert.equal(releaseClaims(s, "alice", [join(dir, "src", "a.js")]), 1);
+    assert.equal(releaseClaims(s, "alice", [join(dir, "src", "a.js")], t0).released, 1);
     assert.equal(listClaims(s, t0).length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });

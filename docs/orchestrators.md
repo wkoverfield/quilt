@@ -95,6 +95,37 @@ The hooks also need Quilt initialized in the repo (`quilt setup` does this, or r
 rather than error, so if native edits aren't being captured, check that
 `.quilt/` exists (`quilt doctor` reports this).
 
+## The protocol that binds (read this first)
+
+The dogfood fleets earned these rules the hard way:
+
+1. **Claim whole files BEFORE editing.** Attribution is decided at edit time
+   and is never retroactive. A whole-file claim placed before you edit binds
+   your external (editor-tool) edits to your actor id; claiming after the
+   fact does not re-attribute what you already wrote. `quilt_edit` /
+   `quilt_write` are the always-bound path regardless of claims.
+2. **Symbol claims are for sharing one file, and they must be real.** A
+   symbol that isn't in the file is DENIED (with a near-miss suggestion) —
+   a granted claim that binds nothing would protect nothing. Adding a new
+   function to an existing file? Pass `creating: true` (CLI: `--creating`);
+   it binds when the symbol appears.
+3. **Directory claims cover codegen.** `convex/_generated/` (trailing slash)
+   reserves everything under the prefix — no guessing output filenames.
+4. **`commit_mine` auto-releases** the committed files' claims. The loop is
+   claim → edit → commit_mine; a trailing `release` is only for abandoning
+   work (its response now says this instead of a bare `released: 0`).
+5. **Claims renew while you're active.** Any quilt call refreshes your
+   claims, so they can't silently lapse mid-task. A denial tells you when
+   the holder's claim expires, so pace retries against that instead of
+   guessing.
+6. **Shared-tree proof discipline.** Repo-wide gates (tsc, tests) can fail
+   mid-wave because of OTHER actors' in-flight work — that's the price of
+   same-checkout visibility (which also means codegen and cross-layer types
+   flow to everyone with zero sync protocol). Verify your own hunks, or run
+   proof at wave end. And keep tooling artifacts gitignored: quilt follows
+   git's view, so an untracked test snapshot your tooling drops is a real
+   new file to quilt.
+
 ## 1. Add the shared server
 
 One `quilt mcp` process serves the whole fleet. Don't pin it to an identity

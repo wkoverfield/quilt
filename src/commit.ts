@@ -209,7 +209,13 @@ export function selectOwned(
   model: WorktreeModel,
   repoRoot: string,
   ownership: OwnershipFile,
-  opts: { includeMixed?: boolean } = {},
+  opts: {
+    includeMixed?: boolean;
+    /** paths covered by another actor's live claim — includeMixed never
+     * applies there (their mid-flight hunks can read "unclaimed" while
+     * attribution is pending, and must not be sweepable on that label). */
+    pathClaimedByOther?: (path: string) => boolean;
+  } = {},
 ): Selection {
   const actor = model.activeActorId;
   const patches: string[] = [];
@@ -221,13 +227,15 @@ export function selectOwned(
 
   for (const file of model.files) {
     if (file.binary || actor === null) continue;
+    const includeMixedHere =
+      (opts.includeMixed ?? false) && !(opts.pathClaimedByOther?.(file.path) ?? false);
     const built = buildOwnedText(
       file.path,
       file.oldText,
       file.newText,
       ownership.files[file.path],
       actor,
-      opts.includeMixed ?? false,
+      includeMixedHere,
     );
     if (built.hasUnclaimed) hasMixed = true;
     // A torn symbol (some of its changed lines included, some excluded) can

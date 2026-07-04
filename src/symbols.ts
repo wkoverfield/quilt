@@ -355,6 +355,43 @@ export function canParse(path: string): boolean {
   return ready && ext(path) in GRAMMAR_BY_EXT;
 }
 
+/** The nearest name within a small edit distance (<= 2), or null — the
+ * "did you mean" suggestion for a typo'd symbol claim. */
+export function closestName(target: string, names: string[]): string | null {
+  let best: string | null = null;
+  let bestDist = 3;
+  for (const n of names) {
+    const d = editDistance(target.toLowerCase(), n.toLowerCase(), bestDist);
+    if (d < bestDist) {
+      bestDist = d;
+      best = n;
+    }
+  }
+  return best;
+}
+
+/** Levenshtein distance, capped: returns `cap` when the true distance is >= cap. */
+function editDistance(a: string, b: string, cap: number): number {
+  if (Math.abs(a.length - b.length) >= cap) return cap;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur: number[] = [i];
+    let rowMin = i;
+    for (let j = 1; j <= b.length; j++) {
+      const d = Math.min(
+        (prev[j] ?? cap) + 1,
+        (cur[j - 1] ?? cap) + 1,
+        (prev[j - 1] ?? cap) + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      cur[j] = d;
+      rowMin = Math.min(rowMin, d);
+    }
+    if (rowMin >= cap) return cap;
+    prev = cur;
+  }
+  return Math.min(prev[b.length] ?? cap, cap);
+}
+
 /** Separates the symbol scope from the line text in an ownership key. NUL can't
  * appear in a source line, so it's an unambiguous delimiter. */
 export const OWN_KEY_SEP = "\u0000";

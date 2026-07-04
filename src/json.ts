@@ -38,12 +38,16 @@ export function statusJson(model: WorktreeModel, base: string | null) {
     else if (fileClass === "shared") summary.shared++;
     else if (fileClass === "other") summary.others++;
     else summary.unclaimed++;
+    // File-level actor union — the "who holds what" read the dogfood fleet
+    // kept wanting without side effects (they resorted to probing claims).
+    const actors = [...new Set(file.hunks.flatMap((h) => h.actors))];
     return {
       path: file.path,
       new: file.isNew,
       deleted: file.isDeleted,
       binary: file.binary,
       class: fileClass,
+      actors,
       hunks,
     };
   });

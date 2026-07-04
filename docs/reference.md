@@ -22,7 +22,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
-| `quilt claim [targets...] [--json]` | Reserve files, or `file#symbol`, for editing. With none, lists claims. |
+| `quilt claim [targets...] [--json] [--creating]` | Reserve files (`src/auth.ts`), directories (`convex/_generated/`), or symbols (`file#symbol`) for editing — BEFORE you edit; the claim is what binds external edits to you. A symbol missing from the file is denied unless `--creating` (you are about to add it). With no targets, lists claims. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? |

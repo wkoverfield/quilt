@@ -117,8 +117,9 @@ test("per-line commit: two actors APPEND functions to one file (same hunk) and b
   try {
     quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
     quilt(dir, ["start", "--actor", "B", "--type", "agent"]);
-    quilt(dir, ["claim", "helpers.js#alpha"], "A");
-    quilt(dir, ["claim", "helpers.js#beta"], "B");
+    // alpha/beta don't exist yet — forward claims need the explicit opt-in.
+    quilt(dir, ["claim", "helpers.js#alpha", "--creating"], "A");
+    quilt(dir, ["claim", "helpers.js#beta", "--creating"], "B");
 
     // Both append their function — adjacent, so they land in ONE diff hunk.
     writeFileSync(
@@ -353,6 +354,104 @@ test("clobber detection still fires in a gated file while unrelated claims are l
       1,
       "one open clobber per victim+path, not one per reconcile",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 1b: includeUnclaimed must never sweep hunks on a path another
+// actor has CLAIMED — external edits attribute lazily, so a peer's mid-flight
+// hunks can read "unclaimed" while their claim is listed in the same response.
+test("commit --mine --include-unclaimed refuses hunks on another actor's claimed path", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    // B claims data.ts and writes it externally (no capture — the lazy path).
+    quilt(dir, ["claim", "data.ts", "--intent", "data layer"], "B");
+    write(dir, "data.ts", "export const rows = [];\n");
+    // A does its own claimed work, then tries the sweep flag.
+    quilt(dir, ["claim", "ui.ts"], "A");
+    write(dir, "ui.ts", "export const ui = 1;\n");
+    const c = quilt(dir, ["commit", "--mine", "--include-unclaimed", "-m", "A sweep attempt"], "A");
+    assert.equal(c.status, 0, c.stderr);
+    const committed = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim().split("\n");
+    assert.deepEqual(committed, ["ui.ts"], "B's claimed in-flight file stays out even with the flag");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 1c: the READ layer tells the truth mid-flight — a peer's
+// uncaptured hunks on their claimed path read as THEIRS (attribution
+// pending), not as "unclaimed".
+test("status classes a peer's uncaptured hunks on their claimed path as theirs, not unclaimed", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    quilt(dir, ["claim", "feature.ts", "--intent", "building feature"], "B");
+    write(dir, "feature.ts", "export const wip = true;\n");
+    const st = JSON.parse(quilt(dir, ["status", "--json"], "A").stdout);
+    const f = st.files.find((x: any) => x.path === "feature.ts");
+    assert.ok(f, "file visible");
+    assert.equal(f.class, "other", "claimed-by-B reads as B's, not unclaimed");
+    assert.deepEqual(f.actors, ["B"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 2: clobber correctness. Rewriting COMMITTED lines is normal
+// editing — landed history is not clobberable.
+test("rewriting committed-at-HEAD lines never fires a clobber", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    // B authors a line and commits it — it's landed history now.
+    quilt(dir, ["claim", "shared.js"], "B");
+    write(dir, "shared.js", "function f() { return 2; }\n");
+    quilt(dir, ["status"], "B");
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "B lands"], "B").status, 0);
+    // A rewrites the landed line (a routine refactor).
+    quilt(dir, ["claim", "shared.js"], "A");
+    write(dir, "shared.js", "function f() { return 3; }\n");
+    quilt(dir, ["status"], "A");
+    let clobbers = { clobbers: [] as any[] };
+    try {
+      clobbers = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    } catch {
+      /* file never created = no clobbers ever fired — exactly right */
+    }
+    assert.equal(
+      clobbers.clobbers.filter((c: any) => !c.restored).length,
+      0,
+      "no clobber for rewriting landed code",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 2b: a stale open clobber whose victim lines exist at HEAD is
+// describing work that LANDED — it auto-resolves instead of alarming every
+// future actor.
+test("a stale clobber whose victim lines landed at HEAD auto-resolves on reconcile", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    // Plant an old open clobber whose sample line is exactly what HEAD holds.
+    const stale = {
+      clobbers: [{
+        id: "stale1", ts: new Date(0).toISOString(), path: "shared.js",
+        victimActor: "B", byActor: "A", snapshotId: "none",
+        sampleLines: ["function f() { return 1; }"], restored: false,
+      }],
+    };
+    writeFileSync(join(dir, ".quilt", "clobbers.json"), JSON.stringify(stale));
+    quilt(dir, ["status"], "A");
+    const after = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    assert.equal(after.clobbers[0].restored, true, "landed work is not a live alarm");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

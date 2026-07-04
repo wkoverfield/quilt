@@ -17,14 +17,13 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
+import { acquireClaims, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import { recordAuthorship } from "./authorship.js";
-import { verifyClaimTargets } from "./claimcheck.js";
 import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -552,6 +551,7 @@ program
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
+      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, true), null, 2) + "\n");
@@ -598,6 +598,7 @@ program
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
+      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
     });
 
     if (selection.files.length === 0) {
@@ -629,7 +630,7 @@ program
     // The work landed, so the reservations on it are spent — release them, as
     // the MCP commit_mine already does, so the fleet view doesn't keep showing
     // this actor as holding claims on files it already committed.
-    releaseClaims(store, ctx.actorId!, selection.files.map((f) => f.path));
+    const rel = releaseClaims(store, ctx.actorId!, selection.files.map((f) => f.path));
     store.appendLedger({
       ts: nowIso(),
       type: "commit.mine",
@@ -645,7 +646,10 @@ program
       pc.green("✓ ") +
         `Committed ${selection.files.length} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
         `(${res.commitSha!.slice(0, 7)}).\n` +
-        pc.dim("  Other actors' changes remain in the working tree.\n"),
+        pc.dim("  Other actors' changes remain in the working tree.\n") +
+        (rel.released > 0
+          ? pc.dim(`  Auto-released ${rel.released} claim(s) on the committed files.\n`)
+          : ""),
     );
     if (selection.blockedFiles.length) {
       process.stdout.write(
@@ -743,7 +747,8 @@ program
   .argument("[paths...]", "files to claim; with none, lists active claims")
   .option("--json", "emit JSON")
   .option("--intent <text>", "a short why for this claim, shown to anyone it blocks")
-  .action((paths: string[], opts: { json?: boolean; intent?: string }) => {
+  .option("--creating", "allow symbol claims for symbols you are ABOUT TO ADD (they bind at write time)")
+  .action((paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean }) => {
     const store = requireStore();
     const ctx = activeContext(store);
 
@@ -773,36 +778,44 @@ program
       paths,
       Date.now(),
       opts.intent,
+      { creating: opts.creating },
     );
     // Push-awareness: warn if anything just claimed depends on a symbol another
     // actor is currently changing, so the actor learns at reservation time.
     const warnings = dependencyWarnings(store, ctx.actorId!, Date.now());
-    // A granted symbol claim whose symbol isn't in the file is probably a typo —
-    // say so now, while the claimant can still fix the target.
-    const symbolWarnings = verifyClaimTargets(store, results);
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ results, warnings, symbolWarnings }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
     } else {
       for (const r of results) {
-        const target = r.symbol ? `${r.path}#${r.symbol}` : r.path;
+        const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
           process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
         } else {
           const why =
-            r.reason === "outside-repo" ? "outside the repository" : `held by ${r.holder}`;
+            r.reason === "outside-repo"
+              ? "outside the repository"
+              : r.reason === "symbol-not-found"
+                ? `no symbol "${r.symbol}" in ${r.path}` +
+                  (r.suggestion ? ` — did you mean "${r.suggestion}"?` : "") +
+                  ` (a claim that binds nothing protects nothing — claim the whole file, or pass --creating if you are about to add it)`
+                : r.reason === "symbols-unsupported"
+                  ? `symbols aren't parsed for this file type — claim the whole file: quilt claim ${r.path}`
+                  : `held by ${r.holder}`;
           process.stdout.write(pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(${why})`)}\n`);
           // Hand the blocked actor the holder's intent so it can resolve the
           // collision instead of just waiting.
           if (r.holderIntent) {
             process.stdout.write(pc.dim(`      ${r.holder} is: ${r.holderIntent}\n`));
           }
+          if (r.holderExpiresAt) {
+            process.stdout.write(
+              pc.dim(`      their claim lapses ${new Date(r.holderExpiresAt).toISOString()} unless renewed\n`),
+            );
+          }
         }
       }
       for (const w of warnings) {
         process.stdout.write(pc.yellow("  ⚠ heads-up ") + formatWarning(w) + "\n");
-      }
-      for (const w of symbolWarnings) {
-        process.stdout.write(pc.yellow("  ⚠ heads-up ") + w.message + "\n");
       }
     }
     if (results.some((r) => !r.granted)) process.exitCode = 1;
@@ -816,12 +829,17 @@ program
     const store = requireStore();
     const ctx = activeContext(store);
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
-    const n = releaseClaims(
+    const r = releaseClaims(
       store,
       ctx.actorId!,
       paths && paths.length > 0 ? paths : null,
     );
-    process.stdout.write(pc.green("✓ ") + `Released ${n} claim${n === 1 ? "" : "s"}.\n`);
+    let line = `Released ${r.released} claim${r.released === 1 ? "" : "s"}.`;
+    if (r.expired > 0) line += ` (${r.expired} had already expired.)`;
+    if (r.released === 0 && r.expired === 0) {
+      line += pc.dim(" Nothing was held — note that commit --mine auto-releases the committed files' claims.");
+    }
+    process.stdout.write(pc.green("✓ ") + line + "\n");
   });
 
 program
