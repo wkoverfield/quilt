@@ -8,6 +8,33 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Fixed
 
+- **`.quilt/current` no longer binds hook capture (pilot root cause).** The
+  session pointer is checkout-GLOBAL, so whoever ran `quilt start` last owned
+  every subsequent captured edit in the repo, regardless of which agent made
+  it — the mechanism behind both pilot misattribution rounds. Hook identity now
+  comes only from per-edit signals: `QUILT_ACTOR` (per-process env) or the
+  payload's agent/session ids. `quilt start` still scopes the CLI commands run
+  in your own terminal.
+- **`commit --mine` refuses to tear a symbol.** When a function had some of
+  its changed lines owned by the committer and others excluded (unattributed
+  or another actor's), the partial reconstruction committed a construct with
+  missing lines — a syntax error in history. A file with a torn symbol is now
+  withheld entirely (surfaced under "Left untouched in shared files") until
+  the tear is resolved: claim/own the rest, use `--include-unclaimed`, or let
+  the other actor commit first.
+- **`commit --mine` no longer sweeps another agent's uncaptured files (pilot
+  round 2).** The inference floor attributed every un-observed delta to
+  whoever reconciled first — so files written by bash/CLI codegen (which
+  capture never sees) and never claimed were absorbed into the first
+  committer's commit. Inference is now gated in a contested tree: while any
+  OTHER actor holds a live claim, it only attributes files the reconciling
+  actor has claimed itself. Ungated single-actor behavior is unchanged.
+  Un-claimed, un-captured deltas stay *pending* (frozen baseline) until their
+  maker claims the file — in a fleet, own what you claim or what capture saw.
+  Clobber DETECTION is deliberately not gated: an overwrite of another actor's
+  uncommitted lines is still caught and preserved even in a gated file (with
+  dedup, since a frozen baseline re-presents the same delta every reconcile).
+
 - **Parallel subagents of one Claude Code session no longer merge into one
   actor.** Subagents share their parent's session id, so the session-derived
   auto id collapsed them all together — the first pilot's `commit --mine`

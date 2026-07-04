@@ -72,10 +72,19 @@ function readStdin(): Promise<string> {
 }
 
 /**
- * Resolve the actor a hook acts as. The ladder: QUILT_ACTOR (an explicit stable
- * id — always wins) > the active session's actor (quilt start) > an auto id
- * from the payload's agent_id (per-SUBAGENT — subagents share the session id,
- * so this is what tells them apart) > an auto id from the session id.
+ * Resolve the actor a hook acts as. The ladder: QUILT_ACTOR (an explicit,
+ * per-process id — always wins) > an auto id from the payload's agent_id
+ * (per-SUBAGENT — subagents share the session id, so this is what tells them
+ * apart) > an auto id from the session id.
+ *
+ * Deliberately NOT in the ladder: the `.quilt/current` session pointer
+ * (`quilt start`). It is a checkout-GLOBAL file, so whoever ran start last
+ * would own every subsequent hook capture in the repo regardless of which
+ * agent edited — the root cause behind both pilot misattribution rounds.
+ * `quilt start` scopes the CLI commands you run in your own terminal;
+ * per-edit capture identity comes from the payload (or QUILT_ACTOR, which is
+ * per-process env and therefore actually scoped to one agent).
+ *
  * Registers a first-seen actor so it shows up in the fleet. Returns null only
  * when there's no signal at all — the hook then no-ops rather than guess.
  * `auto` marks a derived id, which enables claim adoption downstream (an
@@ -85,7 +94,7 @@ function hookActor(
   store: Store,
   input: { sessionId: string | null; agentId: string | null; agentType: string | null },
 ): { id: string; auto: boolean } | null {
-  const explicit = process.env.QUILT_ACTOR || activeContext(store).actorId;
+  const explicit = process.env.QUILT_ACTOR;
   const derived =
     (input.agentId ? agentActorId(input.agentId, input.agentType) : null) ??
     (input.sessionId ? sessionActorId(input.sessionId) : null);

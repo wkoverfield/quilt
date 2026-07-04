@@ -561,3 +561,40 @@ test("a captured edit refreshes the holder's claim TTL (long work never outlives
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("the .quilt/current pointer never binds hook capture — `quilt start` does not own other agents' edits", () => {
+  // Pilot root cause: .quilt/current is checkout-GLOBAL, so whoever ran
+  // `quilt start` last owned every subsequent hook capture in the repo.
+  const CLI = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
+  const dir = mkdtempSync(join(tmpdir(), "quilt-ptr-"));
+  const g = (a: string[]) => spawnSync("git", a, { cwd: dir, encoding: "utf8" });
+  g(["init", "-q"]);
+  g(["config", "user.email", "t@t.io"]);
+  g(["config", "user.name", "t"]);
+  try {
+    writeFileSync(join(dir, "f.js"), "function f() {\n  return 1;\n}\n");
+    g(["add", "-A"]);
+    g(["commit", "-q", "-m", "init"]);
+    spawnSync("node", [CLI, "init"], { cwd: dir });
+    // Someone starts a session — .quilt/current now points at "lastguy".
+    spawnSync("node", [CLI, "start", "--actor", "lastguy"], { cwd: dir, encoding: "utf8" });
+
+    // A DIFFERENT agent's native edit arrives carrying only a session id.
+    const env = { ...process.env };
+    delete env.QUILT_ACTOR;
+    const payload = JSON.stringify({
+      tool_name: "Edit",
+      session_id: "beefcafe-1111-4abc-8def-000011112222",
+      tool_input: { file_path: join(dir, "f.js"), old_string: "return 1;", new_string: "return 2;" },
+    });
+    spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", input: payload, env });
+    writeFileSync(join(dir, "f.js"), "function f() {\n  return 2;\n}\n");
+    spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", input: payload, env });
+
+    const log = readFileSync(join(dir, ".quilt", "authorship.log"), "utf8");
+    assert.match(log, /"actor":"claude-beefcafe"/, "captured under the session-derived id");
+    assert.doesNotMatch(log, /"actor":"lastguy"/, "the global pointer must not own the edit");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

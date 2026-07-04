@@ -71,7 +71,7 @@ export function runWatch(store: Store): void {
   );
   process.stdout.write(
     pc.dim(
-      `  active actor: ${ctx.actorId ?? "(none — run quilt start)"}\n` +
+      `  active actor: ${ctx.actorId ?? "(none — set QUILT_ACTOR=<id> or run quilt start)"}\n` +
         "  edits are attributed live; collisions are caught and preserved. Ctrl-C to stop.\n\n",
     ),
   );

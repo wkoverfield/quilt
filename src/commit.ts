@@ -13,7 +13,7 @@ import {
   type FileModel,
   type WorktreeModel,
 } from "./engine.js";
-import { symbolLocator, opKeyer } from "./symbols.js";
+import { symbolLocator, opKeyer, OWN_KEY_SEP } from "./symbols.js";
 import type { Actor, FileOwnership, OwnershipFile } from "./types.js";
 
 export interface SelectedFile {
@@ -54,6 +54,11 @@ interface OwnedBuild {
   hasOther: boolean;
   /** an unattributed changed line was skipped (committable with --include-unclaimed) */
   hasUnclaimed: boolean;
+  /** a named symbol has BOTH included and excluded changed lines — committing
+   * would tear the construct (e.g. a function missing one of its lines), which
+   * is how a syntax error got committed in the pilot. The file must not be
+   * partially committed. */
+  torn: boolean;
 }
 
 /**
@@ -84,6 +89,12 @@ function buildOwnedText(
   let hasUnclaimed = false;
   let lastFromWorktree = false; // for the committed file's trailing newline
   let blockInclude = false; // trivial lines inherit their change run's decision
+  // Tear detection: a NAMED symbol with both included and excluded changed
+  // lines cannot be partially committed — the result is a construct missing
+  // some of its lines (the committed-syntax-error failure). Track the symbol
+  // scope (the key's prefix) of every non-trivial changed line on each side.
+  const includedScopes = new Set<string>();
+  const excludedScopes = new Set<string>();
 
   for (const op of ops) {
     const key = keyOf(op); // every op, so the line cursor stays aligned
@@ -107,6 +118,8 @@ function buildOwnedText(
         hasOther = true;
       }
       blockInclude = include;
+      const scope = key ? key.slice(0, key.indexOf(OWN_KEY_SEP)) : "";
+      if (scope) (include ? includedScopes : excludedScopes).add(scope);
     }
     if (op.type === "add") {
       if (include) {
@@ -126,16 +139,17 @@ function buildOwnedText(
     }
   }
 
-  if (!changed) return { added: 0, removed: 0, hasOther, hasUnclaimed };
+  const torn = [...includedScopes].some((s) => excludedScopes.has(s));
+  if (!changed) return { added: 0, removed: 0, hasOther, hasUnclaimed, torn };
   // The actor's changes delete the file entirely.
   if (worktreeText === null && out.length === 0) {
-    return { text: null, added, removed, hasOther, hasUnclaimed };
+    return { text: null, added, removed, hasOther, hasUnclaimed, torn };
   }
   const headFinal = headText === null ? true : splitLines(headText).finalNewline;
   const wtFinal = worktreeText === null ? true : splitLines(worktreeText).finalNewline;
   const finalNL = lastFromWorktree ? wtFinal : headFinal;
   const text = out.length === 0 ? "" : out.join("\n") + (finalNL ? "\n" : "");
-  return { text, added, removed, hasOther, hasUnclaimed };
+  return { text, added, removed, hasOther, hasUnclaimed, torn };
 }
 
 /**
@@ -168,6 +182,14 @@ export function selectOwned(
       opts.includeMixed ?? false,
     );
     if (built.hasUnclaimed) hasMixed = true;
+    // A torn symbol (some of its changed lines included, some excluded) can
+    // never be partially committed — the committed construct would be missing
+    // lines. Withhold the whole file; the tear resolves by claiming/owning the
+    // rest, `--include-unclaimed`, or the other actor committing first.
+    if (built.torn) {
+      blockedFiles.push(file.path);
+      continue;
+    }
     if (built.added === 0 && built.removed === 0) {
       if (built.hasOther) blockedFiles.push(file.path);
       continue;

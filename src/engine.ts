@@ -180,8 +180,17 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
   const nowMs = Date.now();
   const wholeFileClaimed = new Set<string>();
   const symbolClaimed = new Map<string, Set<string>>();
+  // For the contested-tree gate below: does any OTHER actor hold a live claim
+  // anywhere, and which paths has the ACTIVE actor claimed itself?
+  let othersHaveLiveClaims = false;
+  const selfClaimedPaths = new Set<string>();
   for (const c of store.readClaims().claims) {
-    if (c.expiresAt <= nowMs || c.actor === activeActorId) continue;
+    if (c.expiresAt <= nowMs) continue;
+    if (c.actor === activeActorId) {
+      selfClaimedPaths.add(c.path);
+      continue;
+    }
+    othersHaveLiveClaims = true;
     if (c.symbol === undefined) wholeFileClaimed.add(c.path);
     else (symbolClaimed.get(c.path) ?? setIn(symbolClaimed, c.path)).add(c.symbol);
   }
@@ -228,21 +237,39 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       lineCount(baseline) * lineCount(current) > MAX_LCS_CELLS ||
       lineCount(head) * lineCount(current) > MAX_LCS_CELLS;
 
+    // The contested-tree gate on the INFERENCE floor. Inference ("everything
+    // that changed since we last looked belongs to the active actor") is only
+    // sound when there's one plausible author. While OTHER actors hold live
+    // claims — visible mid-work — a delta in a file this actor never claimed
+    // could just as well be theirs (a bash/CLI write capture never saw), so
+    // attributing it to whoever happens to reconcile first is how one agent's
+    // commit swept seven of another agent's untracked files in the pilot.
+    // While contested, inference only attributes paths the active actor has
+    // CLAIMED; other deltas stay pending (baseline frozen below) so their true
+    // maker can still take them by claiming, and capture/ledger attribution is
+    // unaffected. When no one else holds claims, inference behaves as before —
+    // the single-actor plain-git flow loses nothing. Same liveness trade-off
+    // as claims themselves: protection lasts while claims are live.
+    const inferHere = !othersHaveLiveClaims || selfClaimedPaths.has(path);
+
     if (!binary && !tooLarge && activeActorId) {
       const delta = lineDiff(baseline ?? "", current ?? "");
-      const file = (ownership.files[path] ??= { added: {}, removed: {} });
-      const conflicts = ownership.conflicts;
       // Symbol scope for the ownership key: added lines live in `current`, removed
       // lines in `baseline`. Keying `symbol\0text` keeps identical text in two
       // different functions from collapsing to one owner (or one false conflict).
       const addLoc = symbolLocator(path, current ?? "");
       const delLoc = symbolLocator(path, baseline ?? "");
 
-      // Clobber detection: the active actor is removing lines that ANOTHER actor
-      // owns (uncommitted). Preserve the victim's pre-clobber content so it can
-      // be restored — detect-and-preserve, nothing is silently lost. Removals
+      // Clobber detection: lines another actor owns (uncommitted) are being
+      // removed. Preserve the victim's pre-clobber content so it can be
+      // restored — detect-and-preserve, nothing is silently lost. Removals
       // inside a symbol another actor claimed are skipped (that's their edit to
-      // make, not a clobber by us).
+      // make, not a clobber by us). Detection runs even for files the
+      // contested-tree gate excludes from INFERENCE below: the victim comes
+      // from the ledger/ownership record (reliable either way), and skipping
+      // would leave an overwrite invisible for as long as claims stay live.
+      // `byActor` stays the reconciling actor — the same best-available guess
+      // it has always been on the inference path.
       const victims = new Map<string, string[]>();
       let bLine = 0; // 1-based line in baseline; advances on eq + del
       for (const op of delta) {
@@ -260,8 +287,15 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         // names the right clobber victim. The victim added the line (keyed by its
         // scope), so look it up by the same symbol-qualified key.
         const delKey = ownKey(delLoc(bLine), op.text);
-        const owner = ledgerOwn.get(path)?.get(delKey) ?? file.added[delKey];
+        const owner = ledgerOwn.get(path)?.get(delKey) ?? ownership.files[path]?.added[delKey];
         if (owner && owner !== activeActorId) {
+          // A gated file's baseline stays frozen, so the same pending delta is
+          // seen by every reconcile until resolved — don't re-record a clobber
+          // that's already open for this victim on this path.
+          const open = clobbers.clobbers.some(
+            (c) => !c.restored && c.path === path && c.victimActor === owner,
+          );
+          if (open) continue;
           const sample = victims.get(owner) ?? [];
           if (sample.length < 3) sample.push(op.text);
           victims.set(owner, sample);
@@ -297,41 +331,55 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         clobbersChanged = true;
       }
 
-      let curLine = 0; // 1-based line in `current`; advances on eq + add
-      let baseLine = 0; // 1-based line in baseline; advances on eq + del
-      for (const op of delta) {
-        if (op.type === "eq") {
-          curLine++;
-          baseLine++;
-          continue;
-        }
-        if (op.type === "add") {
-          curLine++;
-          if (offLimitAdd && offLimitAdd.has(curLine)) continue; // in another's claimed symbol
-        } else {
-          baseLine++;
-          if (offLimitDel && offLimitDel.has(baseLine)) continue;
-        }
-        if (isTrivialLine(op.text)) continue;
-        const map = op.type === "add" ? file.added : file.removed;
-        const key = op.type === "add" ? ownKey(addLoc(curLine), op.text) : ownKey(delLoc(baseLine), op.text);
-        const existing = map[key];
-        if (existing && existing !== activeActorId) {
-          const fileConflicts = (conflicts[path] ??= {});
-          const list: string[] = fileConflicts[key] ?? [existing];
-          if (!list.includes(activeActorId)) list.push(activeActorId);
-          fileConflicts[key] = list;
-        } else if (!existing) {
-          map[key] = activeActorId;
+      // Inference attribution — gated: only when the tree is uncontested or
+      // the active actor claimed this path (see the contested-tree note above).
+      if (inferHere) {
+        const file = (ownership.files[path] ??= { added: {}, removed: {} });
+        const conflicts = ownership.conflicts;
+        let curLine = 0; // 1-based line in `current`; advances on eq + add
+        let baseLine = 0; // 1-based line in baseline; advances on eq + del
+        for (const op of delta) {
+          if (op.type === "eq") {
+            curLine++;
+            baseLine++;
+            continue;
+          }
+          if (op.type === "add") {
+            curLine++;
+            if (offLimitAdd && offLimitAdd.has(curLine)) continue; // in another's claimed symbol
+          } else {
+            baseLine++;
+            if (offLimitDel && offLimitDel.has(baseLine)) continue;
+          }
+          if (isTrivialLine(op.text)) continue;
+          const map = op.type === "add" ? file.added : file.removed;
+          const key = op.type === "add" ? ownKey(addLoc(curLine), op.text) : ownKey(delLoc(baseLine), op.text);
+          const existing = map[key];
+          if (existing && existing !== activeActorId) {
+            const fileConflicts = (conflicts[path] ??= {});
+            const list: string[] = fileConflicts[key] ?? [existing];
+            if (!list.includes(activeActorId)) list.push(activeActorId);
+            fileConflicts[key] = list;
+          } else if (!existing) {
+            map[key] = activeActorId;
+          }
         }
       }
     }
 
     // Advance the observed snapshot for this path — UNLESS another actor holds a
-    // symbol claim here. While a file is under symbol contention we freeze its
-    // baseline so every contending actor diffs from the same point and can
-    // attribute its own symbol (advancing would consume the others' deltas).
-    if (!claimedHere) observed.files[path] = current;
+    // symbol claim here (while a file is under symbol contention we freeze its
+    // baseline so every contending actor diffs from the same point), or the
+    // contested-tree gate left this file's delta unattributed (advancing would
+    // consume the delta and no one could ever claim it afterwards; frozen, it
+    // stays attributable by whoever claims the file).
+    const pendingUnattributed =
+      Boolean(activeActorId) &&
+      !inferHere &&
+      !binary &&
+      !tooLarge &&
+      (current ?? "") !== (baseline ?? "");
+    if (!claimedHere && !pendingUnattributed) observed.files[path] = current;
 
     // Prune ownership/conflicts for lines no longer in the working diff.
     const { added, removed } = changedLineSets(path, head, current);

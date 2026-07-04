@@ -42,15 +42,23 @@ test("a file claimed by B is NOT absorbed by A's reconcile or commit", () => {
     quilt(dir, ["claim", "shared.js"], "B");
     write(dir, "shared.js", "function f() { return 2; }\n");
 
-    // A creates its own file, then reconciles by running status/commit FIRST.
+    // A creates its own file. While B holds a live claim the tree is CONTESTED:
+    // an unclaimed, uncaptured file could be anyone's bash write, so inference
+    // must NOT hand it to whoever reconciles first (that sweep is the pilot
+    // bug). It stays pending until A claims it.
     write(dir, "a-only.js", "const a = 1;\n");
+    const aPending = JSON.parse(quilt(dir, ["mine", "--json"], "A").stdout);
+    assert.ok(
+      !aPending.files.some((f: any) => f.path === "a-only.js"),
+      "in a contested tree an unclaimed file stays pending, not auto-owned",
+    );
+
+    // Claiming it is what takes ownership — the pending delta is still there.
+    quilt(dir, ["claim", "a-only.js"], "A");
     const aMine = JSON.parse(quilt(dir, ["mine", "--json"], "A").stdout);
     const aPaths = aMine.files.map((f: any) => f.path);
-    assert.ok(aPaths.includes("a-only.js"), "A owns its own file");
+    assert.ok(aPaths.includes("a-only.js"), "A owns its file once claimed");
     assert.ok(!aPaths.includes("shared.js"), "A must NOT absorb B's claimed file");
-
-    // A commits — must not sweep up B's shared.js.
-    quilt(dir, ["claim", "a-only.js"], "A");
     const aCommit = quilt(dir, ["commit", "--mine", "-m", "A work"], "A");
     assert.equal(aCommit.status, 0, aCommit.stderr);
     assert.equal(
@@ -223,6 +231,127 @@ test("symbol claims work off JS too: two actors on different Python functions, n
       spawnSync("git", ["log", "--pretty=%an", "-2"], { cwd: dir, encoding: "utf8" }).stdout.trim(),
       "B\nA",
       "two clean Python commits, correctly attributed",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Pilot round 2: ui-agent's commit --mine swept seven of data-agent's
+// uncommitted convex files — bash/CLI-written (never captured), never claimed.
+// The contested-tree gate must keep them out of ui-agent's commit, and let
+// data-agent take them by claiming.
+test("commit --mine never sweeps another agent's uncaptured bash-written files while claims are live", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+
+    // data-agent is visibly mid-work (a live claim on its schema)...
+    write(dir, "schema.ts", "export const schema = 1;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "base"], { cwd: dir, encoding: "utf8" });
+    quilt(dir, ["claim", "schema.ts", "--intent", "data model"], "data-agent");
+
+    // ...and its CLI codegen drops files capture never sees.
+    for (let i = 1; i <= 7; i++) write(dir, `gen${i}.ts`, `export const g${i} = ${i};\n`);
+
+    // ui-agent does its own (claimed) work and commits.
+    write(dir, "ui.ts", "export const ui = 1;\n");
+    quilt(dir, ["claim", "ui.ts", "--intent", "build UI"], "ui-agent");
+    const c = quilt(dir, ["commit", "--mine", "-m", "ui work"], "ui-agent");
+    assert.equal(c.status, 0, c.stderr);
+    const committed = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim().split("\n");
+    assert.deepEqual(committed, ["ui.ts"], "ui-agent commits ONLY its claimed file — no sweep");
+
+    // data-agent claims its generated files and takes ownership of the pending deltas.
+    quilt(dir, ["claim", "gen1.ts", "gen2.ts", "gen3.ts", "gen4.ts", "gen5.ts", "gen6.ts", "gen7.ts"], "data-agent");
+    const d = quilt(dir, ["commit", "--mine", "-m", "data work"], "data-agent");
+    assert.equal(d.status, 0, d.stderr);
+    const dataCommitted = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim().split("\n").sort();
+    assert.deepEqual(
+      dataCommitted,
+      ["gen1.ts", "gen2.ts", "gen3.ts", "gen4.ts", "gen5.ts", "gen6.ts", "gen7.ts"],
+      "data-agent's claim takes the pending files",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Pilot round 3, bug 2: a partial commit tore a function apart — one of its
+// lines was excluded (unattributed) while its siblings committed, landing a
+// syntax error in history. A torn symbol must withhold the whole file.
+test("commit --mine withholds a file rather than tear a symbol (no committed syntax errors)", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    write(
+      dir,
+      "shared.js",
+      "function f() { return 1; }\nfunction g() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n",
+    );
+    // Simulate the pilot's split directly: the ledger attributes ONE of g's
+    // new lines to A; g's other new lines stay unattributed (B's live claim
+    // elsewhere keeps the contested-tree gate from handing them to A).
+    const ledger =
+      JSON.stringify({
+        seq: 0,
+        ts: new Date().toISOString(),
+        actor: "A",
+        path: "shared.js",
+        added: ["  const a = 1;"],
+        removed: [],
+        addedKeys: ["g\u0000  const a = 1;"],
+        anchor: null,
+        preHash: null,
+      }) + "\n";
+    writeFileSync(join(dir, ".quilt", "authorship.log"), ledger);
+    quilt(dir, ["claim", "elsewhere.js"], "B");
+
+    const c = quilt(dir, ["commit", "--mine", "-m", "A partial"], "A");
+    // A owns one line inside g but not g's other new lines → tear → the file
+    // is withheld entirely (nothing committable → nonzero exit).
+    assert.notEqual(c.status, 0, "torn file must not commit");
+    const head = spawnSync("git", ["show", "HEAD:shared.js"], { cwd: dir, encoding: "utf8" });
+    assert.doesNotMatch(head.stdout, /const a = 1;/, "no torn fragment of g landed in history");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The contested-tree gate must not blind clobber DETECTION: an overwrite of
+// another actor's uncommitted lines in an unclaimed file is still caught and
+// preserved even while an unrelated claim is live somewhere else in the repo.
+test("clobber detection still fires in a gated file while unrelated claims are live", () => {
+  const dir = makeRepo();
+  try {
+    // B edits shared.js and reconciles once (uncontested) — B owns the line
+    // and the observed baseline carries B's version.
+    write(dir, "shared.js", "function f() { return 42; }\n");
+    quilt(dir, ["status"], "B");
+
+    // An unrelated live claim then makes the whole tree contested for C.
+    quilt(dir, ["claim", "unrelated.ts"], "A");
+
+    // C bulldozes B's line. C's reconcile (via status) is gated for shared.js —
+    // but the overwrite must still be detected and B's content preserved.
+    write(dir, "shared.js", "function f() { return 0; }\n");
+    quilt(dir, ["status"], "C");
+    const clobbers = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    const hit = clobbers.clobbers.find((x: any) => x.victimActor === "B" && !x.restored);
+    assert.ok(hit, "the overwrite of B's captured line was detected despite the gate");
+
+    // And it doesn't duplicate on the next reconcile (frozen baseline re-sees the delta).
+    quilt(dir, ["status"], "C");
+    const again = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    assert.equal(
+      again.clobbers.filter((x: any) => x.victimActor === "B" && x.path === "shared.js").length,
+      1,
+      "one open clobber per victim+path, not one per reconcile",
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });
