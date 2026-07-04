@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
@@ -22,6 +23,9 @@ import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
+import { recordAuthorship } from "./authorship.js";
+import { verifyClaimTargets } from "./claimcheck.js";
+import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
 // Exit quietly when output is piped into a process that closes early
@@ -138,7 +142,7 @@ const program = new Command();
 program
   .name("quilt")
   .description("Actor-owned patches for Git. Same repo. Many agents. Clean commits.")
-  .version("0.3.0");
+  .version(VERSION);
 
 program
   .command("init")
@@ -151,7 +155,7 @@ program
     } else {
       process.stdout.write(
         pc.green("✓ ") + "Quilt initialized.\n" +
-          pc.dim("  Next: quilt start --actor <id> --type agent\n"),
+          pc.dim("  Next: quilt setup (wires your agents in — identity is automatic)\n"),
       );
     }
     // If this looks like an agent-orchestrated repo, point at one-step wiring.
@@ -202,9 +206,36 @@ program
       return;
     }
 
+    // Snapshot what each file held BEFORE the write, so the setup's own changes
+    // can be attributed to `quilt-setup` — otherwise the first `quilt status` a
+    // user ever sees flags Quilt's own files as suspicious unattributed changes.
+    const prior = new Map<string, string | null>();
+    for (const s of steps) {
+      if (s.action === "skip" || s.content === undefined) continue;
+      prior.set(s.file, existsSync(s.path) ? readFileSync(s.path, "utf8") : null);
+    }
+
     const written = applySetup(steps);
     if (initNeeded) process.stdout.write(pc.green("✓ ") + "initialized Quilt (.quilt/)\n");
     for (const s of steps) printSetupStep(s, false);
+
+    if (written.length > 0) {
+      const store2 = new Store(root); // doInit may have created the store after `store` was built
+      if (!store2.findActor("quilt-setup")) {
+        store2.upsertActor({ id: "quilt-setup", type: "bot", displayName: "quilt-setup", createdAt: nowIso() });
+      }
+      for (const s of written) {
+        const before = prior.get(s.file) ?? null;
+        recordAuthorship(store2, {
+          actor: "quilt-setup",
+          path: s.file,
+          oldText: before ?? "",
+          newText: s.content!,
+          whole: before === null,
+          intent: "quilt setup wiring",
+        });
+      }
+    }
 
     if (written.length === 0 && !initNeeded) {
       process.stdout.write("\n" + pc.green("✓ ") + "Already wired up. Your fleet is ready.\n");
@@ -215,19 +246,45 @@ program
           "Quilt is wired in. Each agent: claim before editing, commit_mine when done.\n" +
           pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
           pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
-          pc.dim("  Run `quilt doctor` to confirm capture is flowing. See docs/orchestrators.md.\n"),
+          pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
+          pc.dim("  the wiring (.quilt/ stays local and is already ignored).\n") +
+          pc.dim("  Run `quilt doctor` to confirm capture is flowing.\n") +
+          pc.dim("  Docs: https://github.com/wkoverfield/quilt/blob/main/docs/orchestrators.md\n"),
+      );
+    }
+
+    // The generated config invokes plain `quilt` — if that doesn't resolve on
+    // PATH (local/npx install), hooks and the MCP server would fail silently
+    // (hooks fail open by design). Say so now instead of leaving `quilt doctor`
+    // to notice zero captures later.
+    const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["quilt"], { stdio: "ignore" });
+    if (probe.status !== 0) {
+      process.stdout.write(
+        "\n" +
+          pc.yellow("⚠ ") +
+          "`quilt` is not on your PATH — the hooks and MCP server this setup wired\n" +
+          "  invoke plain `quilt` and will silently do nothing until it resolves.\n" +
+          pc.dim("  Install globally: npm install -g @quilt-dev/cli\n"),
       );
     }
   });
 
 program
   .command("start")
-  .description("Start a session for an actor in this checkout")
-  .requiredOption("--actor <id>", "actor id, e.g. wilson/codex-auth")
+  .description("Start a session for an actor in this checkout (optional — agents are auto-named; QUILT_ACTOR also works)")
+  .option("--actor <id>", "actor id, e.g. wilson")
   .option("--type <type>", "actor type: human | agent | bot", "human")
   .option("--name <displayName>", "human-readable display name")
   .option("--email <email>", "email used as the git author for this actor")
   .action((opts) => {
+    if (!opts.actor) {
+      fail(
+        "start needs an identity: quilt start --actor <id>\n" +
+          "  example: quilt start --actor wilson\n" +
+          "  (you usually don't need this — agents are auto-named per session, and\n" +
+          "   QUILT_ACTOR=<id> on any command works without a session)",
+      );
+    }
     const store = requireStore();
     const root = store.paths.repoRoot;
     const type = opts.type as ActorType;
@@ -413,7 +470,7 @@ program
   .action((opts) => {
     const store = requireStore();
     const ctx = activeContext(store);
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership());
@@ -475,7 +532,7 @@ program
   .action((opts) => {
     const store = requireStore();
     const ctx = activeContext(store);
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
@@ -507,7 +564,7 @@ program
     if (!opts.mine) fail("commit requires --mine in V0 (only owned-patch commits are supported).");
     const ctx = activeContext(store);
     if (!ctx.actorId || !ctx.actor) {
-      fail("no active actor. Run `quilt start --actor <id>` first.");
+      fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     }
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
@@ -541,6 +598,10 @@ program
     const res = commitSelection(root, selection, ctx.actor!, opts.message);
     if (!res.committed) fail(res.reason ?? "commit failed");
 
+    // The work landed, so the reservations on it are spent — release them, as
+    // the MCP commit_mine already does, so the fleet view doesn't keep showing
+    // this actor as holding claims on files it already committed.
+    releaseClaims(store, ctx.actorId!, selection.files.map((f) => f.path));
     store.appendLedger({
       ts: nowIso(),
       type: "commit.mine",
@@ -676,7 +737,7 @@ program
       return;
     }
 
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>` first.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     const results = acquireClaims(
       store,
       ctx.actorId!,
@@ -688,8 +749,11 @@ program
     // Push-awareness: warn if anything just claimed depends on a symbol another
     // actor is currently changing, so the actor learns at reservation time.
     const warnings = dependencyWarnings(store, ctx.actorId!, Date.now());
+    // A granted symbol claim whose symbol isn't in the file is probably a typo —
+    // say so now, while the claimant can still fix the target.
+    const symbolWarnings = verifyClaimTargets(store, results);
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
+      process.stdout.write(JSON.stringify({ results, warnings, symbolWarnings }, null, 2) + "\n");
     } else {
       for (const r of results) {
         const target = r.symbol ? `${r.path}#${r.symbol}` : r.path;
@@ -709,6 +773,9 @@ program
       for (const w of warnings) {
         process.stdout.write(pc.yellow("  ⚠ heads-up ") + formatWarning(w) + "\n");
       }
+      for (const w of symbolWarnings) {
+        process.stdout.write(pc.yellow("  ⚠ heads-up ") + w.message + "\n");
+      }
     }
     if (results.some((r) => !r.granted)) process.exitCode = 1;
   });
@@ -720,7 +787,7 @@ program
   .action((paths: string[]) => {
     const store = requireStore();
     const ctx = activeContext(store);
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>` first.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     const n = releaseClaims(
       store,
       ctx.actorId!,
@@ -876,7 +943,7 @@ program
     const store = requireStore();
     const ctx = activeContext(store);
     if (!ctx.actorId) {
-      process.stdout.write(pc.dim("No active actor. Run `quilt start --actor <id>`.\n"));
+      process.stdout.write(pc.dim("No active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).\n"));
       return;
     }
     process.stdout.write(

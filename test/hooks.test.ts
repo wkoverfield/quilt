@@ -1,6 +1,6 @@
 import { test, before } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, symlinkSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -327,6 +327,117 @@ test("hooks auto-name the actor from the Claude session id when QUILT_ACTOR is u
     const ev2 = readAuthorship(s);
     assert.equal(ev2.length, 2);
     assert.equal(ev2[1].actor, "named-agent", "explicit id beats the auto id");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- absolute-path payloads (what Claude Code actually sends) ----
+//
+// Real hook payloads carry an ABSOLUTE tool_input.file_path. Claims, ownership,
+// and the ledger all key repo-relative, so the hooks must normalize — recording
+// the absolute path verbatim made prevention never match a claim and capture
+// flow into events reconcile could never use (the 0.4.x field bug).
+
+test("hook-pre denies an absolute-path edit into another actor's claimed symbol", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "m.js"), "function held() {\n  return 1;\n}\n");
+    acquireClaims(s, "alice", null, ["m.js#held"], Date.now(), "alice's change");
+    const input: HookInput = {
+      tool: "Edit",
+      path: join(dir, "m.js"), // absolute, exactly like a real payload
+      edits: [{ oldString: "return 1;", newString: "return 2;" }],
+      content: null,
+      sessionId: null,
+    };
+    const d = runHookPre(s, "bob", input);
+    assert.equal(d.deny, true, "absolute path must still match the relative claim");
+    assert.match(d.reason!, /m\.js#held/, "deny names the specific held symbol");
+    assert.match(d.reason!, /alice's change/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hook capture with an absolute path records a repo-relative ledger event", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "m.js"), "function f() {\n  return 1;\n}\n");
+    const input: HookInput = {
+      tool: "Edit",
+      path: join(dir, "m.js"),
+      edits: [{ oldString: "return 1;", newString: "return 9;" }],
+      content: null,
+      sessionId: null,
+    };
+    assert.equal(runHookPre(s, "carol", input).deny, false);
+    applyEdit(dir, "m.js", "return 1;", "return 9;");
+    runHookPost(s, "carol", input);
+    const ev = readAuthorship(s);
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].path, "m.js", "ledger keys repo-relative, not absolute");
+    assert.equal(ev[0].actor, "carol");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hook Pre/Post agree when Pre sees an absolute path and Post a relative one", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "n.js"), "function g() {\n  return 1;\n}\n");
+    const abs: HookInput = {
+      tool: "Edit", path: join(dir, "n.js"),
+      edits: [{ oldString: "return 1;", newString: "return 5;" }], content: null, sessionId: null,
+    };
+    runHookPre(s, "dave", abs);
+    applyEdit(dir, "n.js", "return 1;", "return 5;");
+    runHookPost(s, "dave", { ...abs, path: "n.js" }); // spelled differently — same snapshot
+    assert.equal(readAuthorship(s).length, 1, "snapshot keyed on the normalized path");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an absolute path through a filesystem alias (macOS /var -> /private/var) still normalizes", () => {
+  const { s, dir } = newStore(); // dir is under os.tmpdir(), an alias on macOS
+  try {
+    const real = realpathSync(dir);
+    writeFileSync(join(dir, "a.js"), "function h() {\n  return 1;\n}\n");
+    const input: HookInput = {
+      tool: "Edit",
+      path: join(real, "a.js"), // the OTHER spelling of the same repo
+      edits: [{ oldString: "return 1;", newString: "return 7;" }],
+      content: null,
+      sessionId: null,
+    };
+    assert.equal(runHookPre(s, "erin", input).deny, false);
+    applyEdit(dir, "a.js", "return 1;", "return 7;");
+    runHookPost(s, "erin", input);
+    const ev = readAuthorship(s);
+    assert.equal(ev.length, 1, "alias spelling still captures");
+    assert.equal(ev[0].path, "a.js");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a payload path outside the repo is ignored, absolute or traversal", () => {
+  const { s, dir } = newStore();
+  try {
+    const outside = mkdtempSync(join(tmpdir(), "quilt-outside-"));
+    writeFileSync(join(outside, "x.js"), "function x() {}\n");
+    for (const p of [join(outside, "x.js"), "../x.js"]) {
+      const input: HookInput = {
+        tool: "Edit", path: p,
+        edits: [{ oldString: "a", newString: "b" }], content: null, sessionId: null,
+      };
+      assert.equal(runHookPre(s, "eve", input).deny, false);
+      runHookPost(s, "eve", input);
+    }
+    assert.equal(readAuthorship(s).length, 0, "nothing outside the repo is captured");
+    rmSync(outside, { recursive: true, force: true });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

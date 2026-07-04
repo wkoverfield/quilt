@@ -18,6 +18,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { anchorForEdit, checkHeldEdit, checkHeldWrite, recordAuthorship, safeAbs, type EditDenied } from "./authorship.js";
+import { repoRelative } from "./paths.js";
 import type { Store } from "./state.js";
 
 /** One old→new replacement (Edit = one; MultiEdit = many). */
@@ -123,18 +124,23 @@ export interface HookPreDecision {
  */
 export function runHookPre(store: Store, actor: string, input: HookInput): HookPreDecision {
   if (!input.path) return { deny: false };
-  const abs = safeAbs(store.paths.repoRoot, input.path);
-  if (!abs) return { deny: false }; // outside the repo or a symlink — not Quilt's to police
+  // Claude Code sends an ABSOLUTE file_path — normalize to the repo-relative
+  // form every store keys on, or nothing (claims, ownership, the ledger) would
+  // ever match and both prevention and capture would silently no-op.
+  const rel = repoRelative(store.paths.repoRoot, input.path);
+  if (!rel) return { deny: false }; // outside the repo — not Quilt's to police
+  const abs = safeAbs(store.paths.repoRoot, rel);
+  if (!abs) return { deny: false }; // a symlink — never write through it
   const before = readBefore(abs);
 
   let denied: EditDenied | null = null;
   if (input.content !== null && input.edits.length === 0) {
     // Whole-file Write (existing content is null for a not-yet-created file).
-    denied = checkHeldWrite(store, actor, input.path, input.content, existsSync(abs) ? before : null);
+    denied = checkHeldWrite(store, actor, rel, input.content, existsSync(abs) ? before : null);
   } else {
     // Edit / MultiEdit — any held edit denies the whole call.
     for (const e of input.edits) {
-      denied = checkHeldEdit(store, actor, input.path, before, e.oldString);
+      denied = checkHeldEdit(store, actor, rel, before, e.oldString);
       if (denied) break;
     }
   }
@@ -142,7 +148,7 @@ export function runHookPre(store: Store, actor: string, input: HookInput): HookP
     return {
       deny: true,
       reason:
-        `Quilt: ${input.path} is held by ${denied.heldBy}` +
+        `Quilt: ${denied.target ?? rel} is held by ${denied.heldBy}` +
         (denied.holderIntent ? ` (${denied.holderIntent})` : "") +
         `. They are mid-change. If they're already doing your change, drop yours; ` +
         `if it's compatible, adapt around it; if your goals are genuinely opposed, ` +
@@ -153,10 +159,11 @@ export function runHookPre(store: Store, actor: string, input: HookInput): HookP
   // Allowed → stash the before-image so Post can compute the real delta. Only
   // when there's actually a payload to capture: an unrecognized tool (or a
   // widened matcher) yields no edits and null content, and must not leave a
-  // snapshot that Post would turn into a zero-delta event.
+  // snapshot that Post would turn into a zero-delta event. Keyed on the
+  // normalized path so Pre and Post agree however the payload spelled it.
   if (input.content !== null || input.edits.length > 0) {
     mkdirSync(store.paths.hookSnapshotsDir, { recursive: true });
-    writeFileSync(snapshotPath(store, actor, input.path), before);
+    writeFileSync(snapshotPath(store, actor, rel), before);
   }
   return { deny: false };
 }
@@ -187,8 +194,12 @@ function replayEdits(before: string, edits: HookEdit[]): string {
  */
 export function runHookPost(store: Store, actor: string, input: HookInput): void {
   if (!input.path) return;
-  if (!safeAbs(store.paths.repoRoot, input.path)) return;
-  const snap = snapshotPath(store, actor, input.path);
+  // Same normalization as Pre: the ledger keys events by repo-relative path, so
+  // an absolute payload path recorded verbatim would never match reconcile's
+  // view of the working tree and the capture would be dead weight.
+  const rel = repoRelative(store.paths.repoRoot, input.path);
+  if (!rel || !safeAbs(store.paths.repoRoot, rel)) return;
+  const snap = snapshotPath(store, actor, rel);
   if (!existsSync(snap)) return; // nothing captured for this call
   const before = readFileSync(snap, "utf8");
 
@@ -196,7 +207,7 @@ export function runHookPost(store: Store, actor: string, input: HookInput): void
     // Whole-file write — mirror applyAndRecordWrite exactly: whole:true treats the
     // content as fresh (added = every line, removed = none), so oldText is ignored.
     // Passing "" keeps both capture paths recording overwrites identically.
-    recordAuthorship(store, { actor, path: input.path, oldText: "", newText: input.content, whole: true });
+    recordAuthorship(store, { actor, path: rel, oldText: "", newText: input.content, whole: true });
   } else {
     // Edit / MultiEdit — diff the pre-image against the in-memory post-image, so
     // adds/removes are whole lines matching how ownership is keyed. Anchor only
@@ -204,7 +215,7 @@ export function runHookPost(store: Store, actor: string, input: HookInput): void
     const after = replayEdits(before, input.edits);
     const only = input.edits.length === 1 ? input.edits[0] : undefined;
     const anchor = only ? anchorForEdit(before, only.oldString) : null;
-    recordAuthorship(store, { actor, path: input.path, oldText: before, newText: after, anchor });
+    recordAuthorship(store, { actor, path: rel, oldText: before, newText: after, anchor });
   }
   rmSync(snap, { force: true });
 }

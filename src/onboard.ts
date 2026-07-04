@@ -50,9 +50,16 @@ export interface Detected {
   mcpJsonPath: string;
   claudeMdPath: string;
   settingsPath: string;
+  cursorMcpPath: string;
+  agentsMdPath: string;
   hasMcpJson: boolean;
   hasClaudeMd: boolean;
   hasSettings: boolean;
+  /** A `.cursor/` directory — wire Cursor's own MCP config too. */
+  hasCursorDir: boolean;
+  /** An `AGENTS.md` — Cursor/Codex-family agents read it, so the coordination
+   * snippet goes there as well as CLAUDE.md. */
+  hasAgentsMd: boolean;
   /** Signals a Claude Code / Cursor / generic agent setup is in use. */
   orchestrator: string | null;
   quiltWired: boolean;
@@ -65,12 +72,14 @@ export function detect(root: string): Detected {
   const mcpJsonPath = join(root, ".mcp.json");
   const claudeMdPath = join(root, "CLAUDE.md");
   const settingsPath = join(root, ".claude", "settings.json");
+  const cursorMcpPath = join(root, ".cursor", "mcp.json");
+  const agentsMdPath = join(root, "AGENTS.md");
   const hasMcpJson = existsSync(mcpJsonPath);
   const hasClaudeMd = existsSync(claudeMdPath);
   const hasSettings = existsSync(settingsPath);
   const hasClaudeDir = existsSync(join(root, ".claude"));
   const hasCursorDir = existsSync(join(root, ".cursor"));
-  const hasAgentsMd = existsSync(join(root, "AGENTS.md"));
+  const hasAgentsMd = existsSync(agentsMdPath);
 
   const orchestrator =
     hasClaudeDir || hasClaudeMd || hasMcpJson
@@ -90,9 +99,13 @@ export function detect(root: string): Detected {
     mcpJsonPath,
     claudeMdPath,
     settingsPath,
+    cursorMcpPath,
+    agentsMdPath,
     hasMcpJson,
     hasClaudeMd,
     hasSettings,
+    hasCursorDir,
+    hasAgentsMd,
     orchestrator,
     quiltWired,
     coordinationPresent,
@@ -312,6 +325,49 @@ export function planSetup(root: string): SetupStep[] {
       content: hooks.content,
       path: d.settingsPath,
     });
+  }
+
+  // Cursor keeps its MCP config in .cursor/mcp.json (same mcpServers shape) and
+  // doesn't read .mcp.json, so a repo with a .cursor/ dir gets both wired.
+  if (d.hasCursorDir) {
+    const cursorExisting = safeRead(d.cursorMcpPath);
+    const cursor = mergeMcpServers(cursorExisting);
+    if (cursor.error) {
+      steps.push({
+        file: ".cursor/mcp.json",
+        action: "skip",
+        detail: `left untouched (${cursor.error}) — add the "quilt" server by hand`,
+        path: d.cursorMcpPath,
+      });
+    } else if (!cursor.changed) {
+      steps.push({ file: ".cursor/mcp.json", action: "skip", detail: "quilt server already present", path: d.cursorMcpPath });
+    } else {
+      steps.push({
+        file: ".cursor/mcp.json",
+        action: cursorExisting !== null ? "update" : "create",
+        detail: cursorExisting !== null ? "add the quilt MCP server (Cursor)" : "create with the quilt MCP server (Cursor)",
+        content: cursor.content,
+        path: d.cursorMcpPath,
+      });
+    }
+  }
+
+  // Cursor/Codex-family agents read AGENTS.md, not CLAUDE.md. Only append to an
+  // AGENTS.md that already exists — creating one unprompted would change what
+  // those tools load in a repo that never opted into it.
+  if (d.hasAgentsMd) {
+    const agents = appendCoordination(safeRead(d.agentsMdPath));
+    if (!agents.changed) {
+      steps.push({ file: "AGENTS.md", action: "skip", detail: "coordination snippet already present", path: d.agentsMdPath });
+    } else {
+      steps.push({
+        file: "AGENTS.md",
+        action: "update",
+        detail: "append the coordination snippet",
+        content: agents.content,
+        path: d.agentsMdPath,
+      });
+    }
   }
 
   return steps;

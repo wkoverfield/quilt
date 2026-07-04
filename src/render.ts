@@ -71,7 +71,7 @@ export function renderStatus(model: WorktreeModel, baseLabel: string): string {
   out.push(pc.bold("  Quilt status"));
   out.push("");
   out.push(
-    `  ${pc.dim("Actor:")} ${model.activeActorId ? pc.bold(model.activeActorId) : pc.yellow("(none — run quilt start)")}`,
+    `  ${pc.dim("Actor:")} ${model.activeActorId ? pc.bold(model.activeActorId) : pc.dim("(none — agents are auto-named; set QUILT_ACTOR=<id> to act as one here)")}`,
   );
   out.push(`  ${pc.dim("Base: ")} ${baseLabel}`);
   out.push("");
@@ -139,7 +139,7 @@ export function renderStatus(model: WorktreeModel, baseLabel: string): string {
     for (const file of b.unclaimed) {
       const t = tag(file);
       out.push(
-        `    ${file.path}${t ? "  " + t : ""}   ${fileLineSummary(file)}   ${pc.dim("pre-existing / generated?")}`,
+        `    ${file.path}${t ? "  " + t : ""}   ${fileLineSummary(file)}   ${pc.dim("not captured — edited outside agent tooling")}`,
       );
     }
     out.push("");

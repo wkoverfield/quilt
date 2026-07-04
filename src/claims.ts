@@ -1,6 +1,6 @@
-import { resolve, sep } from "node:path";
 import type { Store } from "./state.js";
 import type { Claim, Block } from "./types.js";
+import { repoRelative } from "./paths.js";
 
 /** How long a claim is held before it auto-expires (refreshed on each claim). */
 export const CLAIM_TTL_MS = 10 * 60 * 1000;
@@ -22,18 +22,6 @@ export interface ClaimResult {
   holderIntent?: string;
   /** when denied for a non-conflict reason (e.g. a path outside the repo) */
   reason?: "outside-repo";
-}
-
-/**
- * True if `p` resolves outside `repoRoot` (absolute path or `../` traversal).
- * Claim targets are actor-controlled, so this gates them before any filesystem
- * read keyed on a claim path (push-awareness reads claimed files) can escape the
- * repository. Mirrors the guard the restore path already applies to writes.
- */
-function escapesRepo(repoRoot: string, p: string): boolean {
-  const root = resolve(repoRoot);
-  const abs = resolve(root, p);
-  return abs !== root && !abs.startsWith(root + sep);
 }
 
 function active(claims: Claim[], now: number): Claim[] {
@@ -94,14 +82,19 @@ export function acquireClaims(
       b.actor === actorId && b.path === t.path && b.symbol === t.symbol;
     const results: ClaimResult[] = [];
     for (const raw of rawPaths) {
-      const target = parseTarget(raw);
+      const parsed = parseTarget(raw);
 
       // Never let an actor reserve (and thereby cause a read of) a path outside
-      // the repo. Absolute paths and `../` traversal are rejected outright.
-      if (escapesRepo(store.paths.repoRoot, target.path)) {
-        results.push({ ...target, granted: false, reason: "outside-repo" });
+      // the repo — push-awareness reads claimed files, so a target that escapes
+      // is rejected outright. An absolute path INSIDE the repo is fine (agents
+      // pass what they have in hand) and is stored repo-relative so it matches
+      // the form every other claim and every edit-time check uses.
+      const rel = repoRelative(store.paths.repoRoot, parsed.path);
+      if (rel === null) {
+        results.push({ ...parsed, granted: false, reason: "outside-repo" });
         continue;
       }
+      const target: ClaimTarget = { ...parsed, path: rel };
 
       const conflict = file.claims.find(
         (c) => c.actor !== actorId && overlaps(target, c),
@@ -174,7 +167,16 @@ export function releaseClaims(
   actorId: string,
   rawPaths: string[] | null,
 ): number {
-  const targets = rawPaths === null ? null : rawPaths.map(parseTarget);
+  // Normalize the same way acquire does, so releasing by an absolute path frees
+  // the (repo-relative) claim it acquired. A target outside the repo can't match
+  // any stored claim; keep it as parsed so it just releases nothing.
+  const targets =
+    rawPaths === null
+      ? null
+      : rawPaths.map((raw) => {
+          const t = parseTarget(raw);
+          return { ...t, path: repoRelative(store.paths.repoRoot, t.path) ?? t.path };
+        });
   return store.withLock(() => {
     const file = store.readClaims();
     const before = file.claims.length;
@@ -216,12 +218,13 @@ export function claimHeldByOther(
   rawPath: string,
   symbols: string[],
   now: number,
-): { holder: string; intent?: string } | null {
-  const path = parseTarget(rawPath).path;
+): { holder: string; intent?: string; target: string } | null {
+  const parsed = parseTarget(rawPath).path;
+  const path = repoRelative(store.paths.repoRoot, parsed) ?? parsed;
   for (const c of listClaims(store, now)) {
     if (c.actor === actorId || c.path !== path) continue;
     if (c.symbol === undefined || symbols.includes(c.symbol)) {
-      return { holder: c.actor, intent: c.intent };
+      return { holder: c.actor, intent: c.intent, target: claimLabel(c) };
     }
   }
   return null;

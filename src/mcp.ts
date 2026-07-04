@@ -10,6 +10,8 @@ import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
 import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
+import { verifyClaimTargets } from "./claimcheck.js";
+import { VERSION } from "./version.js";
 import { dependencyWarnings } from "./push.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
@@ -97,7 +99,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       "actor id to act as. Auto-derived per connection when omitted (from the client name, e.g. cursor-3fa2), so naming is optional for a single agent. Pass an explicit id (your role/task name) when several subagents share one server — they have no ambient identity to tell them apart — or when you want a stable id across runs.",
     );
 
-  const server = new McpServer({ name: "quilt", version: "0.3.0" });
+  const server = new McpServer({ name: "quilt", version: VERSION });
 
   server.registerTool(
     "start_session",
@@ -105,7 +107,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       description:
         "Register an actor and start a session in this repo, pinning this server to that identity. Optional: if several agents share one server, skip this and pass `actor` on each call instead.",
       inputSchema: {
-        actor: z.string().describe("actor id, e.g. wilson/codex-auth"),
+        actor: z.string().describe("actor id, e.g. auth-agent"),
         type: z.enum(["human", "agent", "bot"]).optional(),
         name: z.string().optional(),
         email: z.string().optional(),
@@ -275,8 +277,14 @@ export async function runMcpServer(store: Store): Promise<void> {
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
       const results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent);
       // Push-awareness at reservation time: tell the agent if anything it just
-      // claimed depends on a symbol another actor is currently changing.
-      return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });
+      // claimed depends on a symbol another actor is currently changing. Also
+      // flag a granted symbol claim whose symbol isn't in the file (a likely
+      // typo that would reserve nothing) with a near-miss suggestion.
+      return ok({
+        results,
+        dependencyWarnings: dependencyWarnings(store, actorId, Date.now()),
+        symbolWarnings: verifyClaimTargets(store, results),
+      });
     },
   );
 
@@ -341,7 +349,7 @@ export async function runMcpServer(store: Store): Promise<void> {
         "Edit a file through Quilt instead of your raw editor. Replaces the unique `old_string` with `new_string` and records WHO authored the change at the moment of the edit — so attribution is exact even when several agents share this checkout, with no claims or reconcile guesswork. Pass `why` (your ticket/task). Prefer this over a plain file edit when coordinating a fleet.",
       inputSchema: {
         actor: actorArg,
-        path: z.string().describe("repo-relative file path"),
+        path: z.string().describe("file path (repo-relative or absolute; stored repo-relative)"),
         old_string: z.string().describe("the exact text to replace (must be unique in the file)"),
         new_string: z.string().describe("the replacement text"),
         why: z.string().optional().describe("a short why for this edit, e.g. the ticket/task"),
@@ -353,7 +361,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       if (!r.ok) {
         return ok(
           "heldBy" in r
-            ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent,
+            ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent, target: r.target,
                 guidance: "Another agent holds this code. Use their intent: if they're already doing your change, drop it; if compatible, edit elsewhere; if genuinely opposed, escalate." }
             : { applied: false, error: r.error },
         );
@@ -369,7 +377,7 @@ export async function runMcpServer(store: Store): Promise<void> {
         "Write a whole file (create or overwrite) through Quilt, recording you as the author of its contents at write time. Use for new files. Pass `why`.",
       inputSchema: {
         actor: actorArg,
-        path: z.string().describe("repo-relative file path"),
+        path: z.string().describe("file path (repo-relative or absolute; stored repo-relative)"),
         content: z.string().describe("full file contents"),
         why: z.string().optional(),
       },
@@ -378,7 +386,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       const r = applyAndRecordWrite(store, { actor: actorId, path, content, intent: why });
       if (!r.ok) {
-        return ok("heldBy" in r ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent } : { applied: false, error: r.error });
+        return ok("heldBy" in r ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent, target: r.target } : { applied: false, error: r.error });
       }
       return ok({ applied: true, captured: r.event });
     },

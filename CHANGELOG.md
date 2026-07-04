@@ -4,6 +4,52 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Absolute file paths no longer disable prevention and capture.** Claude Code
+  hooks and MCP clients send absolute `file_path`s, but claims, ownership, and
+  the authorship ledger key on repo-relative paths — so a real agent's edit
+  into another actor's claimed symbol was silently allowed, and its captured
+  edits landed in ledger events reconcile could never match (the actor couldn't
+  `commit --mine` its own work). Every actor-facing boundary (hooks, `quilt_edit`,
+  `quilt_write`, claim/release) now normalizes to the repo-relative form,
+  including through filesystem aliases (macOS `/tmp` → `/private/tmp`) and with
+  Windows separators normalized to `/`.
+- `quilt --version` and the MCP server now read the version from package.json
+  instead of a hardcoded string (0.4.0 shipped reporting itself as 0.3.0).
+- `quilt commit --mine` now releases the actor's claims on the committed files,
+  as the MCP `commit_mine` already did, so the fleet view stops showing spent
+  reservations.
+
+### Added
+
+- Claiming a symbol that doesn't exist in the file warns with a near-miss
+  suggestion (`did you mean "formatPrice"?`) instead of silently reserving
+  nothing. Still granted — pre-claiming a symbol you're about to add is legal.
+  Surfaced in the CLI, `--json`, and the MCP `claim` tool (`symbolWarnings`).
+- `quilt setup` wires Cursor too: a repo with `.cursor/` gets the quilt server
+  in `.cursor/mcp.json`, and an existing `AGENTS.md` (Cursor/Codex-family)
+  receives the coordination snippet.
+- `quilt setup` attributes its own generated files to a `quilt-setup` actor, so
+  the first `quilt status` shows them as owned instead of flagging Quilt's own
+  wiring as suspicious unattributed changes.
+- `quilt setup` warns when `quilt` doesn't resolve on PATH (hooks and the MCP
+  server would silently do nothing), and its epilogue now says to commit the
+  generated config files and links the full docs URL.
+
+### Changed
+
+- One identity story everywhere: agents are auto-named; `QUILT_ACTOR` pins a
+  stable id. `quilt status`, `whoami`, error messages, and a bare `quilt start`
+  all say so consistently (start without `--actor` now explains itself instead
+  of a raw missing-option error).
+- Prevention denials name the specific held reservation
+  (`utils.js#formatPrice`), not just the file, in hooks and MCP responses.
+- `quilt status` labels unattributed changes "not captured — edited outside
+  agent tooling" instead of the cryptic "pre-existing / generated?".
+
 ## [0.4.0] - 2026-07-01
 
 Zero-config identity: agents no longer need to be named for capture to flow.

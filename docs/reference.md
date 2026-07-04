@@ -9,8 +9,8 @@ agents, see [orchestrators.md](orchestrators.md).
 | Command | Purpose |
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
-| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: the shared MCP server in `.mcp.json`, the coordination snippet in `CLAUDE.md`, and the native-edit capture hooks in `.claude/settings.json` (idempotent). |
-| `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
+| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: the shared MCP server in `.mcp.json` (and `.cursor/mcp.json` when a `.cursor/` dir exists), the coordination snippet in `CLAUDE.md` (and an existing `AGENTS.md`), and the native-edit capture hooks in `.claude/settings.json` (idempotent). |
+| `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. Optional — agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |

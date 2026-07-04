@@ -12,6 +12,7 @@ import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
 import { parseSymbols, ownKey, symbolLocator } from "./symbols.js";
 import { claimHeldByOther } from "./claims.js";
+import { repoRelative } from "./paths.js";
 import type { Store } from "./state.js";
 
 /** A denial: another actor holds the code this edit would touch. */
@@ -21,6 +22,9 @@ export interface EditDenied {
   /** the actor holding the conflicting claim, and their stated why. */
   heldBy: string;
   holderIntent?: string;
+  /** the specific reservation that collided, e.g. `utils.js#formatPrice` —
+   * more precise than the file when the hold is symbol-level. */
+  target?: string;
 }
 
 /**
@@ -89,7 +93,7 @@ function checkHeld(
 /** Shape a `claimHeldByOther` hit into the shared EditDenied return, or null if clear. */
 function heldDenial(held: ReturnType<typeof claimHeldByOther>): EditDenied | null {
   if (!held) return null;
-  return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
+  return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent, target: held.target };
 }
 
 /**
@@ -405,9 +409,14 @@ export function applyAndRecordEdit(
   store: Store,
   args: { actor: string; path: string; oldString: string; newString: string; intent?: string },
 ): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
-  const abs = safeAbs(store.paths.repoRoot, args.path);
+  // Agents pass absolute paths as readily as relative ones (the tool schema says
+  // repo-relative, but an MCP client has absolute paths in hand) — normalize so
+  // claims and the ledger key consistently either way.
+  const rel = repoRelative(store.paths.repoRoot, args.path);
+  if (!rel) return { ok: false, error: "path escapes the repository" };
+  const abs = safeAbs(store.paths.repoRoot, rel);
   if (!abs) return { ok: false, error: "path escapes the repository" };
-  if (!existsSync(abs)) return { ok: false, error: `file not found: ${args.path}` };
+  if (!existsSync(abs)) return { ok: false, error: `file not found: ${rel}` };
   const before = readFileSync(abs, "utf8");
   const idx = before.indexOf(args.oldString);
   if (idx === -1) return { ok: false, error: "old_string not found in file" };
@@ -417,7 +426,7 @@ export function applyAndRecordEdit(
   // PREVENTION: if another actor holds the symbol(s) this edit touches, deny the
   // write before any bytes change and hand back their intent — the earliest
   // possible encounter point (earlier than commit), so the agent resolves in-band.
-  const denied = checkHeldEdit(store, args.actor, args.path, before, args.oldString);
+  const denied = checkHeldEdit(store, args.actor, rel, before, args.oldString);
   if (denied) return denied;
   const after = before.slice(0, idx) + args.newString + before.slice(idx + args.oldString.length);
   atomicWrite(abs, after);
@@ -427,7 +436,7 @@ export function applyAndRecordEdit(
   // unlike the partial old_string/new_string fragments.
   const event = recordAuthorship(store, {
     actor: args.actor,
-    path: args.path,
+    path: rel,
     oldText: before,
     newText: after,
     intent: args.intent,
@@ -441,19 +450,21 @@ export function applyAndRecordWrite(
   store: Store,
   args: { actor: string; path: string; content: string; intent?: string },
 ): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
-  const abs = safeAbs(store.paths.repoRoot, args.path);
+  const rel = repoRelative(store.paths.repoRoot, args.path);
+  if (!rel) return { ok: false, error: "path escapes the repository" };
+  const abs = safeAbs(store.paths.repoRoot, rel);
   if (!abs) return { ok: false, error: "path escapes the repository" };
   // A whole-file write collides with any other actor's claim on this path. Check
   // symbols in BOTH the new content and the existing file — overwriting a file in
   // a way that removes a claimed symbol must still be denied (else it silently
   // deletes the held code).
   const existing = existsSync(abs) ? readFileSync(abs, "utf8") : null;
-  const denied = checkHeldWrite(store, args.actor, args.path, args.content, existing);
+  const denied = checkHeldWrite(store, args.actor, rel, args.content, existing);
   if (denied) return denied;
   atomicWrite(abs, args.content);
   const event = recordAuthorship(store, {
     actor: args.actor,
-    path: args.path,
+    path: rel,
     oldText: "",
     newText: args.content,
     intent: args.intent,

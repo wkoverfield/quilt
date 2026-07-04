@@ -345,6 +345,16 @@ export function parseSymbols(path: string, content: string): CodeSymbol[] {
   return withTree(path, content, [], (root, grammar) => collectAll(root, grammar));
 }
 
+/**
+ * Whether `path` is a language Quilt can parse symbols out of right now (the
+ * extension has a grammar AND the parsers finished loading). Lets callers
+ * distinguish "no such symbol in this file" (worth flagging) from "we can't see
+ * symbols here at all" (unknowable, stay quiet).
+ */
+export function canParse(path: string): boolean {
+  return ready && ext(path) in GRAMMAR_BY_EXT;
+}
+
 /** Separates the symbol scope from the line text in an ownership key. NUL can't
  * appear in a source line, so it's an unambiguous delimiter. */
 export const OWN_KEY_SEP = "\u0000";

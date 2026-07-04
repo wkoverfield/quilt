@@ -159,3 +159,36 @@ test("claims: re-claiming your own path refreshes its expiry", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("claims: an absolute path inside the repo is stored repo-relative and collides with the relative form", () => {
+  const { s, dir } = newStore();
+  try {
+    const t0 = 1000;
+    const [r] = acquireClaims(s, "alice", null, [join(dir, "src", "a.js") + "#login"], t0, "auth work");
+    assert.equal(r!.granted, true);
+    assert.equal(r!.path, "src/a.js", "stored repo-relative with forward slashes");
+    // The relative spelling of the same target is the SAME claim — denied for bob.
+    const [denied] = acquireClaims(s, "bob", null, ["src/a.js#login"], t0);
+    assert.equal(denied!.granted, false);
+    assert.equal(denied!.holder, "alice");
+    // Releasing by the absolute spelling frees the relative claim.
+    assert.equal(releaseClaims(s, "alice", [join(dir, "src", "a.js")]), 1);
+    assert.equal(listClaims(s, t0).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claims: a path outside the repo is still rejected outright", () => {
+  const { s, dir } = newStore();
+  try {
+    const [r] = acquireClaims(s, "eve", null, ["/etc/passwd"], 1000);
+    assert.equal(r!.granted, false);
+    assert.equal(r!.reason, "outside-repo");
+    const [r2] = acquireClaims(s, "eve", null, ["../sibling/file.js"], 1000);
+    assert.equal(r2!.granted, false);
+    assert.equal(r2!.reason, "outside-repo");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
