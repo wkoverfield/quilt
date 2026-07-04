@@ -41,12 +41,22 @@ That is `./examples/fleet.sh`. It uses the quilt system, and you can also run it
 
 ## When two agents want the same file
 
-Fanning out on disjoint files is the easy case. The real test is contention:
+Fanning out on disjoint files is the easy case. The real test is contention.
+A denied claim isn't a dead end — it carries the holder's stated intent and
+when their lease lapses:
 
-![Two builders race for the same file. The loser's denial carries the winner's stated intent and lease expiry, so it builds its other files while it waits, re-claims after the winner's commit auto-releases, and layers its change on top. Two clean commits, nothing lost.](examples/contention.gif)
+```txt
+$ QUILT_ACTOR=builder-flows quilt claim deals.js flows.js --intent "wire flows to deals"
+  ✗ denied  deals.js (held by builder-friction)
+      builder-friction is: friction pass: rename + archive flags
+      their claim lapses 2026-07-04T22:12:05Z unless renewed
+  ✓ claimed flows.js
+```
 
-That is `./examples/contention.sh` — a denial isn't a dead end, it's the other
-agent's intent and a lease expiry to pace your retry against.
+So the blocked agent builds its granted files while it waits, re-claims after
+the holder's commit auto-releases, and layers its change on top of the landed
+one. Two clean commits, both changes in the file, nothing lost.
+`./examples/contention.sh` runs the whole sequence on the real machinery.
 
 ## What it does
 
