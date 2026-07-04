@@ -126,6 +126,10 @@ export function runWatch(store: Store): void {
       if (ignored(filename.toString())) return;
       schedule();
     });
+    // Sweep anything that changed before the watcher armed (the pidfile goes
+    // up a beat earlier, and an edit in that window would otherwise wait for
+    // the NEXT filesystem event to be attributed).
+    schedule();
   } catch (err) {
     cleanup();
     process.stderr.write(
