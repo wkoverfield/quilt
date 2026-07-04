@@ -39,6 +39,15 @@ to head:
 
 That is `./examples/fleet.sh`. It uses the quilt system, and you can also run it yourself.
 
+## When two agents want the same file
+
+Fanning out on disjoint files is the easy case. The real test is contention:
+
+![Two builders race for the same file. The loser's denial carries the winner's stated intent and lease expiry, so it builds its other files while it waits, re-claims after the winner's commit auto-releases, and layers its change on top. Two clean commits, nothing lost.](examples/contention.gif)
+
+That is `./examples/contention.sh` — a denial isn't a dead end, it's the other
+agent's intent and a lease expiry to pace your retry against.
+
 ## What it does
 
 - **One shared checkout.** Model humans, agents, and bots as actors editing one
