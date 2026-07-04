@@ -208,3 +208,32 @@ test("quilt setup --dry-run writes nothing", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("planSetup wires Cursor's .cursor/mcp.json and appends coordination to an existing AGENTS.md", () => {
+  const dir = tmpRepo();
+  try {
+    mkdirSync(join(dir, ".cursor"));
+    writeFileSync(join(dir, "AGENTS.md"), "# Agents\n");
+    const steps = planSetup(dir);
+    const cursor = steps.find((s) => s.file === ".cursor/mcp.json");
+    assert.ok(cursor, "a .cursor dir gets its own MCP config step");
+    assert.equal(cursor!.action, "create");
+    assert.ok(cursor!.content!.includes('"quilt"'));
+    const agents = steps.find((s) => s.file === "AGENTS.md");
+    assert.ok(agents, "an existing AGENTS.md receives the coordination snippet");
+    assert.ok(agents!.content!.includes(COORDINATION_MARKER));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("planSetup does NOT create AGENTS.md or .cursor config when neither exists", () => {
+  const dir = tmpRepo();
+  try {
+    const files = planSetup(dir).map((s) => s.file);
+    assert.ok(!files.includes("AGENTS.md"));
+    assert.ok(!files.includes(".cursor/mcp.json"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

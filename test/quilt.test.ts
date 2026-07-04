@@ -291,3 +291,130 @@ test("status JSON is parseable and stable-shaped", () => {
     cleanup(dir);
   }
 });
+
+// ---- the pilot scenario: two subagents, one session, claims + native writes ----
+//
+// The first real pilot's headline bug: subagents of one Claude Code session
+// share its session_id, and on 0.4.0 their captured work merged and the first
+// commit --mine swept the other agent's files. This drives the whole repaired
+// pipeline through the REAL CLI: per-subagent auto ids from agent_id, claim
+// adoption binding a native write to the MCP role that claimed it, and each
+// commit containing exactly that actor's files.
+test("pilot replay: two subagents of one session commit exactly their own files", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "README.md", "init\n");
+    commitAll(dir, "init");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // ui-agent claims its file under its role id (as it would over MCP)...
+    assert.equal(quilt(dir, ["claim", "ui.ts", "--intent", "build the UI"], "ui-agent").status, 0);
+
+    // ...and its subagent writes it natively: shared session_id, own agent_id,
+    // ABSOLUTE path — exactly what a real hook payload carries.
+    const hook = (payload: object) =>
+      spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", input: JSON.stringify(payload) });
+    const hookPost = (payload: object) =>
+      spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", input: JSON.stringify(payload) });
+
+    const uiPayload = {
+      tool_name: "Write",
+      session_id: "shared-session-1234",
+      agent_id: "f7e8d9c0",
+      agent_type: "ui-builder",
+      tool_input: { file_path: join(dir, "ui.ts"), content: "export function render() {\n  return 1;\n}\n" },
+    };
+    assert.equal(hook(uiPayload).status, 0);
+    write(dir, "ui.ts", "export function render() {\n  return 1;\n}\n");
+    assert.equal(hookPost(uiPayload).status, 0);
+
+    // A second subagent (same session, different agent_id) writes its own file.
+    const dataPayload = {
+      tool_name: "Write",
+      session_id: "shared-session-1234",
+      agent_id: "0a1b2c3d",
+      agent_type: "data-loader",
+      tool_input: { file_path: join(dir, "data.ts"), content: "export function load() {\n  return [];\n}\n" },
+    };
+    assert.equal(hook(dataPayload).status, 0);
+    write(dir, "data.ts", "export function load() {\n  return [];\n}\n");
+    assert.equal(hookPost(dataPayload).status, 0);
+
+    // The ledger tells the two subagents apart: adoption credited ui-agent
+    // (the claim holder), and the data subagent got its own derived id.
+    const log = read(dir, ".quilt/authorship.log");
+    assert.match(log, /"actor":"ui-agent"/);
+    assert.match(log, /"actor":"data-loader-0a1b2c3d"/);
+
+    // The data subagent commits FIRST — the pilot's sweep moment. Its commit
+    // must contain exactly data.ts, never ui-agent's claimed file.
+    const dataCommit = quilt(dir, ["commit", "--mine", "-m", "data: loader"], "data-loader-0a1b2c3d");
+    assert.equal(dataCommit.status, 0, dataCommit.stderr);
+    assert.equal(gitOut(dir, ["show", "--name-only", "--format=", "HEAD"]).trim(), "data.ts");
+
+    // ui-agent commits its own claimed work — including via a QUILT_ACTOR that
+    // was never separately registered (it only claimed; adoption captured it).
+    const uiCommit = quilt(dir, ["commit", "--mine", "-m", "ui: render"], "ui-agent");
+    assert.equal(uiCommit.status, 0, uiCommit.stderr);
+    assert.equal(gitOut(dir, ["show", "--name-only", "--format=", "HEAD"]).trim(), "ui.ts");
+    assert.match(gitOut(dir, ["log", "--format=%an %s"]), /ui-agent ui: render/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Pilot round 2, new bugs: the committed reconstruction silently dropped
+// trivial lines that OPENED a change run — a blank separator line, and in one
+// case a `}),` (which committed a syntax error). Trivial lines carry no
+// ownership, so they inherit their run's decision; a run-opening one had
+// nothing to inherit from and vanished.
+test("commit --mine keeps run-opening trivial lines: blank separators and closer punctuation", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "app.js", "registerRoutes(\n  home(),\n);\nfunction a() {\n  return 1;\n}\n");
+    commitAll(dir, "base");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // One actor, uncontested. Two edits whose diff runs OPEN with a trivial
+    // line: appending a function preceded by a BLANK separator, and adding an
+    // argument line adjacent to closer punctuation.
+    const after =
+      "registerRoutes(\n  home(),\n  admin(),\n);\nfunction a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n";
+    write(dir, "app.js", after);
+    const c = quilt(dir, ["commit", "--mine", "-m", "solo work"], "solo");
+    assert.equal(c.status, 0, c.stderr);
+
+    // The committed file must be byte-identical to the worktree — nothing
+    // (blank line, punctuation-only line) silently dropped.
+    assert.equal(
+      spawnSync("git", ["show", "HEAD:app.js"], { cwd: dir, encoding: "utf8" }).stdout,
+      after,
+      "committed content matches the worktree exactly",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a purely-trivial change run (formatting-only) commits with --include-unclaimed instead of vanishing", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "fmt.js", "const a = 1;\nconst b = 2;\n");
+    commitAll(dir, "base");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // The actor's substantive edit plus a blank-line-only insertion elsewhere
+    // (no owner signal in that run at all).
+    const after = "const a = 1;\n\nconst b = 2;\nconst c = 3;\n";
+    write(dir, "fmt.js", after);
+    const c = quilt(dir, ["commit", "--mine", "--include-unclaimed", "-m", "solo fmt"], "solo");
+    assert.equal(c.status, 0, c.stderr);
+    assert.equal(
+      spawnSync("git", ["show", "HEAD:fmt.js"], { cwd: dir, encoding: "utf8" }).stdout,
+      after,
+      "with --include-unclaimed the blank-only run commits too",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

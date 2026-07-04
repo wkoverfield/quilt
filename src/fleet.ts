@@ -214,7 +214,7 @@ export function renderFleet(view: FleetView, headLabel: string): string {
       const dot = active ? pc.green("●") : pc.dim("○");
       const work = a.files.length
         ? a.files.join(", ")
-        : pc.dim(a.claims.length ? "reserved, not yet edited" : "idle");
+        : pc.dim(a.claims.length ? "holding claims, no uncommitted edits" : "idle");
       out.push(`    ${dot} ${pc.bold(a.id)} ${pc.dim(`(${a.type})`)}   ${work}`);
       if (a.claims.length) out.push(pc.dim(`        claims: ${a.claims.join(", ")}`));
     }

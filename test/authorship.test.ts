@@ -389,3 +389,30 @@ test("reconcile attribution survives compaction: the checkpoint feeds the ledger
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("applyAndRecordEdit accepts an absolute path and records it repo-relative", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "abs.js"), "function q() {\n  return 1;\n}\n");
+    const r = applyAndRecordEdit(s, {
+      actor: "mcp-agent",
+      path: join(dir, "abs.js"), // MCP clients pass the absolute paths they hold
+      oldString: "return 1;",
+      newString: "return 2;",
+    });
+    assert.equal(r.ok, true);
+    if (r.ok) assert.equal(r.event.path, "abs.js", "ledger keys repo-relative");
+    // Prevention matches across spellings: a relative claim blocks the absolute edit.
+    acquireClaims(s, "holder", null, ["abs.js#q"], Date.now(), "mine");
+    const denied = applyAndRecordEdit(s, {
+      actor: "mcp-agent",
+      path: join(dir, "abs.js"),
+      oldString: "return 2;",
+      newString: "return 3;",
+    });
+    assert.equal(denied.ok, false);
+    assert.ok("heldBy" in denied && denied.heldBy === "holder");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

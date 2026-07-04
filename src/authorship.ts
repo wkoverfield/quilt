@@ -11,7 +11,8 @@ import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
 import { parseSymbols, ownKey, symbolLocator } from "./symbols.js";
-import { claimHeldByOther } from "./claims.js";
+import { claimHeldByOther, claimHolders, refreshClaims } from "./claims.js";
+import { repoRelative } from "./paths.js";
 import type { Store } from "./state.js";
 
 /** A denial: another actor holds the code this edit would touch. */
@@ -21,6 +22,9 @@ export interface EditDenied {
   /** the actor holding the conflicting claim, and their stated why. */
   heldBy: string;
   holderIntent?: string;
+  /** the specific reservation that collided, e.g. `utils.js#formatPrice` —
+   * more precise than the file when the hold is symbol-level. */
+  target?: string;
 }
 
 /**
@@ -69,27 +73,56 @@ export interface AuthorshipEvent {
   whole?: boolean;
 }
 
-/** The symbol names an edit touches, then whether another actor holds any of them. */
-function checkHeld(
+/** The symbol names an `old_string` edit touches, or [] when it can't be located. */
+export function touchedByEdit(path: string, before: string, oldString: string): string[] {
+  const idx = before.indexOf(oldString);
+  if (idx === -1) return [];
+  const startLine = before.slice(0, idx).split("\n").length; // 1-based start of the match
+  const endLine = startLine + oldString.split("\n").length - 1;
+  return parseSymbols(path, before)
+    .filter((s) => !(s.endLine < startLine || s.startLine > endLine))
+    .map((s) => s.name);
+}
+
+/** Every symbol a whole-file write touches: those in the new content AND those
+ * in the existing file (overwriting a symbol away still touches it). */
+export function touchedByWrite(path: string, content: string, existing: string | null): string[] {
+  const symbols = new Set(parseSymbols(path, content).map((s) => s.name));
+  if (existing !== null) for (const s of parseSymbols(path, existing)) symbols.add(s.name);
+  return [...symbols];
+}
+
+/**
+ * The auto-identity adoption rule: an edit arriving under an AUTO-DERIVED id
+ * (a session/agent/connection-derived name, not one anybody chose) that lands
+ * inside code claimed by exactly ONE other actor is attributed to that holder.
+ *
+ * This is what binds the protocol together when subagents share ambient
+ * identity: an agent claims as its role (`ui-agent`) over MCP, but its native
+ * edits reach the hook under a derived id — without adoption the claim would
+ * DENY the holder's own edit, and capture would credit a name nobody claimed
+ * under. A claim means "the next edits here are mine"; for an anonymous editor
+ * the claim is the best identity signal there is. Never applied to an explicit
+ * identity (QUILT_ACTOR, start_session, per-call actor) — a named actor editing
+ * someone else's claim is a real collision and must still be denied. Ambiguity
+ * (two holders across the touched symbols) also falls back to the deny.
+ */
+export function adoptClaimHolder(
   store: Store,
   actor: string,
   path: string,
-  before: string,
-  idx: number,
-  oldString: string,
-): EditDenied | null {
-  const startLine = before.slice(0, idx).split("\n").length; // 1-based start of the match
-  const endLine = startLine + oldString.split("\n").length - 1;
-  const touched = parseSymbols(path, before)
-    .filter((s) => !(s.endLine < startLine || s.startLine > endLine))
-    .map((s) => s.name);
-  return heldDenial(claimHeldByOther(store, actor, path, touched, Date.now()));
+  symbols: string[],
+): string {
+  const holders = claimHolders(store, actor, path, symbols, Date.now());
+  if (holders.size !== 1) return actor;
+  return [...holders][0]!;
 }
+
 
 /** Shape a `claimHeldByOther` hit into the shared EditDenied return, or null if clear. */
 function heldDenial(held: ReturnType<typeof claimHeldByOther>): EditDenied | null {
   if (!held) return null;
-  return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent };
+  return { ok: false, error: `held by ${held.holder}`, heldBy: held.holder, holderIntent: held.intent, target: held.target };
 }
 
 /**
@@ -106,9 +139,10 @@ export function checkHeldEdit(
   before: string,
   oldString: string,
 ): EditDenied | null {
-  const idx = before.indexOf(oldString);
-  if (idx === -1) return null;
-  return checkHeld(store, actor, path, before, idx, oldString);
+  if (before.indexOf(oldString) === -1) return null;
+  return heldDenial(
+    claimHeldByOther(store, actor, path, touchedByEdit(path, before, oldString), Date.now()),
+  );
 }
 
 /**
@@ -124,9 +158,9 @@ export function checkHeldWrite(
   content: string,
   existing: string | null,
 ): EditDenied | null {
-  const symbols = new Set(parseSymbols(path, content).map((s) => s.name));
-  if (existing !== null) for (const s of parseSymbols(path, existing)) symbols.add(s.name);
-  return heldDenial(claimHeldByOther(store, actor, path, [...symbols], Date.now()));
+  return heldDenial(
+    claimHeldByOther(store, actor, path, touchedByWrite(path, content, existing), Date.now()),
+  );
 }
 
 function splitLines(s: string): string[] {
@@ -403,11 +437,24 @@ function lineBefore(text: string, idx: number): string | null {
  */
 export function applyAndRecordEdit(
   store: Store,
-  args: { actor: string; path: string; oldString: string; newString: string; intent?: string },
+  args: {
+    actor: string;
+    path: string;
+    oldString: string;
+    newString: string;
+    intent?: string;
+    /** true when `actor` is an auto-derived id — enables claim adoption. */
+    autoActor?: boolean;
+  },
 ): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
-  const abs = safeAbs(store.paths.repoRoot, args.path);
+  // Agents pass absolute paths as readily as relative ones (the tool schema says
+  // repo-relative, but an MCP client has absolute paths in hand) — normalize so
+  // claims and the ledger key consistently either way.
+  const rel = repoRelative(store.paths.repoRoot, args.path);
+  if (!rel) return { ok: false, error: "path escapes the repository" };
+  const abs = safeAbs(store.paths.repoRoot, rel);
   if (!abs) return { ok: false, error: "path escapes the repository" };
-  if (!existsSync(abs)) return { ok: false, error: `file not found: ${args.path}` };
+  if (!existsSync(abs)) return { ok: false, error: `file not found: ${rel}` };
   const before = readFileSync(abs, "utf8");
   const idx = before.indexOf(args.oldString);
   if (idx === -1) return { ok: false, error: "old_string not found in file" };
@@ -417,7 +464,12 @@ export function applyAndRecordEdit(
   // PREVENTION: if another actor holds the symbol(s) this edit touches, deny the
   // write before any bytes change and hand back their intent — the earliest
   // possible encounter point (earlier than commit), so the agent resolves in-band.
-  const denied = checkHeldEdit(store, args.actor, args.path, before, args.oldString);
+  // An auto-derived caller editing inside a claim is adopted by the (sole)
+  // holder rather than denied — see adoptClaimHolder for the reasoning.
+  const actor = args.autoActor
+    ? adoptClaimHolder(store, args.actor, rel, touchedByEdit(rel, before, args.oldString))
+    : args.actor;
+  const denied = checkHeldEdit(store, actor, rel, before, args.oldString);
   if (denied) return denied;
   const after = before.slice(0, idx) + args.newString + before.slice(idx + args.oldString.length);
   atomicWrite(abs, after);
@@ -426,39 +478,54 @@ export function applyAndRecordEdit(
   // it). This yields whole-line adds/removes that match how ownership is keyed,
   // unlike the partial old_string/new_string fragments.
   const event = recordAuthorship(store, {
-    actor: args.actor,
-    path: args.path,
+    actor,
+    path: rel,
     oldText: before,
     newText: after,
     intent: args.intent,
     anchor: lineBefore(before, idx),
   });
+  // Keep the editor's reservation alive while it's actively working.
+  refreshClaims(store, actor, rel, Date.now());
   return { ok: true, event };
 }
 
 /** Whole-file write/create with authorship capture (the `quilt_write` tool). */
 export function applyAndRecordWrite(
   store: Store,
-  args: { actor: string; path: string; content: string; intent?: string },
+  args: {
+    actor: string;
+    path: string;
+    content: string;
+    intent?: string;
+    /** true when `actor` is an auto-derived id — enables claim adoption. */
+    autoActor?: boolean;
+  },
 ): { ok: true; event: AuthorshipEvent } | { ok: false; error: string } | EditDenied {
-  const abs = safeAbs(store.paths.repoRoot, args.path);
+  const rel = repoRelative(store.paths.repoRoot, args.path);
+  if (!rel) return { ok: false, error: "path escapes the repository" };
+  const abs = safeAbs(store.paths.repoRoot, rel);
   if (!abs) return { ok: false, error: "path escapes the repository" };
   // A whole-file write collides with any other actor's claim on this path. Check
   // symbols in BOTH the new content and the existing file — overwriting a file in
   // a way that removes a claimed symbol must still be denied (else it silently
   // deletes the held code).
   const existing = existsSync(abs) ? readFileSync(abs, "utf8") : null;
-  const denied = checkHeldWrite(store, args.actor, args.path, args.content, existing);
+  const actor = args.autoActor
+    ? adoptClaimHolder(store, args.actor, rel, touchedByWrite(rel, args.content, existing))
+    : args.actor;
+  const denied = checkHeldWrite(store, actor, rel, args.content, existing);
   if (denied) return denied;
   atomicWrite(abs, args.content);
   const event = recordAuthorship(store, {
-    actor: args.actor,
-    path: args.path,
+    actor,
+    path: rel,
     oldText: "",
     newText: args.content,
     intent: args.intent,
     whole: true,
   });
+  refreshClaims(store, actor, rel, Date.now());
   return { ok: true, event };
 }
 

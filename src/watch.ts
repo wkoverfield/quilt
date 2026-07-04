@@ -71,7 +71,7 @@ export function runWatch(store: Store): void {
   );
   process.stdout.write(
     pc.dim(
-      `  active actor: ${ctx.actorId ?? "(none — run quilt start)"}\n` +
+      `  active actor: ${ctx.actorId ?? "(none — set QUILT_ACTOR=<id> or run quilt start)"}\n` +
         "  edits are attributed live; collisions are caught and preserved. Ctrl-C to stop.\n\n",
     ),
   );
@@ -126,6 +126,10 @@ export function runWatch(store: Store): void {
       if (ignored(filename.toString())) return;
       schedule();
     });
+    // Sweep anything that changed before the watcher armed (the pidfile goes
+    // up a beat earlier, and an edit in that window would otherwise wait for
+    // the NEXT filesystem event to be attributed).
+    schedule();
   } catch (err) {
     cleanup();
     process.stderr.write(

@@ -13,7 +13,7 @@ import {
   type FileModel,
   type WorktreeModel,
 } from "./engine.js";
-import { symbolLocator, opKeyer } from "./symbols.js";
+import { symbolLocator, opKeyer, OWN_KEY_SEP } from "./symbols.js";
 import type { Actor, FileOwnership, OwnershipFile } from "./types.js";
 
 export interface SelectedFile {
@@ -54,6 +54,11 @@ interface OwnedBuild {
   hasOther: boolean;
   /** an unattributed changed line was skipped (committable with --include-unclaimed) */
   hasUnclaimed: boolean;
+  /** a named symbol has BOTH included and excluded changed lines — committing
+   * would tear the construct (e.g. a function missing one of its lines), which
+   * is how a syntax error got committed in the pilot. The file must not be
+   * partially committed. */
+  torn: boolean;
 }
 
 /**
@@ -83,31 +88,87 @@ function buildOwnedText(
   let hasOther = false;
   let hasUnclaimed = false;
   let lastFromWorktree = false; // for the committed file's trailing newline
-  let blockInclude = false; // trivial lines inherit their change run's decision
+  // Tear detection: a NAMED symbol with both included and excluded changed
+  // lines cannot be partially committed — the result is a construct missing
+  // some of its lines (the committed-syntax-error failure). Track the symbol
+  // scope (the key's prefix) of every non-trivial changed line on each side.
+  const includedScopes = new Set<string>();
+  const excludedScopes = new Set<string>();
 
-  for (const op of ops) {
+  // Pass 1 — decide every op. Non-trivial changed lines decide by owner.
+  // Trivial lines (braces, blanks — never owned) are left undecided here and
+  // resolved in pass 2 from their change-run's neighbors: the old single-pass
+  // "inherit the preceding decision" dropped a trivial line that OPENED a run
+  // (nothing preceded it but an eq reset), which is how a `}),` and blank
+  // lines silently vanished from committed files in the pilot.
+  const decisions: (boolean | null)[] = new Array(ops.length).fill(null);
+  const trivial: boolean[] = new Array(ops.length).fill(false);
+  ops.forEach((op, i) => {
     const key = keyOf(op); // every op, so the line cursor stays aligned
+    if (op.type === "eq") return;
+    if (isTrivialLine(op.text)) {
+      trivial[i] = true;
+      return;
+    }
+    const owner = op.type === "add" ? owned?.added[key!] : owned?.removed[key!];
+    let include: boolean;
+    if (owner === actor) include = true;
+    else if (owner == null) {
+      include = includeUnclaimed;
+      hasUnclaimed = hasUnclaimed || !includeUnclaimed;
+    } else {
+      include = false;
+      hasOther = true;
+    }
+    decisions[i] = include;
+    const scope = key ? key.slice(0, key.indexOf(OWN_KEY_SEP)) : "";
+    if (scope) (include ? includedScopes : excludedScopes).add(scope);
+  });
+
+  // Pass 2 — resolve trivial lines within each contiguous change run: nearest
+  // decided neighbor, preferring the preceding one (a closing brace belongs to
+  // the construct above it), else the following (a run-opening `}),` or blank
+  // belongs to the change right after it). A run that is ENTIRELY trivial
+  // (pure formatting) has no owner signal at all: committable only with
+  // --include-unclaimed, and flagged so it is never dropped silently.
+  let runStart = -1;
+  const resolveRun = (start: number, end: number) => {
+    for (let i = start; i < end; i++) {
+      if (!trivial[i]) continue;
+      let dec: boolean | null = null;
+      for (let p = i - 1; p >= start; p--) {
+        if (decisions[p] !== null) { dec = decisions[p]!; break; }
+      }
+      if (dec === null) {
+        for (let n = i + 1; n < end; n++) {
+          if (decisions[n] !== null) { dec = decisions[n]!; break; }
+        }
+      }
+      if (dec === null) {
+        dec = includeUnclaimed;
+        hasUnclaimed = hasUnclaimed || !includeUnclaimed;
+      }
+      decisions[i] = dec;
+    }
+  };
+  ops.forEach((op, i) => {
+    if (op.type === "eq") {
+      if (runStart !== -1) resolveRun(runStart, i);
+      runStart = -1;
+    } else if (runStart === -1) {
+      runStart = i;
+    }
+  });
+  if (runStart !== -1) resolveRun(runStart, ops.length);
+
+  // Pass 3 — emit.
+  ops.forEach((op, i) => {
     if (op.type === "eq") {
       out.push(op.text);
       lastFromWorktree = false;
-      blockInclude = false;
-      continue;
+      return;
     }
-    let include: boolean;
-    if (isTrivialLine(op.text)) {
-      include = blockInclude;
-    } else {
-      const owner = op.type === "add" ? owned?.added[key!] : owned?.removed[key!];
-      if (owner === actor) include = true;
-      else if (owner == null) {
-        include = includeUnclaimed;
-        hasUnclaimed = hasUnclaimed || !includeUnclaimed;
-      } else {
-        include = false;
-        hasOther = true;
-      }
-      blockInclude = include;
-    }
+    const include = decisions[i] === true;
     if (op.type === "add") {
       if (include) {
         out.push(op.text);
@@ -124,18 +185,19 @@ function buildOwnedText(
         lastFromWorktree = false;
       }
     }
-  }
+  });
 
-  if (!changed) return { added: 0, removed: 0, hasOther, hasUnclaimed };
+  const torn = [...includedScopes].some((s) => excludedScopes.has(s));
+  if (!changed) return { added: 0, removed: 0, hasOther, hasUnclaimed, torn };
   // The actor's changes delete the file entirely.
   if (worktreeText === null && out.length === 0) {
-    return { text: null, added, removed, hasOther, hasUnclaimed };
+    return { text: null, added, removed, hasOther, hasUnclaimed, torn };
   }
   const headFinal = headText === null ? true : splitLines(headText).finalNewline;
   const wtFinal = worktreeText === null ? true : splitLines(worktreeText).finalNewline;
   const finalNL = lastFromWorktree ? wtFinal : headFinal;
   const text = out.length === 0 ? "" : out.join("\n") + (finalNL ? "\n" : "");
-  return { text, added, removed, hasOther, hasUnclaimed };
+  return { text, added, removed, hasOther, hasUnclaimed, torn };
 }
 
 /**
@@ -147,7 +209,13 @@ export function selectOwned(
   model: WorktreeModel,
   repoRoot: string,
   ownership: OwnershipFile,
-  opts: { includeMixed?: boolean } = {},
+  opts: {
+    includeMixed?: boolean;
+    /** paths covered by another actor's live claim — includeMixed never
+     * applies there (their mid-flight hunks can read "unclaimed" while
+     * attribution is pending, and must not be sweepable on that label). */
+    pathClaimedByOther?: (path: string) => boolean;
+  } = {},
 ): Selection {
   const actor = model.activeActorId;
   const patches: string[] = [];
@@ -159,15 +227,25 @@ export function selectOwned(
 
   for (const file of model.files) {
     if (file.binary || actor === null) continue;
+    const includeMixedHere =
+      (opts.includeMixed ?? false) && !(opts.pathClaimedByOther?.(file.path) ?? false);
     const built = buildOwnedText(
       file.path,
       file.oldText,
       file.newText,
       ownership.files[file.path],
       actor,
-      opts.includeMixed ?? false,
+      includeMixedHere,
     );
     if (built.hasUnclaimed) hasMixed = true;
+    // A torn symbol (some of its changed lines included, some excluded) can
+    // never be partially committed — the committed construct would be missing
+    // lines. Withhold the whole file; the tear resolves by claiming/owning the
+    // rest, `--include-unclaimed`, or the other actor committing first.
+    if (built.torn) {
+      blockedFiles.push(file.path);
+      continue;
+    }
     if (built.added === 0 && built.removed === 0) {
       if (built.hasOther) blockedFiles.push(file.path);
       continue;

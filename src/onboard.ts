@@ -29,30 +29,46 @@ You share this checkout with other agents. Coordinate through Quilt:
   process or MCP connection, pick a stable id — your role or task name (e.g.
   \`auth-agent\`) — and pass it as \`actor\` on every Quilt call, since a shared
   connection can't tell you apart automatically.
-- Before you edit a file, \`claim\` what you're about to change
-  (\`path#symbol\`, e.g. \`src/auth.ts#login\`). Pass a short
-  intent too — the why (your ticket/task) — which is shown to anyone you block.
+- BEFORE you edit a file, \`claim\` it — WHOLE FILES by default (\`src/auth.ts\`),
+  a directory for codegen output (\`convex/_generated/\`). The claim is what
+  BINDS your external edits to your id; attribution is decided at edit time
+  and is never retroactive, so claim first, then edit. Use \`path#symbol\`
+  only to share one file with another actor, and pass \`creating: true\` if
+  the symbol doesn't exist yet. Pass a short intent too — the why (your
+  ticket/task) — which is shown to anyone you block.
 - If your claim is denied, another agent holds that code and is mid-change. The
-  response carries their holderIntent (what they are doing). Use it instead of
-  forcing your change through: if they are already doing your change, drop yours;
-  if it is compatible, adapt around it; if your goals are genuinely opposed (you
-  each need the same line to be different things), do NOT overwrite them —
-  escalate the target with a reason naming both intents, and move on. A human
-  decides.
+  response carries their holderIntent (what they are doing) and when their
+  claim lapses. Use it instead of forcing your change through: if they are
+  already doing your change, drop yours; if it is compatible, adapt around it;
+  if your goals are genuinely opposed (you each need the same line to be
+  different things), do NOT overwrite them — escalate the target with a reason
+  naming both intents, and move on. A human decides.
 - When you reconcile a clash yourself (merge both intents, or adapt), resolve the
   target with a short note so the decision is recorded.
 - The claim response may include \`dependencyWarnings\`: a function you depend on
   is being changed by another agent. Account for it.
 - When your change is ready, \`commit_mine\` with your id. It commits only your
-  lines and leaves everyone else's work untouched.`;
+  lines, leaves everyone else's work untouched, and AUTO-RELEASES your claims
+  on the committed files — no separate release call is needed.
+- Repo-wide proof gates (tsc, tests) can fail mid-wave because of OTHER
+  agents' in-flight work. Verify your own hunks' independence, or let the
+  orchestrator run proof at wave end. Keep tooling artifacts (test snapshots,
+  scratch output) gitignored — quilt follows git's view of the tree.`;
 
 export interface Detected {
   mcpJsonPath: string;
   claudeMdPath: string;
   settingsPath: string;
+  cursorMcpPath: string;
+  agentsMdPath: string;
   hasMcpJson: boolean;
   hasClaudeMd: boolean;
   hasSettings: boolean;
+  /** A `.cursor/` directory — wire Cursor's own MCP config too. */
+  hasCursorDir: boolean;
+  /** An `AGENTS.md` — Cursor/Codex-family agents read it, so the coordination
+   * snippet goes there as well as CLAUDE.md. */
+  hasAgentsMd: boolean;
   /** Signals a Claude Code / Cursor / generic agent setup is in use. */
   orchestrator: string | null;
   quiltWired: boolean;
@@ -65,12 +81,14 @@ export function detect(root: string): Detected {
   const mcpJsonPath = join(root, ".mcp.json");
   const claudeMdPath = join(root, "CLAUDE.md");
   const settingsPath = join(root, ".claude", "settings.json");
+  const cursorMcpPath = join(root, ".cursor", "mcp.json");
+  const agentsMdPath = join(root, "AGENTS.md");
   const hasMcpJson = existsSync(mcpJsonPath);
   const hasClaudeMd = existsSync(claudeMdPath);
   const hasSettings = existsSync(settingsPath);
   const hasClaudeDir = existsSync(join(root, ".claude"));
   const hasCursorDir = existsSync(join(root, ".cursor"));
-  const hasAgentsMd = existsSync(join(root, "AGENTS.md"));
+  const hasAgentsMd = existsSync(agentsMdPath);
 
   const orchestrator =
     hasClaudeDir || hasClaudeMd || hasMcpJson
@@ -90,9 +108,13 @@ export function detect(root: string): Detected {
     mcpJsonPath,
     claudeMdPath,
     settingsPath,
+    cursorMcpPath,
+    agentsMdPath,
     hasMcpJson,
     hasClaudeMd,
     hasSettings,
+    hasCursorDir,
+    hasAgentsMd,
     orchestrator,
     quiltWired,
     coordinationPresent,
@@ -312,6 +334,49 @@ export function planSetup(root: string): SetupStep[] {
       content: hooks.content,
       path: d.settingsPath,
     });
+  }
+
+  // Cursor keeps its MCP config in .cursor/mcp.json (same mcpServers shape) and
+  // doesn't read .mcp.json, so a repo with a .cursor/ dir gets both wired.
+  if (d.hasCursorDir) {
+    const cursorExisting = safeRead(d.cursorMcpPath);
+    const cursor = mergeMcpServers(cursorExisting);
+    if (cursor.error) {
+      steps.push({
+        file: ".cursor/mcp.json",
+        action: "skip",
+        detail: `left untouched (${cursor.error}) — add the "quilt" server by hand`,
+        path: d.cursorMcpPath,
+      });
+    } else if (!cursor.changed) {
+      steps.push({ file: ".cursor/mcp.json", action: "skip", detail: "quilt server already present", path: d.cursorMcpPath });
+    } else {
+      steps.push({
+        file: ".cursor/mcp.json",
+        action: cursorExisting !== null ? "update" : "create",
+        detail: cursorExisting !== null ? "add the quilt MCP server (Cursor)" : "create with the quilt MCP server (Cursor)",
+        content: cursor.content,
+        path: d.cursorMcpPath,
+      });
+    }
+  }
+
+  // Cursor/Codex-family agents read AGENTS.md, not CLAUDE.md. Only append to an
+  // AGENTS.md that already exists — creating one unprompted would change what
+  // those tools load in a repo that never opted into it.
+  if (d.hasAgentsMd) {
+    const agents = appendCoordination(safeRead(d.agentsMdPath));
+    if (!agents.changed) {
+      steps.push({ file: "AGENTS.md", action: "skip", detail: "coordination snippet already present", path: d.agentsMdPath });
+    } else {
+      steps.push({
+        file: "AGENTS.md",
+        action: "update",
+        detail: "append the coordination snippet",
+        content: agents.content,
+        path: d.agentsMdPath,
+      });
+    }
   }
 
   return steps;

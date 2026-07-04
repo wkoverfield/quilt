@@ -7,9 +7,10 @@ import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, releaseClaims, listClaims } from "./claims.js";
+import { acquireClaims, releaseClaims, listClaims, pathsClaimedByOthers } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
 import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
+import { VERSION } from "./version.js";
 import { dependencyWarnings } from "./push.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
@@ -85,6 +86,10 @@ export async function runMcpServer(store: Store): Promise<void> {
     }
     return id;
   };
+  /** Whether resolveActor would fall back to the auto-derived connection id —
+   * a derived identity enables claim adoption on quilt_edit/quilt_write. */
+  const isAutoActor = (explicit: string | undefined): boolean =>
+    explicit === undefined && !active;
   const ok = (data: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
   });
@@ -97,7 +102,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       "actor id to act as. Auto-derived per connection when omitted (from the client name, e.g. cursor-3fa2), so naming is optional for a single agent. Pass an explicit id (your role/task name) when several subagents share one server — they have no ambient identity to tell them apart — or when you want a stable id across runs.",
     );
 
-  const server = new McpServer({ name: "quilt", version: "0.3.0" });
+  const server = new McpServer({ name: "quilt", version: VERSION });
 
   server.registerTool(
     "start_session",
@@ -105,7 +110,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       description:
         "Register an actor and start a session in this repo, pinning this server to that identity. Optional: if several agents share one server, skip this and pass `actor` on each call instead.",
       inputSchema: {
-        actor: z.string().describe("actor id, e.g. wilson/codex-auth"),
+        actor: z.string().describe("actor id, e.g. auth-agent"),
         type: z.enum(["human", "agent", "bot"]).optional(),
         name: z.string().optional(),
         email: z.string().optional(),
@@ -177,7 +182,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership()), false));
+      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), { pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()) }), false));
     },
   );
 
@@ -211,7 +216,10 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      const sel = selectOwned(model, repoRoot, store.readOwnership(), { includeMixed: includeUnclaimed });
+      const sel = selectOwned(model, repoRoot, store.readOwnership(), {
+        includeMixed: includeUnclaimed,
+        pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
+      });
       return ok({
         patch: sel.patch,
         files: sel.files,
@@ -238,13 +246,21 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actor = store.findActor(actorId)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      const sel = selectOwned(model, repoRoot, store.readOwnership(), { includeMixed: includeUnclaimed });
+      const sel = selectOwned(model, repoRoot, store.readOwnership(), {
+        includeMixed: includeUnclaimed,
+        pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
+      });
       if (sel.files.length === 0) {
         return ok({ committed: false, reason: "no owned changes to commit" });
       }
       const res = commitSelection(repoRoot, sel, actor, message);
+      let releasedClaims = 0;
       if (res.committed) {
-        releaseClaims(store, actorId, sel.files.map((f) => f.path));
+        // commit_mine auto-releases the committed files' claims — SAY so in
+        // the response, or the protocol's trailing `release` reads as a
+        // failure (`released: 0` burned a status call for every single
+        // dogfood agent).
+        releasedClaims = releaseClaims(store, actorId, sel.files.map((f) => f.path)).released;
         reconcile(store, actorId);
         store.appendLedger({
           ts: nowIso(),
@@ -255,7 +271,11 @@ export async function runMcpServer(store: Store): Promise<void> {
           via: "mcp",
         });
       }
-      return ok(res);
+      return ok(
+        res.committed
+          ? { ...res, releasedClaims, note: "committed files' claims were auto-released — no separate release call needed" }
+          : res,
+      );
     },
   );
 
@@ -263,19 +283,23 @@ export async function runMcpServer(store: Store): Promise<void> {
     "claim",
     {
       description:
-        "Reserve files BEFORE you edit them. Use `path#symbol` (e.g. utils.js#formatPrice) to reserve just one function/class so others can edit other parts of the same file in parallel; use a bare path to reserve the whole file. Pass a short `intent` (the why) so an actor you block can resolve the collision from it. A denied target is held by another actor — its `holderIntent` tells you what they're doing, so reconcile from that instead of just waiting.",
+        "Reserve files BEFORE you edit them — a claim placed before editing is also what BINDS your external edits to your actor id, so claim whole files first as the default. Use a bare path for a whole file, a trailing slash for a whole directory (e.g. convex/_generated/ — right for codegen output), or `path#symbol` (e.g. utils.js#formatPrice) to reserve one function so others can edit other parts of the same file in parallel (a symbol that does not exist in the file is denied with a suggestion, since it would bind nothing). Pass a short `intent` (the why) so an actor you block can resolve the collision from it. A denied target is held by another actor — its `holderIntent` tells you what they're doing, so reconcile from that instead of just waiting.",
       inputSchema: {
         actor: actorArg,
         paths: z.array(z.string()),
         intent: z.string().optional().describe("a short why for this claim, e.g. the ticket/task"),
+        creating: z.boolean().optional().describe("allow symbol claims for symbols you are ABOUT TO ADD to an existing file (they bind at write time). Without it, a symbol missing from the file is denied."),
       },
     },
-    async ({ actor, paths, intent }) => {
+    async ({ actor, paths, intent, creating }) => {
       const actorId = resolveActor(actor, true)!;
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
-      const results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent);
+      const results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating });
       // Push-awareness at reservation time: tell the agent if anything it just
       // claimed depends on a symbol another actor is currently changing.
+      // (A symbol claim that names nothing is DENIED with reason
+      // symbol-not-found + a suggestion — it used to be granted-but-non-binding,
+      // which produced a silent partial commit in the field.)
       return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });
     },
   );
@@ -291,8 +315,14 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       // Omitting `paths` releases everything; an explicit empty array is a no-op
       // (so a programmatic empty list never accidentally drops all claims).
-      const n = releaseClaims(store, actorId, paths ?? null);
-      return ok({ released: n });
+      const r = releaseClaims(store, actorId, paths ?? null);
+      return ok({
+        released: r.released,
+        expired: r.expired,
+        ...(r.released === 0 && r.expired === 0
+          ? { note: "nothing was held — commit_mine auto-releases the committed files' claims" }
+          : {}),
+      });
     },
   );
 
@@ -341,7 +371,7 @@ export async function runMcpServer(store: Store): Promise<void> {
         "Edit a file through Quilt instead of your raw editor. Replaces the unique `old_string` with `new_string` and records WHO authored the change at the moment of the edit — so attribution is exact even when several agents share this checkout, with no claims or reconcile guesswork. Pass `why` (your ticket/task). Prefer this over a plain file edit when coordinating a fleet.",
       inputSchema: {
         actor: actorArg,
-        path: z.string().describe("repo-relative file path"),
+        path: z.string().describe("file path (repo-relative or absolute; stored repo-relative)"),
         old_string: z.string().describe("the exact text to replace (must be unique in the file)"),
         new_string: z.string().describe("the replacement text"),
         why: z.string().optional().describe("a short why for this edit, e.g. the ticket/task"),
@@ -349,11 +379,18 @@ export async function runMcpServer(store: Store): Promise<void> {
     },
     async ({ actor, path, old_string, new_string, why }) => {
       const actorId = resolveActor(actor, true)!;
-      const r = applyAndRecordEdit(store, { actor: actorId, path, oldString: old_string, newString: new_string, intent: why });
+      const r = applyAndRecordEdit(store, {
+        actor: actorId,
+        path,
+        oldString: old_string,
+        newString: new_string,
+        intent: why,
+        autoActor: isAutoActor(actor),
+      });
       if (!r.ok) {
         return ok(
           "heldBy" in r
-            ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent,
+            ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent, target: r.target,
                 guidance: "Another agent holds this code. Use their intent: if they're already doing your change, drop it; if compatible, edit elsewhere; if genuinely opposed, escalate." }
             : { applied: false, error: r.error },
         );
@@ -369,16 +406,22 @@ export async function runMcpServer(store: Store): Promise<void> {
         "Write a whole file (create or overwrite) through Quilt, recording you as the author of its contents at write time. Use for new files. Pass `why`.",
       inputSchema: {
         actor: actorArg,
-        path: z.string().describe("repo-relative file path"),
+        path: z.string().describe("file path (repo-relative or absolute; stored repo-relative)"),
         content: z.string().describe("full file contents"),
         why: z.string().optional(),
       },
     },
     async ({ actor, path, content, why }) => {
       const actorId = resolveActor(actor, true)!;
-      const r = applyAndRecordWrite(store, { actor: actorId, path, content, intent: why });
+      const r = applyAndRecordWrite(store, {
+        actor: actorId,
+        path,
+        content,
+        intent: why,
+        autoActor: isAutoActor(actor),
+      });
       if (!r.ok) {
-        return ok("heldBy" in r ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent } : { applied: false, error: r.error });
+        return ok("heldBy" in r ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent, target: r.target } : { applied: false, error: r.error });
       }
       return ok({ applied: true, captured: r.event });
     },

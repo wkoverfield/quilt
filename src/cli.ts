@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
@@ -16,12 +17,14 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.js";
+import { acquireClaims, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
-import { parseHookInput, runHookPre, runHookPost, sessionActorId } from "./hooks.js";
+import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
+import { recordAuthorship } from "./authorship.js";
+import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
 // Exit quietly when output is piped into a process that closes early
@@ -68,23 +71,38 @@ function readStdin(): Promise<string> {
 }
 
 /**
- * Resolve the actor a hook acts as. The ladder: QUILT_ACTOR (an explicit stable
- * id — always wins) > the active session's actor (quilt start) > an auto id
- * derived from the Claude Code session id in the hook payload (zero-config
- * capture; parallel sessions get distinct ids for free). Registers a first-seen
- * actor so it shows up in the fleet. Returns null only when there's no signal at
- * all — the hook then no-ops rather than guess.
+ * Resolve the actor a hook acts as. The ladder: QUILT_ACTOR (an explicit,
+ * per-process id — always wins) > an auto id from the payload's agent_id
+ * (per-SUBAGENT — subagents share the session id, so this is what tells them
+ * apart) > an auto id from the session id.
+ *
+ * Deliberately NOT in the ladder: the `.quilt/current` session pointer
+ * (`quilt start`). It is a checkout-GLOBAL file, so whoever ran start last
+ * would own every subsequent hook capture in the repo regardless of which
+ * agent edited — the root cause behind both pilot misattribution rounds.
+ * `quilt start` scopes the CLI commands you run in your own terminal;
+ * per-edit capture identity comes from the payload (or QUILT_ACTOR, which is
+ * per-process env and therefore actually scoped to one agent).
+ *
+ * Registers a first-seen actor so it shows up in the fleet. Returns null only
+ * when there's no signal at all — the hook then no-ops rather than guess.
+ * `auto` marks a derived id, which enables claim adoption downstream (an
+ * anonymous edit inside claimed code is attributed to the claim's holder).
  */
-function hookActor(store: Store, sessionId: string | null): string | null {
-  const id =
-    process.env.QUILT_ACTOR ||
-    activeContext(store).actorId ||
-    (sessionId ? sessionActorId(sessionId) : null);
+function hookActor(
+  store: Store,
+  input: { sessionId: string | null; agentId: string | null; agentType: string | null },
+): { id: string; auto: boolean } | null {
+  const explicit = process.env.QUILT_ACTOR;
+  const derived =
+    (input.agentId ? agentActorId(input.agentId, input.agentType) : null) ??
+    (input.sessionId ? sessionActorId(input.sessionId) : null);
+  const id = explicit || derived;
   if (!id) return null;
   if (!store.findActor(id)) {
     store.upsertActor({ id, type: "agent", displayName: id.split("/").pop() ?? id, createdAt: nowIso() });
   }
-  return id;
+  return { id, auto: !explicit };
 }
 
 /** Initialize Quilt's .quilt/ store. Returns false if it already existed. */
@@ -138,7 +156,7 @@ const program = new Command();
 program
   .name("quilt")
   .description("Actor-owned patches for Git. Same repo. Many agents. Clean commits.")
-  .version("0.3.0");
+  .version(VERSION);
 
 program
   .command("init")
@@ -151,7 +169,7 @@ program
     } else {
       process.stdout.write(
         pc.green("✓ ") + "Quilt initialized.\n" +
-          pc.dim("  Next: quilt start --actor <id> --type agent\n"),
+          pc.dim("  Next: quilt setup (wires your agents in — identity is automatic)\n"),
       );
     }
     // If this looks like an agent-orchestrated repo, point at one-step wiring.
@@ -202,9 +220,36 @@ program
       return;
     }
 
+    // Snapshot what each file held BEFORE the write, so the setup's own changes
+    // can be attributed to `quilt-setup` — otherwise the first `quilt status` a
+    // user ever sees flags Quilt's own files as suspicious unattributed changes.
+    const prior = new Map<string, string | null>();
+    for (const s of steps) {
+      if (s.action === "skip" || s.content === undefined) continue;
+      prior.set(s.file, existsSync(s.path) ? readFileSync(s.path, "utf8") : null);
+    }
+
     const written = applySetup(steps);
     if (initNeeded) process.stdout.write(pc.green("✓ ") + "initialized Quilt (.quilt/)\n");
     for (const s of steps) printSetupStep(s, false);
+
+    if (written.length > 0) {
+      const store2 = new Store(root); // doInit may have created the store after `store` was built
+      if (!store2.findActor("quilt-setup")) {
+        store2.upsertActor({ id: "quilt-setup", type: "bot", displayName: "quilt-setup", createdAt: nowIso() });
+      }
+      for (const s of written) {
+        const before = prior.get(s.file) ?? null;
+        recordAuthorship(store2, {
+          actor: "quilt-setup",
+          path: s.file,
+          oldText: before ?? "",
+          newText: s.content!,
+          whole: before === null,
+          intent: "quilt setup wiring",
+        });
+      }
+    }
 
     if (written.length === 0 && !initNeeded) {
       process.stdout.write("\n" + pc.green("✓ ") + "Already wired up. Your fleet is ready.\n");
@@ -215,19 +260,45 @@ program
           "Quilt is wired in. Each agent: claim before editing, commit_mine when done.\n" +
           pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
           pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
-          pc.dim("  Run `quilt doctor` to confirm capture is flowing. See docs/orchestrators.md.\n"),
+          pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
+          pc.dim("  the wiring (.quilt/ stays local and is already ignored).\n") +
+          pc.dim("  Run `quilt doctor` to confirm capture is flowing.\n") +
+          pc.dim("  Docs: https://github.com/wkoverfield/quilt/blob/main/docs/orchestrators.md\n"),
+      );
+    }
+
+    // The generated config invokes plain `quilt` — if that doesn't resolve on
+    // PATH (local/npx install), hooks and the MCP server would fail silently
+    // (hooks fail open by design). Say so now instead of leaving `quilt doctor`
+    // to notice zero captures later.
+    const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["quilt"], { stdio: "ignore" });
+    if (probe.status !== 0) {
+      process.stdout.write(
+        "\n" +
+          pc.yellow("⚠ ") +
+          "`quilt` is not on your PATH — the hooks and MCP server this setup wired\n" +
+          "  invoke plain `quilt` and will silently do nothing until it resolves.\n" +
+          pc.dim("  Install globally: npm install -g @quilt-dev/cli\n"),
       );
     }
   });
 
 program
   .command("start")
-  .description("Start a session for an actor in this checkout")
-  .requiredOption("--actor <id>", "actor id, e.g. wilson/codex-auth")
+  .description("Start a session for an actor in this checkout (optional — agents are auto-named; QUILT_ACTOR also works)")
+  .option("--actor <id>", "actor id, e.g. wilson")
   .option("--type <type>", "actor type: human | agent | bot", "human")
   .option("--name <displayName>", "human-readable display name")
   .option("--email <email>", "email used as the git author for this actor")
   .action((opts) => {
+    if (!opts.actor) {
+      fail(
+        "start needs an identity: quilt start --actor <id>\n" +
+          "  example: quilt start --actor wilson\n" +
+          "  (you usually don't need this — agents are auto-named per session, and\n" +
+          "   QUILT_ACTOR=<id> on any command works without a session)",
+      );
+    }
     const store = requireStore();
     const root = store.paths.repoRoot;
     const type = opts.type as ActorType;
@@ -413,7 +484,7 @@ program
   .action((opts) => {
     const store = requireStore();
     const ctx = activeContext(store);
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership());
@@ -475,11 +546,12 @@ program
   .action((opts) => {
     const store = requireStore();
     const ctx = activeContext(store);
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>`.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
+      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, true), null, 2) + "\n");
@@ -505,14 +577,28 @@ program
   .action((opts) => {
     const store = requireStore();
     if (!opts.mine) fail("commit requires --mine in V0 (only owned-patch commits are supported).");
-    const ctx = activeContext(store);
-    if (!ctx.actorId || !ctx.actor) {
-      fail("no active actor. Run `quilt start --actor <id>` first.");
+    let ctx = activeContext(store);
+    if (!ctx.actorId) {
+      fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
+    }
+    if (!ctx.actor) {
+      // An explicit QUILT_ACTOR that never registered (it only claimed, or its
+      // edits were captured under adoption) is a declared identity, not an
+      // error — register it now so its commit can carry a git author.
+      const a: Actor = {
+        id: ctx.actorId!,
+        type: "agent",
+        displayName: ctx.actorId!.split("/").pop() ?? ctx.actorId!,
+        createdAt: nowIso(),
+      };
+      store.upsertActor(a);
+      ctx = { ...ctx, actor: a };
     }
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
+      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
     });
 
     if (selection.files.length === 0) {
@@ -541,6 +627,10 @@ program
     const res = commitSelection(root, selection, ctx.actor!, opts.message);
     if (!res.committed) fail(res.reason ?? "commit failed");
 
+    // The work landed, so the reservations on it are spent — release them, as
+    // the MCP commit_mine already does, so the fleet view doesn't keep showing
+    // this actor as holding claims on files it already committed.
+    const rel = releaseClaims(store, ctx.actorId!, selection.files.map((f) => f.path));
     store.appendLedger({
       ts: nowIso(),
       type: "commit.mine",
@@ -556,7 +646,10 @@ program
       pc.green("✓ ") +
         `Committed ${selection.files.length} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
         `(${res.commitSha!.slice(0, 7)}).\n` +
-        pc.dim("  Other actors' changes remain in the working tree.\n"),
+        pc.dim("  Other actors' changes remain in the working tree.\n") +
+        (rel.released > 0
+          ? pc.dim(`  Auto-released ${rel.released} claim(s) on the committed files.\n`)
+          : ""),
     );
     if (selection.blockedFiles.length) {
       process.stdout.write(
@@ -654,7 +747,8 @@ program
   .argument("[paths...]", "files to claim; with none, lists active claims")
   .option("--json", "emit JSON")
   .option("--intent <text>", "a short why for this claim, shown to anyone it blocks")
-  .action((paths: string[], opts: { json?: boolean; intent?: string }) => {
+  .option("--creating", "allow symbol claims for symbols you are ABOUT TO ADD (they bind at write time)")
+  .action((paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean }) => {
     const store = requireStore();
     const ctx = activeContext(store);
 
@@ -676,7 +770,7 @@ program
       return;
     }
 
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>` first.");
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     const results = acquireClaims(
       store,
       ctx.actorId!,
@@ -684,6 +778,7 @@ program
       paths,
       Date.now(),
       opts.intent,
+      { creating: opts.creating },
     );
     // Push-awareness: warn if anything just claimed depends on a symbol another
     // actor is currently changing, so the actor learns at reservation time.
@@ -692,17 +787,30 @@ program
       process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
     } else {
       for (const r of results) {
-        const target = r.symbol ? `${r.path}#${r.symbol}` : r.path;
+        const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
           process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
         } else {
           const why =
-            r.reason === "outside-repo" ? "outside the repository" : `held by ${r.holder}`;
+            r.reason === "outside-repo"
+              ? "outside the repository"
+              : r.reason === "symbol-not-found"
+                ? `no symbol "${r.symbol}" in ${r.path}` +
+                  (r.suggestion ? ` — did you mean "${r.suggestion}"?` : "") +
+                  ` (a claim that binds nothing protects nothing — claim the whole file, or pass --creating if you are about to add it)`
+                : r.reason === "symbols-unsupported"
+                  ? `symbols aren't parsed for this file type — claim the whole file: quilt claim ${r.path}`
+                  : `held by ${r.holder}`;
           process.stdout.write(pc.red("  ✗ denied  ") + `${target} ${pc.dim(`(${why})`)}\n`);
           // Hand the blocked actor the holder's intent so it can resolve the
           // collision instead of just waiting.
           if (r.holderIntent) {
             process.stdout.write(pc.dim(`      ${r.holder} is: ${r.holderIntent}\n`));
+          }
+          if (r.holderExpiresAt) {
+            process.stdout.write(
+              pc.dim(`      their claim lapses ${new Date(r.holderExpiresAt).toISOString()} unless renewed\n`),
+            );
           }
         }
       }
@@ -720,13 +828,18 @@ program
   .action((paths: string[]) => {
     const store = requireStore();
     const ctx = activeContext(store);
-    if (!ctx.actorId) fail("no active actor. Run `quilt start --actor <id>` first.");
-    const n = releaseClaims(
+    if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
+    const r = releaseClaims(
       store,
       ctx.actorId!,
       paths && paths.length > 0 ? paths : null,
     );
-    process.stdout.write(pc.green("✓ ") + `Released ${n} claim${n === 1 ? "" : "s"}.\n`);
+    let line = `Released ${r.released} claim${r.released === 1 ? "" : "s"}.`;
+    if (r.expired > 0) line += ` (${r.expired} had already expired.)`;
+    if (r.released === 0 && r.expired === 0) {
+      line += pc.dim(" Nothing was held — note that commit --mine auto-releases the committed files' claims.");
+    }
+    process.stdout.write(pc.green("✓ ") + line + "\n");
   });
 
 program
@@ -830,9 +943,9 @@ program
     try {
       const store = hookStore();
       const input = store && parseHookInput(JSON.parse(await readStdin()));
-      const actor = store && input && hookActor(store, input.sessionId);
+      const actor = store && input && hookActor(store, input);
       if (store && input && actor) {
-        const decision = runHookPre(store, actor, input);
+        const decision = runHookPre(store, actor.id, input, actor.auto);
         if (decision.deny) {
           // Claude Code's PreToolUse deny format: this JSON on stdout (exit 0)
           // blocks the tool call and shows `permissionDecisionReason` to the
@@ -861,8 +974,8 @@ program
     try {
       const store = hookStore();
       const input = store && parseHookInput(JSON.parse(await readStdin()));
-      const actor = store && input && hookActor(store, input.sessionId);
-      if (store && input && actor) runHookPost(store, actor, input);
+      const actor = store && input && hookActor(store, input);
+      if (store && input && actor) runHookPost(store, actor.id, input, actor.auto);
     } catch {
       /* fail-open: skip capture */
     }
@@ -876,7 +989,7 @@ program
     const store = requireStore();
     const ctx = activeContext(store);
     if (!ctx.actorId) {
-      process.stdout.write(pc.dim("No active actor. Run `quilt start --actor <id>`.\n"));
+      process.stdout.write(pc.dim("No active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).\n"));
       return;
     }
     process.stdout.write(

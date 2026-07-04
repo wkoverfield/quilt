@@ -45,7 +45,10 @@ Identity is automatic by default, with an explicit override:
 
 - **Hooks:** every Claude Code session already carries a session id in the hook
   payload, so an unnamed session is captured as `claude-<8 chars of its session
-  id>`. Parallel sessions get distinct ids for free.
+  id>`. Parallel sessions get distinct ids for free. **Subagents** (Task tool)
+  share their parent's session id but carry their own `agent_id`/`agent_type`
+  in the payload, so each is captured under its own id, e.g.
+  `code-reviewer-f7e8d9c0` — parallel subagents of one session never merge.
 - **MCP:** an unnamed tool call gets a per-connection id derived from the
   client's handshake name, e.g. `cursor-3fa2` or `codex-91bc`. Stdio servers are
   spawned per client process, so the id is stable for that agent's whole run.
@@ -62,18 +65,66 @@ new actor, so uncommitted work from an ended session belongs to the old id
 (visible in `quilt fleet`, committable or revertable by naming that id). Agents
 that commit before they finish never notice.
 
-The one topology auto-naming can't split is **several subagents inside one
-process or one MCP connection**: they share the ambient identity, and nothing
-can tell them apart after the fact. For that, each subagent passes its own
-`actor` on each `quilt_edit` / `claim` call, so one shared `quilt mcp` server
-attributes them all correctly. Use hooks or per-connection ids for
-process-per-agent fleets, per-call `actor` ids for many-agents-per-process, or
-both.
+The one topology auto-naming can't split is **several agents sharing one MCP
+connection with no per-call ids**: a shared connection has one ambient
+identity. For that, each agent passes its own `actor` on each `quilt_edit` /
+`claim` call, so one shared `quilt mcp` server attributes them all correctly.
+
+**Claim adoption** ties the two identity worlds together. When an edit arrives
+under an *auto-derived* id (a session/agent/connection name nobody chose) and
+the code it touches is claimed by exactly one actor, the edit is attributed to
+that claim's holder — so an agent that claims as `ui-agent` over MCP and then
+edits with the native Edit tool is captured as `ui-agent`, not as a derived id,
+and is never denied by its own claim. An *explicit* identity is never adopted:
+a named actor editing someone else's claim is a real collision and is denied
+with the holder's intent. Captured edits also refresh the holder's claim TTL,
+so a long work session can't silently outlive its reservation.
+
+The honest edge of adoption: a *different* anonymous agent (say, another
+session's auto id) that edits into a claim without claiming first is also
+credited to the holder rather than denied — under a derived id there is no way
+to tell "the holder's own hands" from "an anonymous trespasser", and the claim
+is the strongest signal available. Agents that follow the protocol (claim
+before editing) never hit this: their own claim attempt is denied first, with
+the holder's intent, at the coordination point. Give agents explicit ids
+(`QUILT_ACTOR`, per-call `actor`) when you want strict denial semantics
+between them.
 
 The hooks also need Quilt initialized in the repo (`quilt setup` does this, or run
 `quilt init` once). If the store isn't initialized, the hooks no-op silently
 rather than error, so if native edits aren't being captured, check that
 `.quilt/` exists (`quilt doctor` reports this).
+
+## The protocol that binds (read this first)
+
+The dogfood fleets earned these rules the hard way:
+
+1. **Claim whole files BEFORE editing.** Attribution is decided at edit time
+   and is never retroactive. A whole-file claim placed before you edit binds
+   your external (editor-tool) edits to your actor id; claiming after the
+   fact does not re-attribute what you already wrote. `quilt_edit` /
+   `quilt_write` are the always-bound path regardless of claims.
+2. **Symbol claims are for sharing one file, and they must be real.** A
+   symbol that isn't in the file is DENIED (with a near-miss suggestion) —
+   a granted claim that binds nothing would protect nothing. Adding a new
+   function to an existing file? Pass `creating: true` (CLI: `--creating`);
+   it binds when the symbol appears.
+3. **Directory claims cover codegen.** `convex/_generated/` (trailing slash)
+   reserves everything under the prefix — no guessing output filenames.
+4. **`commit_mine` auto-releases** the committed files' claims. The loop is
+   claim → edit → commit_mine; a trailing `release` is only for abandoning
+   work (its response now says this instead of a bare `released: 0`).
+5. **Claims renew while you're active.** Any quilt call refreshes your
+   claims, so they can't silently lapse mid-task. A denial tells you when
+   the holder's claim expires, so pace retries against that instead of
+   guessing.
+6. **Shared-tree proof discipline.** Repo-wide gates (tsc, tests) can fail
+   mid-wave because of OTHER actors' in-flight work — that's the price of
+   same-checkout visibility (which also means codegen and cross-layer types
+   flow to everyone with zero sync protocol). Verify your own hunks, or run
+   proof at wave end. And keep tooling artifacts gitignored: quilt follows
+   git's view, so an untracked test snapshot your tooling drops is a real
+   new file to quilt.
 
 ## 1. Add the shared server
 

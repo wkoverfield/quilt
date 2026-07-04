@@ -42,15 +42,23 @@ test("a file claimed by B is NOT absorbed by A's reconcile or commit", () => {
     quilt(dir, ["claim", "shared.js"], "B");
     write(dir, "shared.js", "function f() { return 2; }\n");
 
-    // A creates its own file, then reconciles by running status/commit FIRST.
+    // A creates its own file. While B holds a live claim the tree is CONTESTED:
+    // an unclaimed, uncaptured file could be anyone's bash write, so inference
+    // must NOT hand it to whoever reconciles first (that sweep is the pilot
+    // bug). It stays pending until A claims it.
     write(dir, "a-only.js", "const a = 1;\n");
+    const aPending = JSON.parse(quilt(dir, ["mine", "--json"], "A").stdout);
+    assert.ok(
+      !aPending.files.some((f: any) => f.path === "a-only.js"),
+      "in a contested tree an unclaimed file stays pending, not auto-owned",
+    );
+
+    // Claiming it is what takes ownership — the pending delta is still there.
+    quilt(dir, ["claim", "a-only.js"], "A");
     const aMine = JSON.parse(quilt(dir, ["mine", "--json"], "A").stdout);
     const aPaths = aMine.files.map((f: any) => f.path);
-    assert.ok(aPaths.includes("a-only.js"), "A owns its own file");
+    assert.ok(aPaths.includes("a-only.js"), "A owns its file once claimed");
     assert.ok(!aPaths.includes("shared.js"), "A must NOT absorb B's claimed file");
-
-    // A commits — must not sweep up B's shared.js.
-    quilt(dir, ["claim", "a-only.js"], "A");
     const aCommit = quilt(dir, ["commit", "--mine", "-m", "A work"], "A");
     assert.equal(aCommit.status, 0, aCommit.stderr);
     assert.equal(
@@ -109,8 +117,9 @@ test("per-line commit: two actors APPEND functions to one file (same hunk) and b
   try {
     quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
     quilt(dir, ["start", "--actor", "B", "--type", "agent"]);
-    quilt(dir, ["claim", "helpers.js#alpha"], "A");
-    quilt(dir, ["claim", "helpers.js#beta"], "B");
+    // alpha/beta don't exist yet — forward claims need the explicit opt-in.
+    quilt(dir, ["claim", "helpers.js#alpha", "--creating"], "A");
+    quilt(dir, ["claim", "helpers.js#beta", "--creating"], "B");
 
     // Both append their function — adjacent, so they land in ONE diff hunk.
     writeFileSync(
@@ -224,6 +233,225 @@ test("symbol claims work off JS too: two actors on different Python functions, n
       "B\nA",
       "two clean Python commits, correctly attributed",
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Pilot round 2: ui-agent's commit --mine swept seven of data-agent's
+// uncommitted convex files — bash/CLI-written (never captured), never claimed.
+// The contested-tree gate must keep them out of ui-agent's commit, and let
+// data-agent take them by claiming.
+test("commit --mine never sweeps another agent's uncaptured bash-written files while claims are live", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+
+    // data-agent is visibly mid-work (a live claim on its schema)...
+    write(dir, "schema.ts", "export const schema = 1;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-q", "-m", "base"], { cwd: dir, encoding: "utf8" });
+    quilt(dir, ["claim", "schema.ts", "--intent", "data model"], "data-agent");
+
+    // ...and its CLI codegen drops files capture never sees.
+    for (let i = 1; i <= 7; i++) write(dir, `gen${i}.ts`, `export const g${i} = ${i};\n`);
+
+    // ui-agent does its own (claimed) work and commits.
+    write(dir, "ui.ts", "export const ui = 1;\n");
+    quilt(dir, ["claim", "ui.ts", "--intent", "build UI"], "ui-agent");
+    const c = quilt(dir, ["commit", "--mine", "-m", "ui work"], "ui-agent");
+    assert.equal(c.status, 0, c.stderr);
+    const committed = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim().split("\n");
+    assert.deepEqual(committed, ["ui.ts"], "ui-agent commits ONLY its claimed file — no sweep");
+
+    // data-agent claims its generated files and takes ownership of the pending deltas.
+    quilt(dir, ["claim", "gen1.ts", "gen2.ts", "gen3.ts", "gen4.ts", "gen5.ts", "gen6.ts", "gen7.ts"], "data-agent");
+    const d = quilt(dir, ["commit", "--mine", "-m", "data work"], "data-agent");
+    assert.equal(d.status, 0, d.stderr);
+    const dataCommitted = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim().split("\n").sort();
+    assert.deepEqual(
+      dataCommitted,
+      ["gen1.ts", "gen2.ts", "gen3.ts", "gen4.ts", "gen5.ts", "gen6.ts", "gen7.ts"],
+      "data-agent's claim takes the pending files",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Pilot round 3, bug 2: a partial commit tore a function apart — one of its
+// lines was excluded (unattributed) while its siblings committed, landing a
+// syntax error in history. A torn symbol must withhold the whole file.
+test("commit --mine withholds a file rather than tear a symbol (no committed syntax errors)", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    write(
+      dir,
+      "shared.js",
+      "function f() { return 1; }\nfunction g() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n",
+    );
+    // Simulate the pilot's split directly: the ledger attributes ONE of g's
+    // new lines to A; g's other new lines stay unattributed (B's live claim
+    // elsewhere keeps the contested-tree gate from handing them to A).
+    const ledger =
+      JSON.stringify({
+        seq: 0,
+        ts: new Date().toISOString(),
+        actor: "A",
+        path: "shared.js",
+        added: ["  const a = 1;"],
+        removed: [],
+        addedKeys: ["g\u0000  const a = 1;"],
+        anchor: null,
+        preHash: null,
+      }) + "\n";
+    writeFileSync(join(dir, ".quilt", "authorship.log"), ledger);
+    quilt(dir, ["claim", "elsewhere.js"], "B");
+
+    const c = quilt(dir, ["commit", "--mine", "-m", "A partial"], "A");
+    // A owns one line inside g but not g's other new lines → tear → the file
+    // is withheld entirely (nothing committable → nonzero exit).
+    assert.notEqual(c.status, 0, "torn file must not commit");
+    const head = spawnSync("git", ["show", "HEAD:shared.js"], { cwd: dir, encoding: "utf8" });
+    assert.doesNotMatch(head.stdout, /const a = 1;/, "no torn fragment of g landed in history");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The contested-tree gate must not blind clobber DETECTION: an overwrite of
+// another actor's uncommitted lines in an unclaimed file is still caught and
+// preserved even while an unrelated claim is live somewhere else in the repo.
+test("clobber detection still fires in a gated file while unrelated claims are live", () => {
+  const dir = makeRepo();
+  try {
+    // B edits shared.js and reconciles once (uncontested) — B owns the line
+    // and the observed baseline carries B's version.
+    write(dir, "shared.js", "function f() { return 42; }\n");
+    quilt(dir, ["status"], "B");
+
+    // An unrelated live claim then makes the whole tree contested for C.
+    quilt(dir, ["claim", "unrelated.ts"], "A");
+
+    // C bulldozes B's line. C's reconcile (via status) is gated for shared.js —
+    // but the overwrite must still be detected and B's content preserved.
+    write(dir, "shared.js", "function f() { return 0; }\n");
+    quilt(dir, ["status"], "C");
+    const clobbers = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    const hit = clobbers.clobbers.find((x: any) => x.victimActor === "B" && !x.restored);
+    assert.ok(hit, "the overwrite of B's captured line was detected despite the gate");
+
+    // And it doesn't duplicate on the next reconcile (frozen baseline re-sees the delta).
+    quilt(dir, ["status"], "C");
+    const again = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    assert.equal(
+      again.clobbers.filter((x: any) => x.victimActor === "B" && x.path === "shared.js").length,
+      1,
+      "one open clobber per victim+path, not one per reconcile",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 1b: includeUnclaimed must never sweep hunks on a path another
+// actor has CLAIMED — external edits attribute lazily, so a peer's mid-flight
+// hunks can read "unclaimed" while their claim is listed in the same response.
+test("commit --mine --include-unclaimed refuses hunks on another actor's claimed path", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    // B claims data.ts and writes it externally (no capture — the lazy path).
+    quilt(dir, ["claim", "data.ts", "--intent", "data layer"], "B");
+    write(dir, "data.ts", "export const rows = [];\n");
+    // A does its own claimed work, then tries the sweep flag.
+    quilt(dir, ["claim", "ui.ts"], "A");
+    write(dir, "ui.ts", "export const ui = 1;\n");
+    const c = quilt(dir, ["commit", "--mine", "--include-unclaimed", "-m", "A sweep attempt"], "A");
+    assert.equal(c.status, 0, c.stderr);
+    const committed = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim().split("\n");
+    assert.deepEqual(committed, ["ui.ts"], "B's claimed in-flight file stays out even with the flag");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 1c: the READ layer tells the truth mid-flight — a peer's
+// uncaptured hunks on their claimed path read as THEIRS (attribution
+// pending), not as "unclaimed".
+test("status classes a peer's uncaptured hunks on their claimed path as theirs, not unclaimed", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    quilt(dir, ["claim", "feature.ts", "--intent", "building feature"], "B");
+    write(dir, "feature.ts", "export const wip = true;\n");
+    const st = JSON.parse(quilt(dir, ["status", "--json"], "A").stdout);
+    const f = st.files.find((x: any) => x.path === "feature.ts");
+    assert.ok(f, "file visible");
+    assert.equal(f.class, "other", "claimed-by-B reads as B's, not unclaimed");
+    assert.deepEqual(f.actors, ["B"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 2: clobber correctness. Rewriting COMMITTED lines is normal
+// editing — landed history is not clobberable.
+test("rewriting committed-at-HEAD lines never fires a clobber", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    // B authors a line and commits it — it's landed history now.
+    quilt(dir, ["claim", "shared.js"], "B");
+    write(dir, "shared.js", "function f() { return 2; }\n");
+    quilt(dir, ["status"], "B");
+    assert.equal(quilt(dir, ["commit", "--mine", "-m", "B lands"], "B").status, 0);
+    // A rewrites the landed line (a routine refactor).
+    quilt(dir, ["claim", "shared.js"], "A");
+    write(dir, "shared.js", "function f() { return 3; }\n");
+    quilt(dir, ["status"], "A");
+    let clobbers = { clobbers: [] as any[] };
+    try {
+      clobbers = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    } catch {
+      /* file never created = no clobbers ever fired — exactly right */
+    }
+    assert.equal(
+      clobbers.clobbers.filter((c: any) => !c.restored).length,
+      0,
+      "no clobber for rewriting landed code",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Dogfood fix 2b: a stale open clobber whose victim lines exist at HEAD is
+// describing work that LANDED — it auto-resolves instead of alarming every
+// future actor.
+test("a stale clobber whose victim lines landed at HEAD auto-resolves on reconcile", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["init"]);
+    // Plant an old open clobber whose sample line is exactly what HEAD holds.
+    const stale = {
+      clobbers: [{
+        id: "stale1", ts: new Date(0).toISOString(), path: "shared.js",
+        victimActor: "B", byActor: "A", snapshotId: "none",
+        sampleLines: ["function f() { return 1; }"], restored: false,
+      }],
+    };
+    writeFileSync(join(dir, ".quilt", "clobbers.json"), JSON.stringify(stale));
+    quilt(dir, ["status"], "A");
+    const after = JSON.parse(readFileSync(join(dir, ".quilt", "clobbers.json"), "utf8"));
+    assert.equal(after.clobbers[0].restored, true, "landed work is not a live alarm");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

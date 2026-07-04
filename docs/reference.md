@@ -9,8 +9,8 @@ agents, see [orchestrators.md](orchestrators.md).
 | Command | Purpose |
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
-| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: the shared MCP server in `.mcp.json`, the coordination snippet in `CLAUDE.md`, and the native-edit capture hooks in `.claude/settings.json` (idempotent). |
-| `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. |
+| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: the shared MCP server in `.mcp.json` (and `.cursor/mcp.json` when a `.cursor/` dir exists), the coordination snippet in `CLAUDE.md` (and an existing `AGENTS.md`), and the native-edit capture hooks in `.claude/settings.json` (idempotent). |
+| `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. Optional — agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. Scopes only the CLI commands run in your terminal; it never binds other agents' captured edits (the pointer is checkout-global, capture identity is per-edit). |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |
@@ -22,7 +22,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
-| `quilt claim [targets...] [--json]` | Reserve files, or `file#symbol`, for editing. With none, lists claims. |
+| `quilt claim [targets...] [--json] [--creating]` | Reserve files (`src/auth.ts`), directories (`convex/_generated/`), or symbols (`file#symbol`) for editing — BEFORE you edit; the claim is what binds external edits to you. A symbol missing from the file is denied unless `--creating` (you are about to add it). With no targets, lists claims. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? |
