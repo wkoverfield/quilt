@@ -418,3 +418,45 @@ test("a purely-trivial change run (formatting-only) commits with --include-uncla
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Dogfood phase 7: commit_mine classed package-lock.json as binary/too-large
+// and silently SKIPPED it — the lockfile needed a manual commit and the build
+// broke for everyone in between. Claimed binary files now commit whole;
+// unclaimed ones are skipped LOUDLY.
+test("a claimed binary file commits whole; an unclaimed one is skipped loudly", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "app.js", "const a = 1;\n");
+    commitAll(dir, "base");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // A "binary" artifact (NUL byte) — same classification path as a
+    // too-large lockfile. Unclaimed first: the commit must succeed for the
+    // text file and WARN about the skip.
+    writeFileSync(join(dir, "blob.bin"), Buffer.from([0x71, 0x00, 0x75, 0x69, 0x6c, 0x74]));
+    quilt(dir, ["claim", "app.js"], "dev");
+    write(dir, "app.js", "const a = 2;\n");
+    const first = quilt(dir, ["commit", "--mine", "-m", "text only"], "dev");
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /Skipped binary.*blob\.bin/s, "the skip is loud, not silent");
+    assert.doesNotMatch(
+      spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], { cwd: dir, encoding: "utf8" }).stdout,
+      /blob\.bin/,
+    );
+
+    // Claimed: the binary rides into the commit whole.
+    quilt(dir, ["claim", "blob.bin"], "dev");
+    const second = quilt(dir, ["commit", "--mine", "-m", "with blob"], "dev");
+    assert.equal(second.status, 0, second.stderr);
+    assert.match(second.stdout, /Committed whole.*blob\.bin/s);
+    const files = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
+      cwd: dir, encoding: "utf8",
+    }).stdout.trim();
+    assert.equal(files, "blob.bin");
+    // Byte-exact content landed.
+    const blob = spawnSync("git", ["show", "HEAD:blob.bin"], { cwd: dir });
+    assert.deepEqual(blob.stdout, Buffer.from([0x71, 0x00, 0x75, 0x69, 0x6c, 0x74]));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

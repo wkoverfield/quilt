@@ -4,6 +4,32 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Binary and too-large files are no longer silently dropped from commits**
+  (dogfood phase 7: `package-lock.json` tripped the too-large-to-diff
+  classification and vanished from `commit_mine` without a word — a broken
+  build for everyone until a manual commit). No line-level split exists for
+  such files, so the claim is the ownership signal: a file covered by your
+  whole-file or directory claim is committed WHOLE (byte-exact, staged
+  straight into the temp index); an unclaimed one is skipped LOUDLY — the CLI
+  warns, and `commit_mine`/`preview_mine` return `skippedBinary` with
+  guidance to claim it.
+
+### Added
+
+- A symbol-claim adoption regression test proving the phase-7 attribution
+  shape is covered: a hook edit under an ambient auto id inside a REAL
+  claimed symbol binds to the claim holder. (The phase-7 failure itself was
+  the missing-symbol variant, which 0.4.1 denies at claim time.)
+- Docs: the attribution-rebinding asymmetry (unclaimed→claimant rebinds;
+  wrong-actor capture never does — revert + `quilt_edit` is the recovery) and
+  the **deadlock-break play** (commit the granted 90%, release, let the other
+  actor layer, re-claim the remainder) as the recommended move for mutual
+  contention.
+
 ## [0.4.1] - 2026-07-04
 
 ### Fixed

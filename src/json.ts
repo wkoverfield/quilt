@@ -61,6 +61,11 @@ export function mineJson(selection: Selection, includePatch: boolean) {
     totalRemoved: selection.totalRemoved,
     hasMixed: selection.hasMixed,
     blockedFiles: selection.blockedFiles,
+    // Claimed binary/too-large files staged whole, and unclaimed ones SKIPPED
+    // — the skip list must be loud (a silently dropped lockfile breaks the
+    // build for everyone; claim it to include it).
+    wholeFiles: selection.wholeFiles,
+    skippedBinary: selection.skippedBinary,
     ...(includePatch ? { patch: selection.patch } : {}),
   };
 }

@@ -598,3 +598,34 @@ test("the .quilt/current pointer never binds hook capture — `quilt start` does
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Dogfood phase 7 "confirms #1": a REAL-symbol claim must bind an external
+// (hook-captured) edit made under an ambient auto id — adoption at symbol
+// granularity, not just whole-file. (The trap variant — a symbol that doesn't
+// exist — is now denied at claim time.)
+test("adoption binds a hook edit to a SYMBOL claim holder (real symbol, auto id)", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(
+      join(dir, "projects.ts"),
+      "export const create = () => {\n  return 1;\n};\nexport const remove = () => {\n  return 2;\n};\n",
+    );
+    acquireClaims(s, "convex-agent", null, ["projects.ts#create"], Date.now(), "WKO-23 create mutation");
+    const input: HookInput = {
+      tool: "Edit",
+      path: join(dir, "projects.ts"),
+      edits: [{ oldString: "return 1;", newString: "return 99;" }],
+      content: null, sessionId: null, agentId: "ae0e1234", agentType: "general-purpose",
+    };
+    // Arrives under the ambient auto id (the exact phase-7 shape)…
+    const d = runHookPre(s, "general-purpose-ae0e1234", input, true);
+    assert.equal(d.deny, false, "the holder's own edit must not self-deny");
+    applyEdit(dir, "projects.ts", "return 1;", "return 99;");
+    runHookPost(s, "general-purpose-ae0e1234", input, true);
+    const ev = readAuthorship(s);
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0]!.actor, "convex-agent", "symbol claim binds the capture to its holder");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

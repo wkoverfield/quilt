@@ -329,6 +329,24 @@ export function claimCoversPath(c: Claim, path: string): boolean {
 }
 
 /**
+ * A predicate over paths: is this path covered by a live WHOLE-FILE or
+ * DIRECTORY claim held by `actorId` itself? File-granularity ownership signal
+ * — what lets a claimed binary/too-large file (a lockfile) commit whole.
+ * Symbol claims don't count: they're line-scoped by design.
+ */
+export function pathsClaimedBySelf(
+  store: Store,
+  actorId: string | null,
+  now: number,
+): (path: string) => boolean {
+  if (!actorId) return () => false;
+  const own = listClaims(store, now).filter(
+    (c) => c.actor === actorId && c.symbol === undefined,
+  );
+  return (path: string) => own.some((c) => claimCoversPath(c, path));
+}
+
+/**
  * A predicate over paths: is this path covered by any live claim held by an
  * actor OTHER than `actorId`? The guard rail for `--include-unclaimed`:
  * external edits attribute lazily, so mid-flight hunks on a peer's claimed
