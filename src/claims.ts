@@ -231,6 +231,53 @@ export function claimHeldByOther(
 }
 
 /**
+ * The distinct OTHER actors holding claims that an edit to `path` touching
+ * `symbols` would collide with. The plural sibling of `claimHeldByOther`, for
+ * the auto-identity adoption rule: an edit arriving under an auto-derived id
+ * inside claimed code is adopted by the holder — but only when there is exactly
+ * ONE holder to adopt (two holders on the touched symbols is ambiguous, so the
+ * caller falls back to the deny).
+ */
+export function claimHolders(
+  store: Store,
+  actorId: string,
+  rawPath: string,
+  symbols: string[],
+  now: number,
+): Set<string> {
+  const parsed = parseTarget(rawPath).path;
+  const path = repoRelative(store.paths.repoRoot, parsed) ?? parsed;
+  const holders = new Set<string>();
+  for (const c of listClaims(store, now)) {
+    if (c.actor === actorId || c.path !== path) continue;
+    if (c.symbol === undefined || symbols.includes(c.symbol)) holders.add(c.actor);
+  }
+  return holders;
+}
+
+/**
+ * Refresh the TTL on an actor's claims covering `path` (whole-file and symbol
+ * claims alike). Called after a captured edit, so an actively-editing actor
+ * never loses its reservation mid-work — without this, a claim made once and
+ * followed by >TTL of editing expires silently, and the next actor to
+ * reconcile absorbs the in-flight work (the exposure reconcile documents).
+ */
+export function refreshClaims(store: Store, actorId: string, rawPath: string, now: number): void {
+  const path = repoRelative(store.paths.repoRoot, rawPath) ?? rawPath;
+  store.withLock(() => {
+    const file = store.readClaims();
+    let changed = false;
+    for (const c of file.claims) {
+      if (c.actor === actorId && c.path === path && c.expiresAt > now) {
+        c.expiresAt = now + CLAIM_TTL_MS;
+        changed = true;
+      }
+    }
+    if (changed) store.writeClaims(file);
+  });
+}
+
+/**
  * Active claim denials — who is blocked on whom. Only surfaced while the denial
  * is fresh AND the holder still holds an overlapping claim (a block whose holder
  * has released is no longer real, so it's dropped).

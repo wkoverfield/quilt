@@ -17,7 +17,18 @@
 // file get different keys, so neither reads the other's snapshot.
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { anchorForEdit, checkHeldEdit, checkHeldWrite, recordAuthorship, safeAbs, type EditDenied } from "./authorship.js";
+import {
+  adoptClaimHolder,
+  anchorForEdit,
+  checkHeldEdit,
+  checkHeldWrite,
+  recordAuthorship,
+  safeAbs,
+  touchedByEdit,
+  touchedByWrite,
+  type EditDenied,
+} from "./authorship.js";
+import { refreshClaims } from "./claims.js";
 import { repoRelative } from "./paths.js";
 import type { Store } from "./state.js";
 
@@ -38,6 +49,12 @@ export interface HookInput {
   content: string | null;
   /** Claude Code session id — the auto-identity fallback when QUILT_ACTOR is unset. */
   sessionId: string | null;
+  /** Subagent instance id — present ONLY when the hook fired inside a subagent
+   * (Task tool). All subagents share the parent's session_id, so this is the
+   * one signal that tells parallel subagents of one session apart. */
+  agentId: string | null;
+  /** Subagent type (e.g. "code-reviewer") — a readable prefix for the auto id. */
+  agentType: string | null;
 }
 
 function str(v: unknown): string | null {
@@ -80,7 +97,9 @@ export function parseHookInput(raw: unknown): HookInput | null {
 
   const content = str(input.content) ?? str(input.file_text);
   const sessionId = str(o.session_id);
-  return { tool, path, edits, content, sessionId };
+  const agentId = str(o.agent_id);
+  const agentType = str(o.agent_type);
+  return { tool, path, edits, content, sessionId, agentId, agentType };
 }
 
 /**
@@ -94,6 +113,23 @@ export function sessionActorId(sessionId: string): string | null {
   const clean = sessionId.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (!clean) return null;
   return `claude-${clean.slice(0, 8)}`;
+}
+
+/**
+ * A per-SUBAGENT auto id from the hook payload's agent_id/agent_type. All
+ * subagents of a session share its session_id, so without this every parallel
+ * subagent would collapse into ONE session-derived actor and their work would
+ * merge — the misattribution the pilot hit. `code-reviewer-f7e8d9c0` reads in
+ * the fleet; a typeless subagent falls back to `agent-<id>`.
+ */
+export function agentActorId(agentId: string, agentType: string | null): string | null {
+  const id = agentId.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8);
+  if (!id) return null;
+  const type = agentType
+    ?.toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${type || "agent"}-${id}`;
 }
 
 function snapshotKey(actor: string, path: string): string {
@@ -117,12 +153,43 @@ export interface HookPreDecision {
 }
 
 /**
+ * The symbols an entire hook payload touches, and the actor the call should act
+ * as: the raw caller for an explicit identity, or — for an auto-derived id —
+ * the sole claim holder of the touched code (adoption; see adoptClaimHolder).
+ * Shared by Pre and Post so they resolve the SAME actor for one tool call: Post
+ * recomputes from the snapshot's `before`, which is byte-identical to what Pre
+ * used, and adoption is deterministic given the same claims.
+ */
+function effectiveActor(
+  store: Store,
+  actor: string,
+  autoActor: boolean,
+  rel: string,
+  before: string,
+  existing: boolean,
+  input: HookInput,
+): string {
+  if (!autoActor) return actor;
+  const touched =
+    input.content !== null && input.edits.length === 0
+      ? touchedByWrite(rel, input.content, existing ? before : null)
+      : input.edits.flatMap((e) => touchedByEdit(rel, before, e.oldString));
+  return adoptClaimHolder(store, actor, rel, touched);
+}
+
+/**
  * PreToolUse: snapshot the file's pre-edit content for the Post hook, and run the
  * prevention claim-check. Denies (blocks the tool) when another actor holds the
  * code the write would touch, handing back their intent so the agent can resolve
  * in-band. A no-op allow when there's no path or no edit payload.
+ * `autoActor` marks a derived identity, enabling claim adoption.
  */
-export function runHookPre(store: Store, actor: string, input: HookInput): HookPreDecision {
+export function runHookPre(
+  store: Store,
+  actor: string,
+  input: HookInput,
+  autoActor = false,
+): HookPreDecision {
   if (!input.path) return { deny: false };
   // Claude Code sends an ABSOLUTE file_path — normalize to the repo-relative
   // form every store keys on, or nothing (claims, ownership, the ledger) would
@@ -132,15 +199,16 @@ export function runHookPre(store: Store, actor: string, input: HookInput): HookP
   const abs = safeAbs(store.paths.repoRoot, rel);
   if (!abs) return { deny: false }; // a symlink — never write through it
   const before = readBefore(abs);
+  const asActor = effectiveActor(store, actor, autoActor, rel, before, existsSync(abs), input);
 
   let denied: EditDenied | null = null;
   if (input.content !== null && input.edits.length === 0) {
     // Whole-file Write (existing content is null for a not-yet-created file).
-    denied = checkHeldWrite(store, actor, rel, input.content, existsSync(abs) ? before : null);
+    denied = checkHeldWrite(store, asActor, rel, input.content, existsSync(abs) ? before : null);
   } else {
     // Edit / MultiEdit — any held edit denies the whole call.
     for (const e of input.edits) {
-      denied = checkHeldEdit(store, actor, rel, before, e.oldString);
+      denied = checkHeldEdit(store, asActor, rel, before, e.oldString);
       if (denied) break;
     }
   }
@@ -192,22 +260,26 @@ function replayEdits(before: string, edits: HookEdit[]): string {
  * authorship event. No-op if there's no snapshot (Pre didn't run, or the write
  * was denied). Consumes the snapshot so it can't be reused.
  */
-export function runHookPost(store: Store, actor: string, input: HookInput): void {
+export function runHookPost(store: Store, actor: string, input: HookInput, autoActor = false): void {
   if (!input.path) return;
   // Same normalization as Pre: the ledger keys events by repo-relative path, so
   // an absolute payload path recorded verbatim would never match reconcile's
   // view of the working tree and the capture would be dead weight.
   const rel = repoRelative(store.paths.repoRoot, input.path);
   if (!rel || !safeAbs(store.paths.repoRoot, rel)) return;
+  // The snapshot is keyed by the RAW caller id — stable across the Pre/Post of
+  // one tool call regardless of adoption (which is re-derived below from the
+  // same `before` bytes Pre saw).
   const snap = snapshotPath(store, actor, rel);
   if (!existsSync(snap)) return; // nothing captured for this call
   const before = readFileSync(snap, "utf8");
+  const asActor = effectiveActor(store, actor, autoActor, rel, before, before !== "", input);
 
   if (input.content !== null && input.edits.length === 0) {
     // Whole-file write — mirror applyAndRecordWrite exactly: whole:true treats the
     // content as fresh (added = every line, removed = none), so oldText is ignored.
     // Passing "" keeps both capture paths recording overwrites identically.
-    recordAuthorship(store, { actor, path: rel, oldText: "", newText: input.content, whole: true });
+    recordAuthorship(store, { actor: asActor, path: rel, oldText: "", newText: input.content, whole: true });
   } else {
     // Edit / MultiEdit — diff the pre-image against the in-memory post-image, so
     // adds/removes are whole lines matching how ownership is keyed. Anchor only
@@ -215,7 +287,10 @@ export function runHookPost(store: Store, actor: string, input: HookInput): void
     const after = replayEdits(before, input.edits);
     const only = input.edits.length === 1 ? input.edits[0] : undefined;
     const anchor = only ? anchorForEdit(before, only.oldString) : null;
-    recordAuthorship(store, { actor, path: rel, oldText: before, newText: after, anchor });
+    recordAuthorship(store, { actor: asActor, path: rel, oldText: before, newText: after, anchor });
   }
+  // Editing is proof of life: keep the effective actor's reservation on this
+  // file fresh so a long work session can't silently outlive its claim.
+  refreshClaims(store, asActor, rel, Date.now());
   rmSync(snap, { force: true });
 }

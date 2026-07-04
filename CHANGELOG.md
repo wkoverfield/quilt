@@ -8,6 +8,26 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Fixed
 
+- **Parallel subagents of one Claude Code session no longer merge into one
+  actor.** Subagents share their parent's session id, so the session-derived
+  auto id collapsed them all together — the first pilot's `commit --mine`
+  swept another agent's freshly-written files into its commit. The hooks now
+  read the payload's `agent_id`/`agent_type` (present only in subagent hooks)
+  and derive a distinct id per subagent (`code-reviewer-f7e8d9c0`).
+- **Claim adoption:** an edit arriving under an auto-derived id inside code
+  claimed by exactly one actor is attributed to that holder — an agent that
+  claims as `ui-agent` over MCP and edits with the native Edit tool is captured
+  as `ui-agent` and is no longer denied by its own claim. Explicit identities
+  (QUILT_ACTOR, start_session, per-call `actor`) are never adopted; their
+  collisions still deny with the holder's intent. Ambiguity (two holders on the
+  touched symbols) falls back to the deny.
+- Captured edits refresh the editor's claim TTL, so a work session longer than
+  the claim's 10-minute TTL can't silently lose its reservation (which let the
+  next reconciler absorb the in-flight work).
+- `quilt commit --mine` with a `QUILT_ACTOR` that was never separately
+  registered (it only claimed, or its edits were captured via adoption) now
+  registers the actor and commits, instead of failing with "no active actor".
+
 - **Absolute file paths no longer disable prevention and capture.** Claude Code
   hooks and MCP clients send absolute `file_path`s, but claims, ownership, and
   the authorship ledger key on repo-relative paths — so a real agent's edit

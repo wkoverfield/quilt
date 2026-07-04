@@ -21,7 +21,7 @@ import { acquireClaims, releaseClaims, listClaims, claimLabel } from "./claims.j
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
-import { parseHookInput, runHookPre, runHookPost, sessionActorId } from "./hooks.js";
+import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import { recordAuthorship } from "./authorship.js";
 import { verifyClaimTargets } from "./claimcheck.js";
@@ -74,21 +74,27 @@ function readStdin(): Promise<string> {
 /**
  * Resolve the actor a hook acts as. The ladder: QUILT_ACTOR (an explicit stable
  * id — always wins) > the active session's actor (quilt start) > an auto id
- * derived from the Claude Code session id in the hook payload (zero-config
- * capture; parallel sessions get distinct ids for free). Registers a first-seen
- * actor so it shows up in the fleet. Returns null only when there's no signal at
- * all — the hook then no-ops rather than guess.
+ * from the payload's agent_id (per-SUBAGENT — subagents share the session id,
+ * so this is what tells them apart) > an auto id from the session id.
+ * Registers a first-seen actor so it shows up in the fleet. Returns null only
+ * when there's no signal at all — the hook then no-ops rather than guess.
+ * `auto` marks a derived id, which enables claim adoption downstream (an
+ * anonymous edit inside claimed code is attributed to the claim's holder).
  */
-function hookActor(store: Store, sessionId: string | null): string | null {
-  const id =
-    process.env.QUILT_ACTOR ||
-    activeContext(store).actorId ||
-    (sessionId ? sessionActorId(sessionId) : null);
+function hookActor(
+  store: Store,
+  input: { sessionId: string | null; agentId: string | null; agentType: string | null },
+): { id: string; auto: boolean } | null {
+  const explicit = process.env.QUILT_ACTOR || activeContext(store).actorId;
+  const derived =
+    (input.agentId ? agentActorId(input.agentId, input.agentType) : null) ??
+    (input.sessionId ? sessionActorId(input.sessionId) : null);
+  const id = explicit || derived;
   if (!id) return null;
   if (!store.findActor(id)) {
     store.upsertActor({ id, type: "agent", displayName: id.split("/").pop() ?? id, createdAt: nowIso() });
   }
-  return id;
+  return { id, auto: !explicit };
 }
 
 /** Initialize Quilt's .quilt/ store. Returns false if it already existed. */
@@ -562,9 +568,22 @@ program
   .action((opts) => {
     const store = requireStore();
     if (!opts.mine) fail("commit requires --mine in V0 (only owned-patch commits are supported).");
-    const ctx = activeContext(store);
-    if (!ctx.actorId || !ctx.actor) {
+    let ctx = activeContext(store);
+    if (!ctx.actorId) {
       fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
+    }
+    if (!ctx.actor) {
+      // An explicit QUILT_ACTOR that never registered (it only claimed, or its
+      // edits were captured under adoption) is a declared identity, not an
+      // error — register it now so its commit can carry a git author.
+      const a: Actor = {
+        id: ctx.actorId!,
+        type: "agent",
+        displayName: ctx.actorId!.split("/").pop() ?? ctx.actorId!,
+        createdAt: nowIso(),
+      };
+      store.upsertActor(a);
+      ctx = { ...ctx, actor: a };
     }
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
@@ -897,9 +916,9 @@ program
     try {
       const store = hookStore();
       const input = store && parseHookInput(JSON.parse(await readStdin()));
-      const actor = store && input && hookActor(store, input.sessionId);
+      const actor = store && input && hookActor(store, input);
       if (store && input && actor) {
-        const decision = runHookPre(store, actor, input);
+        const decision = runHookPre(store, actor.id, input, actor.auto);
         if (decision.deny) {
           // Claude Code's PreToolUse deny format: this JSON on stdout (exit 0)
           // blocks the tool call and shows `permissionDecisionReason` to the
@@ -928,8 +947,8 @@ program
     try {
       const store = hookStore();
       const input = store && parseHookInput(JSON.parse(await readStdin()));
-      const actor = store && input && hookActor(store, input.sessionId);
-      if (store && input && actor) runHookPost(store, actor, input);
+      const actor = store && input && hookActor(store, input);
+      if (store && input && actor) runHookPost(store, actor.id, input, actor.auto);
     } catch {
       /* fail-open: skip capture */
     }

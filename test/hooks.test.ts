@@ -9,7 +9,7 @@ import { Store } from "../src/state.js";
 import { acquireClaims } from "../src/claims.js";
 import { initSymbols } from "../src/symbols.js";
 import { readAuthorship } from "../src/authorship.js";
-import { parseHookInput, runHookPre, runHookPost, sessionActorId, type HookInput } from "../src/hooks.js";
+import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, type HookInput } from "../src/hooks.js";
 
 before(async () => {
   await initSymbols(); // prevention parses symbols to find the touched ones
@@ -42,6 +42,8 @@ test("parseHookInput normalizes an Edit payload (old_string/new_string)", () => 
     edits: [{ oldString: "a", newString: "b" }],
     content: null,
     sessionId: null,
+    agentId: null,
+    agentType: null,
   });
 });
 
@@ -65,7 +67,10 @@ test("parseHookInput accepts the alternate old_str/new_str/file_text spellings",
 
 test("parseHookInput handles a Write (content) and a MultiEdit (edits[])", () => {
   const w = parseHookInput({ tool_name: "Write", tool_input: { file_path: "m.js", content: "hello\n" } });
-  assert.deepEqual(w, { tool: "Write", path: "m.js", edits: [], content: "hello\n", sessionId: null });
+  assert.deepEqual(w, {
+    tool: "Write", path: "m.js", edits: [], content: "hello\n",
+    sessionId: null, agentId: null, agentType: null,
+  });
   const m = parseHookInput({
     tool_name: "MultiEdit",
     tool_input: { file_path: "m.js", edits: [{ old_string: "a", new_string: "b" }, { old_string: "c", new_string: "d" }] },
@@ -438,6 +443,120 @@ test("a payload path outside the repo is ignored, absolute or traversal", () => 
     }
     assert.equal(readAuthorship(s).length, 0, "nothing outside the repo is captured");
     rmSync(outside, { recursive: true, force: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- subagent identity (the pilot bug) ----
+//
+// Subagents of one Claude Code session share its session_id, so without the
+// payload's agent_id every parallel subagent collapses into ONE derived actor
+// and their work merges — data-agent's commit swept ui-agent's files in the
+// first real pilot. Two defenses, tested here: distinct per-subagent auto ids
+// from agent_id, and claim ADOPTION so an auto-id edit inside claimed code is
+// attributed to (not denied for) the claim's holder.
+
+test("agentActorId derives distinct readable ids for parallel subagents", () => {
+  assert.equal(agentActorId("f7e8d9c0", "code-reviewer"), "code-reviewer-f7e8d9c0");
+  assert.equal(agentActorId("A1B2-C3D4-extra", null), "agent-a1b2c3d4");
+  assert.equal(agentActorId("!!!", "x"), null);
+  assert.notEqual(agentActorId("aaaa1111", "worker"), agentActorId("bbbb2222", "worker"));
+});
+
+test("parseHookInput carries agent_id/agent_type from a subagent payload", () => {
+  const p = parseHookInput({
+    tool_name: "Edit",
+    session_id: "abc-123",
+    agent_id: "f7e8d9c0",
+    agent_type: "ui-builder",
+    tool_input: { file_path: "m.js", old_string: "a", new_string: "b" },
+  });
+  assert.equal(p!.agentId, "f7e8d9c0");
+  assert.equal(p!.agentType, "ui-builder");
+});
+
+test("adoption: an auto-id edit inside a claim is attributed to the holder, not denied", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "ui.ts"), "export function render() {\n  return 1;\n}\n");
+    // ui-agent claimed via MCP under its role id; its native edit arrives at
+    // the hook under a session/agent-derived id.
+    acquireClaims(s, "ui-agent", null, ["ui.ts"], Date.now(), "build the UI");
+    const input: HookInput = {
+      tool: "Edit", path: join(dir, "ui.ts"),
+      edits: [{ oldString: "return 1;", newString: "return 2;" }],
+      content: null, sessionId: null, agentId: null, agentType: null,
+    };
+    // autoActor=true → adopted by the sole holder: allowed AND credited right.
+    const d = runHookPre(s, "claude-abc12345", input, true);
+    assert.equal(d.deny, false, "the holder's own subagent edit must not self-deny");
+    applyEdit(dir, "ui.ts", "return 1;", "return 2;");
+    runHookPost(s, "claude-abc12345", input, true);
+    const ev = readAuthorship(s);
+    assert.equal(ev.length, 1);
+    assert.equal(ev[0].actor, "ui-agent", "capture credits the claim holder");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("adoption never applies to an explicit identity — a named actor is still denied", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "ui.ts"), "export function render() {\n  return 1;\n}\n");
+    acquireClaims(s, "ui-agent", null, ["ui.ts"], Date.now(), "build the UI");
+    const input: HookInput = {
+      tool: "Edit", path: join(dir, "ui.ts"),
+      edits: [{ oldString: "return 1;", newString: "return 9;" }],
+      content: null, sessionId: null, agentId: null, agentType: null,
+    };
+    const d = runHookPre(s, "data-agent", input, false);
+    assert.equal(d.deny, true, "an explicit actor editing another's claim is a real collision");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("adoption is ambiguous with two holders on the touched code — falls back to deny", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(
+      join(dir, "two.ts"),
+      "export function a() {\n  return 1;\n}\nexport function b() {\n  return 2;\n}\n",
+    );
+    acquireClaims(s, "agent-one", null, ["two.ts#a"], Date.now());
+    acquireClaims(s, "agent-two", null, ["two.ts#b"], Date.now());
+    const input: HookInput = {
+      tool: "Write", path: join(dir, "two.ts"),
+      edits: [], content: "export function c() {\n  return 3;\n}\n",
+      sessionId: null, agentId: null, agentType: null,
+    };
+    const d = runHookPre(s, "claude-abc12345", input, true);
+    assert.equal(d.deny, true, "two holders — no single actor to adopt");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a captured edit refreshes the holder's claim TTL (long work never outlives its claim)", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "w.ts"), "export function work() {\n  return 1;\n}\n");
+    const t0 = Date.now();
+    acquireClaims(s, "worker", null, ["w.ts"], t0, "long task");
+    const beforeExp = s.readClaims().claims[0]!.expiresAt;
+    const input: HookInput = {
+      tool: "Edit", path: "w.ts",
+      edits: [{ oldString: "return 1;", newString: "return 2;" }],
+      content: null, sessionId: null, agentId: null, agentType: null,
+    };
+    runHookPre(s, "worker", input);
+    applyEdit(dir, "w.ts", "return 1;", "return 2;");
+    runHookPost(s, "worker", input);
+    const afterExp = s.readClaims().claims[0]!.expiresAt;
+    assert.ok(afterExp >= beforeExp, "TTL refreshed by the captured edit");
+    assert.ok(afterExp > t0, "claim still live");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -87,6 +87,10 @@ export async function runMcpServer(store: Store): Promise<void> {
     }
     return id;
   };
+  /** Whether resolveActor would fall back to the auto-derived connection id —
+   * a derived identity enables claim adoption on quilt_edit/quilt_write. */
+  const isAutoActor = (explicit: string | undefined): boolean =>
+    explicit === undefined && !active;
   const ok = (data: unknown) => ({
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
   });
@@ -357,7 +361,14 @@ export async function runMcpServer(store: Store): Promise<void> {
     },
     async ({ actor, path, old_string, new_string, why }) => {
       const actorId = resolveActor(actor, true)!;
-      const r = applyAndRecordEdit(store, { actor: actorId, path, oldString: old_string, newString: new_string, intent: why });
+      const r = applyAndRecordEdit(store, {
+        actor: actorId,
+        path,
+        oldString: old_string,
+        newString: new_string,
+        intent: why,
+        autoActor: isAutoActor(actor),
+      });
       if (!r.ok) {
         return ok(
           "heldBy" in r
@@ -384,7 +395,13 @@ export async function runMcpServer(store: Store): Promise<void> {
     },
     async ({ actor, path, content, why }) => {
       const actorId = resolveActor(actor, true)!;
-      const r = applyAndRecordWrite(store, { actor: actorId, path, content, intent: why });
+      const r = applyAndRecordWrite(store, {
+        actor: actorId,
+        path,
+        content,
+        intent: why,
+        autoActor: isAutoActor(actor),
+      });
       if (!r.ok) {
         return ok("heldBy" in r ? { applied: false, denied: true, heldBy: r.heldBy, holderIntent: r.holderIntent, target: r.target } : { applied: false, error: r.error });
       }
