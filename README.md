@@ -35,9 +35,39 @@ attribution clean, prevents collisions, and gives each agent its own clean commi
 And it holds as you add agents. Here are seven fanning out on one repo, run head
 to head:
 
-![Seven agents fan out on one repo. Without Quilt, their work collapses into one tangled commit and a collision silently overwrites an agent's change. With Quilt, each agent lands a clean, correctly-attributed commit and the collision is prevented.](examples/fleet.gif)
+`./examples/fleet.sh` runs seven agents against one checkout, head to head,
+on the real machinery. The two endings:
 
-That is `./examples/fleet.sh`. It uses the quilt system, and you can also run it yourself.
+```txt
+WITHOUT quilt   1 commit for 7 agents — six got "nothing to commit", their
+                work swept into the first agent's blob. a7 silently
+                overwrote a1's change to getUser. a1's work is gone.
+
+WITH quilt      6 clean commits, one per agent, each exactly its own lines.
+                a7's write into a1's claimed function was denied before any
+                bytes changed, with a1's stated intent in the denial.
+```
+
+Run it yourself — nothing in it is staged.
+
+## When two agents want the same file
+
+Fanning out on disjoint files is the easy case. The real test is contention.
+A denied claim isn't a dead end — it carries the holder's stated intent and
+when their lease lapses:
+
+```txt
+$ QUILT_ACTOR=builder-flows quilt claim deals.js flows.js --intent "wire flows to deals"
+  ✗ denied  deals.js (held by builder-friction)
+      builder-friction is: friction pass: rename + archive flags
+      their claim lapses 2026-07-04T22:12:05Z unless renewed
+  ✓ claimed flows.js
+```
+
+So the blocked agent builds its granted files while it waits, re-claims after
+the holder's commit auto-releases, and layers its change on top of the landed
+one. Two clean commits, both changes in the file, nothing lost.
+`./examples/contention.sh` runs the whole sequence on the real machinery.
 
 ## What it does
 
