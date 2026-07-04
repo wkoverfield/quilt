@@ -362,3 +362,59 @@ test("pilot replay: two subagents of one session commit exactly their own files"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Pilot round 2, new bugs: the committed reconstruction silently dropped
+// trivial lines that OPENED a change run — a blank separator line, and in one
+// case a `}),` (which committed a syntax error). Trivial lines carry no
+// ownership, so they inherit their run's decision; a run-opening one had
+// nothing to inherit from and vanished.
+test("commit --mine keeps run-opening trivial lines: blank separators and closer punctuation", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "app.js", "registerRoutes(\n  home(),\n);\nfunction a() {\n  return 1;\n}\n");
+    commitAll(dir, "base");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // One actor, uncontested. Two edits whose diff runs OPEN with a trivial
+    // line: appending a function preceded by a BLANK separator, and adding an
+    // argument line adjacent to closer punctuation.
+    const after =
+      "registerRoutes(\n  home(),\n  admin(),\n);\nfunction a() {\n  return 1;\n}\n\nfunction b() {\n  return 2;\n}\n";
+    write(dir, "app.js", after);
+    const c = quilt(dir, ["commit", "--mine", "-m", "solo work"], "solo");
+    assert.equal(c.status, 0, c.stderr);
+
+    // The committed file must be byte-identical to the worktree — nothing
+    // (blank line, punctuation-only line) silently dropped.
+    assert.equal(
+      spawnSync("git", ["show", "HEAD:app.js"], { cwd: dir, encoding: "utf8" }).stdout,
+      after,
+      "committed content matches the worktree exactly",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a purely-trivial change run (formatting-only) commits with --include-unclaimed instead of vanishing", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "fmt.js", "const a = 1;\nconst b = 2;\n");
+    commitAll(dir, "base");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // The actor's substantive edit plus a blank-line-only insertion elsewhere
+    // (no owner signal in that run at all).
+    const after = "const a = 1;\n\nconst b = 2;\nconst c = 3;\n";
+    write(dir, "fmt.js", after);
+    const c = quilt(dir, ["commit", "--mine", "--include-unclaimed", "-m", "solo fmt"], "solo");
+    assert.equal(c.status, 0, c.stderr);
+    assert.equal(
+      spawnSync("git", ["show", "HEAD:fmt.js"], { cwd: dir, encoding: "utf8" }).stdout,
+      after,
+      "with --include-unclaimed the blank-only run commits too",
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

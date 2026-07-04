@@ -15,6 +15,15 @@ All notable changes to Quilt are documented here. The format is based on
   comes only from per-edit signals: `QUILT_ACTOR` (per-process env) or the
   payload's agent/session ids. `quilt start` still scopes the CLI commands run
   in your own terminal.
+- **`commit --mine` no longer drops trivial lines that open a change run.**
+  Trivial lines (braces, closers like `}),`, blank lines) carry no ownership
+  and inherit their change-run's decision — but a run-OPENING one had nothing
+  to inherit from and silently vanished from the committed file (the pilot
+  committed a syntax error from a dropped `}),`, and blank separator lines
+  disappeared). Trivial lines now resolve from the nearest decided neighbor
+  in their run (preceding, else following). A purely-trivial run (formatting
+  only) has no owner signal at all: it commits with `--include-unclaimed`
+  and is flagged as mixed rather than dropped silently.
 - **`commit --mine` refuses to tear a symbol.** When a function had some of
   its changed lines owned by the committer and others excluded (unattributed
   or another actor's), the partial reconstruction committed a construct with
