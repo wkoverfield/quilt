@@ -80,8 +80,9 @@ function underDir(dirPath: string, p: string): boolean {
   return p === dirPath || p.startsWith(dirPath + "/");
 }
 
-/** Two reservations overlap when they could cover the same lines. */
-function overlaps(a: ClaimTarget, b: Claim): boolean {
+/** Two reservations overlap when they could cover the same lines. `b` only
+ * needs `path`/`symbol`/`dir`, so claims AND waiters both fit. */
+function overlaps(a: ClaimTarget, b: { path: string; symbol?: string; dir?: boolean }): boolean {
   // A directory claim on either side covers everything under its prefix.
   if (a.dir && b.dir) return underDir(a.path, b.path) || underDir(b.path, a.path);
   if (a.dir) return underDir(a.path, b.path);
@@ -216,10 +217,12 @@ export function acquireClaims(
             });
           }
           denied.queued = true;
-          // 1-based position among all waiters that overlap this exact target.
-          denied.queuePosition = file.waiters.filter(
-            (w) => w.path === target.path && (w.dir || w.symbol === target.symbol || target.symbol === undefined),
-          ).findIndex((w) => sameWaiter(w, target)) + 1;
+          // 1-based FIFO position among the waiters that ACTUALLY conflict with
+          // this target — using the same overlaps() rule promoteWaiters grants
+          // by, so a whole-file waiter ahead of a symbol waiter (and vice versa)
+          // is counted. file.waiters is in insertion (queuedAt) order.
+          denied.queuePosition =
+            file.waiters.filter((w) => overlaps(target, w)).findIndex((w) => sameWaiter(w, target)) + 1;
         }
         results.push(denied);
         // Record the denial so the fleet view can show who's blocked on whom,

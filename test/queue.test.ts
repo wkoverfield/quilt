@@ -145,3 +145,20 @@ test("--wait and --queue are mutually exclusive", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("queuePosition counts a whole-file waiter ahead of a later symbol waiter (mixed granularity)", () => {
+  const dir = makeRepo();
+  try {
+    // holder H takes the whole file so both A and B are denied and queue.
+    q(dir, ["claim", "shared.js"], "H");
+    // A queues for the WHOLE file first.
+    q(dir, ["claim", "shared.js", "--queue", "--intent", "A whole"], "A");
+    // B then queues for a SYMBOL in the same file — A's whole-file interest
+    // conflicts with B's symbol, so B must be told it's behind A, not "next".
+    const b = q(dir, ["claim", "shared.js#f", "--queue", "--intent", "B sym"], "B");
+    assert.match(b.stdout, /1 ahead of you/, "the whole-file waiter ahead is counted");
+    assert.doesNotMatch(b.stdout, /you're next/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
