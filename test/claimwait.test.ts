@@ -28,7 +28,9 @@ function quilt(dir: string, args: string[], actor: string) {
   const r = spawnSync("node", [CLI, ...args], {
     cwd: dir,
     encoding: "utf8",
-    env: { ...process.env, QUILT_ACTOR: actor },
+    // NO_COLOR: picocolors turns ANSI on when CI is set, which splinters
+    // phrases like "claimed shared.js" with reset codes mid-match.
+    env: { ...process.env, QUILT_ACTOR: actor, NO_COLOR: "1" },
   });
   return { status: r.status ?? 1, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
@@ -41,7 +43,7 @@ test("claim --wait blocks, then grants the moment the holder releases", async ()
     // B waits in the background while A still holds.
     const b = spawn("node", [CLI, "claim", "shared.js", "--wait", "30", "--intent", "next"], {
       cwd: dir,
-      env: { ...process.env, QUILT_ACTOR: "B" },
+      env: { ...process.env, QUILT_ACTOR: "B", NO_COLOR: "1" },
     });
     let out = "";
     b.stdout.on("data", (d) => (out += d));
