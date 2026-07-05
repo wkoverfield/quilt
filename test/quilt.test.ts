@@ -449,6 +449,9 @@ test("a claimed binary file commits whole; an unclaimed one is skipped loudly", 
     const second = quilt(dir, ["commit", "--mine", "-m", "with blob"], "dev");
     assert.equal(second.status, 0, second.stderr);
     assert.match(second.stdout, /Committed whole.*blob\.bin/s);
+    // The count includes the whole-staged binary — a pure-binary commit must
+    // not report "Committed 0 file(s)" as if nothing happened.
+    assert.match(second.stdout, /Committed 1 file\(s\)/, "whole-staged binary is counted");
     const files = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
       cwd: dir, encoding: "utf8",
     }).stdout.trim();

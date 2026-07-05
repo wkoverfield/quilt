@@ -623,9 +623,10 @@ program
       if (res.reason && res.reason !== "dry-run") {
         fail(res.reason);
       }
+      const dryCount = selection.files.length + selection.wholeFiles.length;
       process.stdout.write(
         pc.dim(
-          `  dry-run: would commit ${selection.files.length} file(s), ` +
+          `  dry-run: would commit ${dryCount} file(s), ` +
             `+${selection.totalAdded}/-${selection.totalRemoved} as ${ctx.actor!.displayName}.\n` +
             "  (no changes were made)\n\n",
         ),
@@ -651,9 +652,13 @@ program
     // Re-observe so the freshly committed lines drop out of ownership.
     reconcile(store, ctx.actorId);
 
+    // Count line-level files AND whole-staged binaries — a pure-binary commit
+    // committed real work even though `files` (the line-level split) is empty,
+    // so reporting "0 file(s)" reads as if nothing happened.
+    const committedCount = selection.files.length + selection.wholeFiles.length;
     process.stdout.write(
       pc.green("✓ ") +
-        `Committed ${selection.files.length} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
+        `Committed ${committedCount} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
         `(${res.commitSha!.slice(0, 7)}).\n` +
         pc.dim("  Other actors' changes remain in the working tree.\n") +
         (rel.released > 0
