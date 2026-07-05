@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import type { Store } from "./state.js";
 import { buildModel } from "./engine.js";
-import { listClaims, listBlocks, claimLabel } from "./claims.js";
+import { listClaims, listBlocks, listWaiters, claimLabel } from "./claims.js";
 import { openEscalations, resolutions } from "./outcomes.js";
 import { dependencyWarnings, formatWarning, type DependencyWarning } from "./push.js";
 import type { Outcome } from "./types.js";
@@ -70,6 +70,8 @@ export interface FleetView {
   overlaps: FleetOverlap[];
   /** Who's blocked on whom (denied claims still held by the holder). */
   blocked: FleetBlock[];
+  /** The async queue: who's waiting to be auto-granted which target. */
+  queue: Array<{ target: string; actor: string; intent?: string }>;
   /** Preserved overwrites not yet restored — full-overwrite clashes. */
   clobbers: FleetClobber[];
   /** Genuine conflicts an agent kicked up for a human — the "Needs you" list. */
@@ -169,10 +171,19 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
     .clobbers.filter((c) => !c.restored)
     .map((c) => ({ path: c.path, byActor: c.byActor, victimActor: c.victimActor }));
 
+  const queue = listWaiters(store, now)
+    .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))
+    .map((w) => ({
+      target: w.dir ? w.path + "/" : w.symbol ? `${w.path}#${w.symbol}` : w.path,
+      actor: w.actor,
+      intent: w.intent,
+    }));
+
   return {
     actors,
     overlaps,
     blocked,
+    queue,
     clobbers,
     needsYou: openEscalations(store),
     sewn: resolutions(store).slice(0, 5),
@@ -227,6 +238,17 @@ export function renderFleet(view: FleetView, headLabel: string): string {
       const held = b.holderIntent ? `held by ${b.holder}: ${b.holderIntent}` : `held by ${b.holder}`;
       out.push(
         "    " + pc.red("⛔ ") + `${pc.bold(b.actor)} waiting on ${b.target} ${pc.dim(`(${held})`)}`,
+      );
+    }
+    out.push("");
+  }
+
+  if (view.queue.length) {
+    out.push(pc.bold(pc.cyan("  Queue")) + pc.dim("  (auto-granted when the target frees)"));
+    for (const w of view.queue) {
+      out.push(
+        "    " + pc.cyan("… ") + `${pc.bold(w.actor)} queued for ${w.target}` +
+          (w.intent ? pc.dim(`  (${w.intent})`) : ""),
       );
     }
     out.push("");

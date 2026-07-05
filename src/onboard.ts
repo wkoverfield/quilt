@@ -46,10 +46,12 @@ You share this checkout with other agents. Coordinate through Quilt:
   response carries their holderIntent (what they are doing) and when their
   claim lapses. Use it instead of forcing your change through: if they are
   already doing your change, drop yours; if it is compatible, adapt around it
-  (or pass \`wait\` on the claim to block until they release, then re-read and
-  layer on top); if your goals are genuinely opposed (you each need the same
-  line to be different things), do NOT overwrite them — escalate the target
-  with a reason naming both intents, and move on. A human decides.
+  (pass \`queue: true\` on the claim to be AUTO-GRANTED it when they release —
+  don't block, keep working, and it lands in your next get_status; or \`wait\`
+  to block until they release, then re-read and layer on top); if your goals
+  are genuinely opposed (you each need the same line to be different things),
+  do NOT overwrite them — escalate the target with a reason naming both
+  intents, and move on. A human decides.
 - When you reconcile a clash yourself (merge both intents, or adapt), resolve the
   target with a short note so the decision is recorded.
 - The claim response may include \`dependencyWarnings\`: a function you depend on

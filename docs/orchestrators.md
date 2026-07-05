@@ -119,13 +119,15 @@ The dogfood fleets earned these rules the hard way:
 4. **`commit_mine` auto-releases** the committed files' claims. The loop is
    claim → edit → commit_mine; a trailing `release` is only for abandoning
    work (its response now says this instead of a bare `released: 0`).
-5. **Claims renew while you're active, and denials are waitable.** Any quilt
-   call refreshes your claims, so they can't silently lapse mid-task. A
-   denial tells you who holds the code, what they said they're doing, and
-   when their lease lapses — and instead of polling, pass `wait` on the
-   claim (CLI `--wait`) to block until the holder releases (commit
-   auto-release included) or their lease expires, then re-read and layer on
-   top.
+5. **Claims renew while you're active; a denial is a queue, not a wall.** Any
+   quilt call refreshes your claims, so they can't silently lapse mid-task. A
+   denial tells you who holds the code, what they said they're doing, and when
+   their lease lapses. Two ways to handle it without polling: `queue` (CLI
+   `--queue`) registers interest and AUTO-GRANTS you the target when it frees —
+   you don't block, you keep working, and the grant appears in your next
+   `get_status` as `grantedWhileWaiting`; or `wait` (CLI `--wait`) blocks until
+   it frees. Prefer `queue` when you have other work — a blocked call is a
+   blocked agent.
 6. **Shared-tree proof discipline.** Repo-wide gates (tsc, tests) can fail
    mid-wave because of OTHER actors' in-flight work — that's the price of
    same-checkout visibility (which also means codegen and cross-layer types

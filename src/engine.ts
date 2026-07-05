@@ -13,7 +13,7 @@ import {
 } from "./diff.js";
 import { parseSymbols, ownKey, keyText, symbolLocator, opKeyer } from "./symbols.js";
 import { foldedAuthorship, foldedRemovals, readAuthorship } from "./authorship.js";
-import { CLAIM_TTL_MS } from "./claims.js";
+import { CLAIM_TTL_MS, promoteWaiters } from "./claims.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
 
@@ -501,8 +501,13 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       claimsDirty = true;
     }
   }
+  claimsFile.claims = kept;
+  // A lapsed lease (a dead or idle holder) frees its target — promote the
+  // earliest queued waiter so the async claim lands even when nobody explicitly
+  // released. No-op when the queue is empty.
+  if (promoteWaiters(claimsFile, now).length > 0) claimsDirty = true;
   if (claimsDirty) {
-    store.writeClaims({ ...claimsFile, claims: kept });
+    store.writeClaims(claimsFile);
   }
 }
 

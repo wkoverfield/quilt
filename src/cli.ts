@@ -17,7 +17,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pendingGrants, markGrantsNotified } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
@@ -156,7 +156,18 @@ const program = new Command();
 program
   .name("quilt")
   .description("Actor-owned patches for Git. Same repo. Many agents. Clean commits.")
-  .version(VERSION);
+  .version(VERSION)
+  // A uniform identity flag for every command — the ergonomic alternative to
+  // prefixing `QUILT_ACTOR=<id>` on each call (which is easy to forget, and a
+  // forgotten prefix misattributes silently). Named `--as` (not `--actor`) so
+  // it never collides with `start --actor`. It just seeds the same env the rest
+  // of the resolution already reads, so it composes with sessions and hooks
+  // unchanged. An explicit env var still wins if both are set.
+  .option("--as <id>", "act as this actor (same as QUILT_ACTOR=<id>, per command)")
+  .hook("preAction", (thisCommand) => {
+    const as = thisCommand.opts().as as string | undefined;
+    if (as && !process.env.QUILT_ACTOR) process.env.QUILT_ACTOR = as;
+  });
 
 program
   .command("init")
@@ -356,15 +367,32 @@ program
     const warnings = ctx.actorId
       ? dependencyWarnings(store, ctx.actorId, Date.now())
       : [];
+    // Async claims: surface anything auto-granted off the queue since this
+    // actor last looked, then mark it announced so it shouts exactly once.
+    const grants = ctx.actorId ? pendingGrants(store, ctx.actorId, Date.now()) : [];
     if (opts.json) {
       process.stdout.write(
         JSON.stringify(
-          { ...statusJson(model, headSha(store.paths.repoRoot)), dependencyWarnings: warnings },
+          {
+            ...statusJson(model, headSha(store.paths.repoRoot)),
+            dependencyWarnings: warnings,
+            grantedWhileWaiting: grants.map((c) => claimLabel(c)),
+          },
           null,
           2,
         ) + "\n",
       );
+      if (ctx.actorId && grants.length) markGrantsNotified(store, ctx.actorId, Date.now());
       return;
+    }
+    if (grants.length) {
+      process.stdout.write(
+        pc.green(pc.bold("  ✓ Granted while you waited:\n")));
+      for (const c of grants) {
+        process.stdout.write(`    ${claimLabel(c)}${c.intent ? pc.dim(`  (${c.intent})`) : ""}\n`);
+      }
+      process.stdout.write(pc.dim("    it's yours now — re-read the file and layer your change on top.\n\n"));
+      if (ctx.actorId) markGrantsNotified(store, ctx.actorId, Date.now());
     }
     process.stdout.write(renderStatus(model, shortHead(store.paths.repoRoot)));
     if (watcherRunning(store)) {
@@ -775,7 +803,8 @@ program
   .option("--intent <text>", "a short why for this claim, shown to anyone it blocks")
   .option("--creating", "allow symbol claims for symbols you are ABOUT TO ADD (they bind at write time)")
   .option("--wait [seconds]", "block until denied targets free up (holder releases, commits, or their lease lapses); default window 600s")
-  .action(async (paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean; wait?: string | boolean }) => {
+  .option("--queue", "async: if denied, register interest and get auto-granted when it frees — don't block, keep working (check back with quilt status)")
+  .action(async (paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean; wait?: string | boolean; queue?: boolean }) => {
     const store = requireStore();
     const ctx = activeContext(store);
 
@@ -791,13 +820,14 @@ program
       }
       process.stdout.write(pc.bold("\n  Active claims:\n\n"));
       for (const c of claims) {
-        process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}\n`);
+        process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}` + (c.viaQueue ? pc.dim("  (granted from queue)") : "") + "\n");
       }
       process.stdout.write("\n");
       return;
     }
 
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
+    if (opts.wait !== undefined && opts.queue) fail("--wait and --queue are opposite strategies; pick one (block, or register and keep working).");
     let results = acquireClaims(
       store,
       ctx.actorId!,
@@ -805,7 +835,7 @@ program
       paths,
       Date.now(),
       opts.intent,
-      { creating: opts.creating },
+      { creating: opts.creating, queue: opts.queue },
     );
     let waitNote = "";
     const heldNow = results.filter((r) => !r.granted && r.holder);
@@ -851,6 +881,20 @@ program
         const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
           process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
+        } else if (r.queued) {
+          // Async: registered, not blocked. The agent moves on and the grant
+          // lands at its next quilt call.
+          const ahead = (r.queuePosition ?? 1) - 1;
+          process.stdout.write(
+            pc.cyan("  … queued  ") + target +
+              pc.dim(` (held by ${r.holder}` + (r.holderIntent ? ` — ${r.holderIntent}` : "") + ")") + "\n",
+          );
+          process.stdout.write(
+            pc.dim(
+              `      ${ahead === 0 ? "you're next" : `${ahead} ahead of you`}; ` +
+                "auto-granted when it frees — keep working, then re-check with quilt status\n",
+            ),
+          );
         } else {
           const why =
             r.reason === "outside-repo"
@@ -873,13 +917,19 @@ program
               pc.dim(`      their claim lapses ${new Date(r.holderExpiresAt).toISOString()} unless renewed\n`),
             );
           }
+          if (!opts.queue) {
+            process.stdout.write(
+              pc.dim("      tip: --queue to be auto-granted when it frees, or --wait to block\n"),
+            );
+          }
         }
       }
       for (const w of warnings) {
         process.stdout.write(pc.yellow("  ⚠ heads-up ") + formatWarning(w) + "\n");
       }
     }
-    if (results.some((r) => !r.granted)) process.exitCode = 1;
+    // A queued target is a SUCCESS (registered — keep working), not a denial.
+    if (results.some((r) => !r.granted && !r.queued)) process.exitCode = 1;
   });
 
 program

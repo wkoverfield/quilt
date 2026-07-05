@@ -8,6 +8,19 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **Async claims — `claim --queue` (MCP: `queue: true`): register interest and
+  get AUTO-GRANTED when the target frees, without blocking.** The verification
+  fleet's follow-on ask after `--wait`: "a blocked call is a blocked agent." A
+  queued claim returns immediately; when the holder releases (commit
+  auto-release included) or their lease lapses, the earliest waiter is granted a
+  real claim and discovers it at its next `quilt status` / `get_status`
+  (`grantedWhileWaiting`) — no blocking, no polling. FIFO and self-healing: an
+  idle grant re-promotes the next waiter, and abandoned interest expires. The
+  `quilt fleet` view shows the queue. No daemon — auto-grant happens on the next
+  reconcile any actor triggers.
+- **Global `--as <id>` flag**: a per-command way to set your actor
+  (`quilt --as builder-a claim …`), the ergonomic alternative to prefixing
+  `QUILT_ACTOR=<id>` on every call. An explicit env var still wins.
 - **`claim --wait` (MCP: `wait` seconds): block until denied targets free
   up.** The verification fleet's #1 friction: after a denial, retrying was
   blind polling — "get denied, guess when to retry, hope." The claim call can

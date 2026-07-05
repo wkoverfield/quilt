@@ -463,3 +463,29 @@ test("a claimed binary file commits whole; an unclaimed one is skipped loudly", 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Prefix ergonomics: the global `--actor` flag is a per-command alternative to
+// the QUILT_ACTOR env prefix (which is easy to forget). Fleet-agent feedback.
+test("--actor flag acts as that identity, and an explicit env var still wins", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "a.ts", "export const x = 1;\n");
+    commitAll(dir, "init");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // --actor with no env: acts as flagged id.
+    const nc = { ...process.env, NO_COLOR: "1" };
+    const r = spawnSync("node", [CLI, "--as", "flagged", "claim", "a.ts"], { cwd: dir, encoding: "utf8", env: nc });
+    assert.match(r.stdout ?? "", /claimed a\.ts/);
+    const who = spawnSync("node", [CLI, "--as", "flagged", "whoami"], { cwd: dir, encoding: "utf8", env: nc });
+    assert.match(who.stdout ?? "", /flagged/);
+
+    // env var wins when both are present (env is the stronger, per-process signal).
+    const both = spawnSync("node", [CLI, "--as", "flagged", "whoami"], {
+      cwd: dir, encoding: "utf8", env: { ...process.env, NO_COLOR: "1", QUILT_ACTOR: "fromenv" },
+    });
+    assert.match(both.stdout ?? "", /fromenv/);
+  } finally {
+    cleanup(dir);
+  }
+});

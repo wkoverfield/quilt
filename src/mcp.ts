@@ -7,7 +7,7 @@ import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
 import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
 import { VERSION } from "./version.js";
@@ -162,16 +162,24 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, false);
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok({
+      // Async claims: targets auto-granted off the queue since you last looked.
+      // Surfacing marks them announced, so this is the natural "check back"
+      // point after a `queue`d claim — no polling, no blocking.
+      const grants = actorId ? pendingGrants(store, actorId, Date.now()) : [];
+      const resp = ok({
         ...statusJson(model, headSha(repoRoot)),
         clobbers: store.readClobbers().clobbers.filter((c) => !c.restored),
         claims: listClaims(store, Date.now()),
+        // Targets you queued for that are now YOURS — re-read and layer on top.
+        grantedWhileWaiting: grants.map((c) => (c.dir ? c.path + "/" : c.symbol ? `${c.path}#${c.symbol}` : c.path)),
         // Push-awareness at the orient step: a symbol this actor already claimed
         // depends on one another actor is changing. Mirrors `quilt status --json`.
         dependencyWarnings: actorId ? dependencyWarnings(store, actorId, Date.now()) : [],
         // Collisions an agent kicked up for a human and not yet resolved.
         needsYou: openEscalations(store),
       });
+      if (actorId && grants.length) markGrantsNotified(store, actorId, Date.now());
+      return resp;
     },
   );
 
@@ -311,12 +319,13 @@ export async function runMcpServer(store: Store): Promise<void> {
         intent: z.string().optional().describe("a short why for this claim, e.g. the ticket/task"),
         creating: z.boolean().optional().describe("allow symbol claims for symbols you are ABOUT TO ADD to an existing file (they bind at write time). Without it, a symbol missing from the file is denied."),
         wait: z.number().optional().describe("seconds to BLOCK waiting for holder-denied targets to free up (holder releases, commits, or their lease lapses) instead of polling yourself. Returns as soon as everything grants. Capped at 120 per call — re-call to keep waiting. Denials that waiting can't fix (bad path, missing symbol) return immediately."),
+        queue: z.boolean().optional().describe("ASYNC alternative to wait: if denied by a holder, register interest and return immediately — you are AUTO-GRANTED the target when it frees. Do NOT block. Keep working; the grant appears in get_status as `grantedWhileWaiting`. Best when you have other work to do meanwhile."),
       },
     },
-    async ({ actor, paths, intent, creating, wait }) => {
+    async ({ actor, paths, intent, creating, wait, queue }) => {
       const actorId = resolveActor(actor, true)!;
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
-      let results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating });
+      let results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating, queue });
       let waited: { waitedMs: number; timedOut: boolean } | undefined;
       const heldNow = results.some((r) => !r.granted && r.holder);
       const fatalNow = results.some((r) => !r.granted && !r.holder);

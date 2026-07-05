@@ -22,12 +22,14 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. |
 | `quilt commit --mine -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. |
-| `quilt claim [targets...] [--json] [--creating] [--wait [s]]` | Reserve files (`src/auth.ts`), directories (`convex/_generated/`), or symbols (`file#symbol`) for editing — BEFORE you edit; the claim is what binds external edits to you. A symbol missing from the file is denied unless `--creating` (you are about to add it). `--wait` blocks until denied targets free up (holder releases/commits or their lease lapses; default window 600s) instead of you polling. With no targets, lists claims. |
+| `quilt claim [targets...] [--json] [--creating] [--wait [s]] [--queue]` | Reserve files (`src/auth.ts`), directories (`convex/_generated/`), or symbols (`file#symbol`) for editing — BEFORE you edit; the claim is what binds external edits to you. A symbol missing from the file is denied unless `--creating` (you are about to add it). `--wait` blocks until denied targets free up; `--queue` is the async alternative — register interest, return now, get auto-granted when it frees (surfaced in `quilt status` as "granted while you waited"). With no targets, lists claims. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? |
 | `quilt whoami` | Show the active actor and session. |
 | `quilt end` | End the active session. |
+
+A global `--as <id>` sets your actor for any command (the per-command form of `QUILT_ACTOR=<id>`).
 
 Run `quilt --help` or `quilt <command> --help` for the full flag list.
 

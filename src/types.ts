@@ -127,6 +127,32 @@ export interface Claim {
    * collision from the holder's intent instead of guessing or blocking.
    */
   intent?: string;
+  /** True when this claim was AUTO-GRANTED off the queue (the actor asked with
+   * `--queue`/`queue:true`, was denied, and got it when the holder freed it). */
+  viaQueue?: boolean;
+  /** epoch ms the queued grant was surfaced to its owner. Absent = not yet
+   * announced, so the next status/get_status shouts "granted while you waited". */
+  notifiedAt?: number;
+}
+
+/**
+ * An interest registration: `actor` asked for a target held by someone else and
+ * chose to QUEUE rather than block (`--wait`) or give up. When the target frees
+ * (holder releases, commits, or their lease lapses), the earliest live waiter is
+ * auto-granted a claim. Non-blocking: the actor keeps working and discovers the
+ * grant at its next quilt call. FIFO by `queuedAt`; expires if the actor never
+ * returns, so an abandoned interest can't wedge the queue.
+ */
+export interface Waiter {
+  path: string;
+  symbol?: string;
+  dir?: boolean;
+  actor: string;
+  session: string | null;
+  intent?: string;
+  queuedAt: string;
+  /** epoch ms; dropped from the queue once now > expiresAt. */
+  expiresAt: number;
 }
 
 /**
@@ -150,6 +176,8 @@ export interface Block {
 export interface ClaimsFile {
   claims: Claim[];
   blocks?: Block[];
+  /** Interest registrations awaiting auto-grant (the async `--queue` path). */
+  waiters?: Waiter[];
 }
 
 /**

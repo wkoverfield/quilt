@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "./state.js";
-import type { Claim, Block } from "./types.js";
+import type { Claim, Block, Waiter, ClaimsFile } from "./types.js";
 import { repoRelative } from "./paths.js";
 import { canParse, closestName, parseSymbols } from "./symbols.js";
 
@@ -13,6 +13,10 @@ import { canParse, closestName, parseSymbols } from "./symbols.js";
 export const CLAIM_TTL_MS = 30 * 60 * 1000;
 /** How long a recorded denial lingers without a retry. Short — a block is news. */
 export const BLOCK_TTL_MS = 90 * 1000;
+/** How long a queued interest survives without the actor coming back. Longer
+ * than a claim — a waiter is often off doing other work — but bounded so an
+ * agent that never returns can't wedge the queue behind it. */
+export const WAITER_TTL_MS = 60 * 60 * 1000;
 
 export interface ClaimTarget {
   path: string;
@@ -37,6 +41,10 @@ export interface ClaimResult {
   reason?: "outside-repo" | "symbol-not-found" | "symbols-unsupported";
   /** for symbol-not-found: a close existing symbol name, if one exists. */
   suggestion?: string;
+  /** when denied AND the actor asked to queue: it's now registered for
+   * auto-grant when the target frees. `queuePosition` is 1-based (1 = next). */
+  queued?: boolean;
+  queuePosition?: number;
 }
 
 function active(claims: Claim[], now: number): Claim[] {
@@ -105,6 +113,11 @@ export function acquireClaims(
      * that binds nothing protects nothing, and granted-but-non-binding is how
      * the dogfood fleet shipped a silent partial commit. */
     creating?: boolean;
+    /** On a HOLDER denial, register interest instead of just reporting denied:
+     * the actor is auto-granted the target when it frees (the async `--queue`
+     * path). Non-blocking. Denials waiting can't fix (bad path, missing symbol)
+     * are never queued. */
+    queue?: boolean;
   } = {},
 ): ClaimResult[] {
   const cleanIntent = intent?.trim() ? intent.trim() : undefined;
@@ -112,8 +125,11 @@ export function acquireClaims(
     const file = store.readClaims();
     file.claims = active(file.claims, now);
     file.blocks = (file.blocks ?? []).filter((b) => b.expiresAt > now);
+    file.waiters = (file.waiters ?? []).filter((w) => w.expiresAt > now);
     const sameTarget = (b: Block, t: ClaimTarget) =>
       b.actor === actorId && b.path === t.path && b.symbol === t.symbol;
+    const sameWaiter = (w: Waiter, t: ClaimTarget) =>
+      w.actor === actorId && w.path === t.path && w.symbol === t.symbol && Boolean(w.dir) === Boolean(t.dir);
     const results: ClaimResult[] = [];
     for (const raw of rawPaths) {
       const parsed = parseTarget(raw);
@@ -171,13 +187,41 @@ export function acquireClaims(
         (c) => c.actor !== actorId && overlaps(target, c),
       );
       if (conflict) {
-        results.push({
+        const denied: ClaimResult = {
           ...target,
           granted: false,
           holder: conflict.actor,
           holderIntent: conflict.intent,
           holderExpiresAt: conflict.expiresAt,
-        });
+        };
+        // Async path: register interest so the actor is auto-granted when the
+        // holder frees, instead of blocking or blind-polling. Dedup by
+        // actor+target (re-queuing just refreshes the TTL and keeps FIFO order).
+        if (opts.queue) {
+          const existing = file.waiters.find((w) => sameWaiter(w, target));
+          if (existing) {
+            existing.expiresAt = now + WAITER_TTL_MS;
+            existing.session = sessionId;
+            if (cleanIntent !== undefined) existing.intent = cleanIntent;
+          } else {
+            file.waiters.push({
+              path: target.path,
+              symbol: target.symbol,
+              dir: target.dir || undefined,
+              actor: actorId,
+              session: sessionId,
+              intent: cleanIntent,
+              queuedAt: new Date(now).toISOString(),
+              expiresAt: now + WAITER_TTL_MS,
+            });
+          }
+          denied.queued = true;
+          // 1-based position among all waiters that overlap this exact target.
+          denied.queuePosition = file.waiters.filter(
+            (w) => w.path === target.path && (w.dir || w.symbol === target.symbol || target.symbol === undefined),
+          ).findIndex((w) => sameWaiter(w, target)) + 1;
+        }
+        results.push(denied);
         // Record the denial so the fleet view can show who's blocked on whom,
         // carrying the holder's intent so the block explains itself.
         const prior = file.blocks.find((b) => sameTarget(b, target));
@@ -198,8 +242,9 @@ export function acquireClaims(
         }
         continue;
       }
-      // Granted: this actor is no longer blocked on this target.
+      // Granted: this actor is no longer blocked on, or waiting for, this target.
       file.blocks = file.blocks.filter((b) => !sameTarget(b, target));
+      file.waiters = file.waiters.filter((w) => !sameWaiter(w, target));
 
       const own = file.claims.find(
         (c) =>
@@ -231,6 +276,87 @@ export function acquireClaims(
     store.writeClaims(file);
     return results;
   });
+}
+
+/**
+ * Auto-grant queued waiters against the current claim state, in FIFO order.
+ * Mutates `file` in place and returns the claims newly granted off the queue
+ * (for ledger/notification). The heart of async claims: whenever a target
+ * frees (a release, a commit's auto-release, or a lease lapse), the earliest
+ * live waiter whose target is now free gets a real claim — `viaQueue`, not yet
+ * notified, so the actor discovers it at its next quilt call.
+ *
+ * FIFO falls out naturally: waiters are tried oldest-first, and a waiter that's
+ * granted immediately HOLDS the target, so the next same-target waiter sees the
+ * fresh conflict and stays queued. A waiter whose actor already holds the code
+ * (it re-claimed directly) is just dropped. Callers must hold the store lock.
+ */
+export function promoteWaiters(file: ClaimsFile, now: number, sessionFallback: string | null = null): Claim[] {
+  file.claims = active(file.claims, now);
+  const waiters = (file.waiters ?? [])
+    .filter((w) => w.expiresAt > now)
+    .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+  const granted: Claim[] = [];
+  const remaining: Waiter[] = [];
+  for (const w of waiters) {
+    const target: ClaimTarget = { path: w.path, symbol: w.symbol, dir: w.dir };
+    // Already satisfied — the actor claimed it directly while waiting.
+    if (file.claims.some((c) => c.actor === w.actor && overlaps(target, c))) continue;
+    // Still held by someone else — stays queued (and holds its FIFO slot).
+    if (file.claims.some((c) => c.actor !== w.actor && overlaps(target, c))) {
+      remaining.push(w);
+      continue;
+    }
+    // Free: grant it, off the queue.
+    const claim: Claim = {
+      path: w.path,
+      symbol: w.symbol,
+      dir: w.dir || undefined,
+      actor: w.actor,
+      session: w.session ?? sessionFallback,
+      acquiredAt: new Date(now).toISOString(),
+      expiresAt: now + CLAIM_TTL_MS,
+      expiresAtIso: new Date(now + CLAIM_TTL_MS).toISOString(),
+      intent: w.intent,
+      viaQueue: true,
+    };
+    file.claims.push(claim);
+    granted.push(claim);
+  }
+  file.waiters = remaining;
+  return granted;
+}
+
+/**
+ * The queued grants for `actorId` not yet surfaced to it — the "granted while
+ * you waited" callout. Reading them does NOT mark them notified; call
+ * `markGrantsNotified` (inside a lock) once you've shown them, so they shout
+ * exactly once. A pure read otherwise.
+ */
+export function pendingGrants(store: Store, actorId: string, now: number): Claim[] {
+  return active(store.readClaims().claims, now).filter(
+    (c) => c.actor === actorId && c.viaQueue && !c.notifiedAt,
+  );
+}
+
+/** Mark this actor's un-announced queued grants as surfaced. Locked. */
+export function markGrantsNotified(store: Store, actorId: string, now: number): void {
+  store.withLock(() => {
+    const file = store.readClaims();
+    let changed = false;
+    for (const c of file.claims) {
+      if (c.actor === actorId && c.viaQueue && !c.notifiedAt) {
+        c.notifiedAt = now;
+        changed = true;
+      }
+    }
+    if (changed) store.writeClaims(file);
+  });
+}
+
+/** All active waiters (the queue), for the fleet view. */
+export function listWaiters(store: Store, now: number): Waiter[] {
+  return (store.readClaims().waiters ?? []).filter((w) => w.expiresAt > now);
 }
 
 /**
@@ -346,6 +472,10 @@ export function releaseClaims(
         (b) => !(b.holder === actorId && matchesTarget(b.path, b.symbol)),
       );
     }
+    // A freed target may be exactly what a queued waiter was waiting for —
+    // auto-grant the earliest before writing, so the async claim lands the
+    // instant this actor lets go (including a commit's auto-release).
+    if (released > 0 || expired > 0) promoteWaiters(file, now);
     store.writeClaims(file);
     return { released, expired };
   });
