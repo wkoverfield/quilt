@@ -32,11 +32,9 @@ fewer," or "give each agent its own worktree."
 
 Quilt lifts that ceiling. The agents share one checkout, and Quilt keeps
 attribution clean, prevents collisions, and gives each agent its own clean commit.
-And it holds as you add agents. Here are seven fanning out on one repo, run head
-to head:
+And it holds as you add agents.
 
-`./examples/fleet.sh` runs seven agents against one checkout, head to head,
-on the real machinery. The two endings:
+`./examples/fleet.sh` runs seven agents against one checkout. The two endings:
 
 ```txt
 WITHOUT quilt   1 commit for 7 agents — six got "nothing to commit", their
@@ -47,8 +45,6 @@ WITH quilt      6 clean commits, one per agent, each exactly its own lines.
                 a7's write into a1's claimed function was denied before any
                 bytes changed, with a1's stated intent in the denial.
 ```
-
-Run it yourself — nothing in it is staged.
 
 ## When two agents want the same file
 
