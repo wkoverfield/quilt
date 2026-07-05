@@ -549,6 +549,18 @@ export function pathsClaimedBySelf(
 }
 
 /**
+ * Is the tree CONTESTED for `actorId` — does any OTHER actor hold a live claim
+ * anywhere? The same signal the engine's inference gate uses (`engine.ts`
+ * `othersHaveLiveClaims`): while another actor is active, an unclaimed,
+ * uncaptured new file could be anyone's, so `selectOwned` must not sweep it
+ * into a commit by default. Solo (uncontested) trees keep the simple rule: a
+ * new file in your tree is yours.
+ */
+export function othersHoldLiveClaims(store: Store, actorId: string | null, now: number): boolean {
+  return listClaims(store, now).some((c) => c.actor !== actorId);
+}
+
+/**
  * A predicate over paths: is this path covered by any live claim held by an
  * actor OTHER than `actorId`? The guard rail for `--include-unclaimed`:
  * external edits attribute lazily, so mid-flight hunks on a peer's claimed

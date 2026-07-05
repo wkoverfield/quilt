@@ -7,11 +7,12 @@ import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, othersHoldLiveClaims, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
-import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
+import { applyAndRecordEdit, applyAndRecordWrite, capturedBySelf } from "./authorship.js";
 import { VERSION } from "./version.js";
 import { dependencyWarnings } from "./push.js";
+import { repoRelative } from "./paths.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
 /**
@@ -25,6 +26,28 @@ import type { Actor, ActorType, Session } from "./types.js";
  */
 export async function runMcpServer(store: Store): Promise<void> {
   const repoRoot = store.paths.repoRoot;
+  const mcpOnlyPaths = (paths: string[] | undefined): Set<string> | undefined => {
+    if (!paths || paths.length === 0) return undefined;
+    const set = new Set<string>();
+    for (const p of paths) {
+      const rel = repoRelative(repoRoot, p);
+      if (rel) set.add(rel);
+    }
+    return set;
+  };
+  // The ownership predicates every selectOwned caller must pass — claim and
+  // capture signals plus the contested-tree flag. One builder so no tool
+  // forgets a predicate (a missing predicate reads as "not owned" and wrongly
+  // skips a claimed or captured new file).
+  const ownershipSignals = (actorId: string) => {
+    const now = Date.now();
+    return {
+      pathClaimedByOther: pathsClaimedByOthers(store, actorId, now),
+      pathClaimedBySelf: pathsClaimedBySelf(store, actorId, now),
+      pathCapturedBySelf: capturedBySelf(store, actorId),
+      othersActive: othersHoldLiveClaims(store, actorId, now),
+    };
+  };
   const nowIso = () => new Date().toISOString();
 
   let active: { actorId: string; session: Session | null } | null = null;
@@ -190,7 +213,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), { pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()), pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()) }), false));
+      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), ownershipSignals(actorId)), false));
     },
   );
 
@@ -218,21 +241,22 @@ export async function runMcpServer(store: Store): Promise<void> {
     "preview_mine",
     {
       description: "Preview the exact patch commit_mine would create.",
-      inputSchema: { actor: actorArg, includeUnclaimed: z.boolean().optional() },
+      inputSchema: { actor: actorArg, includeUnclaimed: z.boolean().optional(), paths: z.array(z.string()).optional().describe("limit to these files (default: all your owned files)") },
     },
-    async ({ actor, includeUnclaimed }) => {
+    async ({ actor, includeUnclaimed, paths }) => {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
-        pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
-        pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()),
+        onlyPaths: mcpOnlyPaths(paths),
+        ...ownershipSignals(actorId),
       });
       return ok({
         patch: sel.patch,
         wholeFiles: sel.wholeFiles,
         skippedBinary: sel.skippedBinary,
+        skippedUnowned: sel.skippedUnowned,
         files: sel.files,
         totalAdded: sel.totalAdded,
         totalRemoved: sel.totalRemoved,
@@ -249,9 +273,10 @@ export async function runMcpServer(store: Store): Promise<void> {
         actor: actorArg,
         message: z.string(),
         includeUnclaimed: z.boolean().optional(),
+        paths: z.array(z.string()).optional().describe("limit the commit to these files (default: all your owned files) — a hard filter, so an unnamed orphan/leftover is never swept in"),
       },
     },
-    async ({ actor: actorIn, message, includeUnclaimed }) => {
+    async ({ actor: actorIn, message, includeUnclaimed, paths }) => {
       const actorId = resolveActor(actorIn, true)!;
       // resolveActor registered the actor if it was first-seen, so it exists.
       const actor = store.findActor(actorId)!;
@@ -259,8 +284,8 @@ export async function runMcpServer(store: Store): Promise<void> {
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
-        pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
-        pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()),
+        onlyPaths: mcpOnlyPaths(paths),
+        ...ownershipSignals(actorId),
       });
       if (sel.files.length === 0 && sel.wholeFiles.length === 0) {
         return ok({
@@ -268,6 +293,12 @@ export async function runMcpServer(store: Store): Promise<void> {
           reason: "no owned changes to commit",
           ...(sel.skippedBinary.length
             ? { skippedBinary: sel.skippedBinary, note: "binary/too-large files need a claim to commit whole" }
+            : {}),
+          ...(sel.skippedUnowned.length
+            ? {
+                skippedUnowned: sel.skippedUnowned,
+                note: "new files you never claimed or edited were left out (another actor is active) — claim them or pass includeUnclaimed if they're yours",
+              }
             : {}),
         });
       }
@@ -296,6 +327,7 @@ export async function runMcpServer(store: Store): Promise<void> {
               releasedClaims,
               wholeFiles: sel.wholeFiles,
               skippedBinary: sel.skippedBinary,
+              skippedUnowned: sel.skippedUnowned,
               note:
                 "committed files' claims were auto-released — no separate release call needed" +
                 (sel.skippedBinary.length

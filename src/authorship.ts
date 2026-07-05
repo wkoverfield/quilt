@@ -260,6 +260,22 @@ export function foldedAuthorship(store: Store, log: AuthorshipEvent[] = readAuth
 }
 
 /**
+ * A predicate: has `actorId` CAPTURED authorship for a path (any line the
+ * ledger records as theirs)? The signal `selectOwned` uses to tell a file the
+ * actor actually edited (via a hook / MCP tool) from one inference merely
+ * swept onto it. Built once from the folded ledger.
+ */
+export function capturedBySelf(store: Store, actorId: string): (path: string) => boolean {
+  const folded = foldedAuthorship(store);
+  return (path: string) => {
+    const m = folded.get(path);
+    if (!m) return false;
+    for (const owner of m.values()) if (owner === actorId) return true;
+    return false;
+  };
+}
+
+/**
  * Who REMOVED each line, per the ledger: `path -> removedKey -> latest actor`.
  * The mirror of foldedAuthorship for the removed side, so reconcile can attribute
  * a captured removal to its recorded author instead of to whoever happened to

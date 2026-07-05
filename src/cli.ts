@@ -17,13 +17,14 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
-import { recordAuthorship } from "./authorship.js";
+import { recordAuthorship, capturedBySelf } from "./authorship.js";
+import { repoRelative } from "./paths.js";
 import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -178,6 +179,32 @@ function printClobbers(store: Store): void {
     );
   }
   process.stdout.write(pc.dim("    recover with: quilt restore <path>\n\n"));
+}
+
+/** Normalize commit/preview path args to a repo-relative allow-list, or
+ * undefined when none were given (commit all your owned files). */
+function onlyPathsFrom(store: Store, paths: string[] | undefined): Set<string> | undefined {
+  if (!paths || paths.length === 0) return undefined;
+  const set = new Set<string>();
+  for (const p of paths) {
+    const rel = repoRelative(store.paths.repoRoot, p);
+    if (rel) set.add(rel);
+  }
+  return set;
+}
+
+/** The ownership predicates every `selectOwned` caller must pass — claim and
+ * capture signals plus the contested-tree flag. One builder so no command
+ * forgets a predicate (a missing predicate reads as "not owned" and wrongly
+ * skips a claimed or captured new file). */
+function ownershipSignals(store: Store, actorId: string) {
+  const now = Date.now();
+  return {
+    pathClaimedByOther: pathsClaimedByOthers(store, actorId, now),
+    pathClaimedBySelf: pathsClaimedBySelf(store, actorId, now),
+    pathCapturedBySelf: capturedBySelf(store, actorId),
+    othersActive: othersHoldLiveClaims(store, actorId, now),
+  };
 }
 
 const program = new Command();
@@ -535,7 +562,7 @@ program
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership());
+    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), ownershipSignals(store, ctx.actorId));
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, false), null, 2) + "\n");
       return;
@@ -588,10 +615,11 @@ program
 program
   .command("preview")
   .description("Preview the exact patch `commit --mine` would create")
+  .argument("[paths...]", "limit to these files (default: all your owned files)")
   .option("--mine", "preview your owned patch (default)")
   .option("--include-unclaimed", "also include hunks that touch unattributed lines")
   .option("--json", "emit the patch as JSON")
-  .action((opts) => {
+  .action((paths: string[], opts) => {
     const store = requireStore();
     const ctx = activeContext(store);
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
@@ -599,8 +627,8 @@ program
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
-      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
-      pathClaimedBySelf: pathsClaimedBySelf(store, ctx.actorId, Date.now()),
+      onlyPaths: onlyPathsFrom(store, paths),
+      ...ownershipSignals(store, ctx.actorId),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, true), null, 2) + "\n");
@@ -619,11 +647,12 @@ program
 program
   .command("commit")
   .description("Commit only your owned patch")
+  .argument("[paths...]", "limit the commit to these files (default: all your owned files)")
   .option("--mine", "commit your owned hunks (required)")
   .requiredOption("-m, --message <message>", "commit message")
   .option("--dry-run", "show what would happen without committing")
   .option("--include-unclaimed", "also commit hunks that touch unattributed lines")
-  .action((opts) => {
+  .action((paths: string[], opts) => {
     const store = requireStore();
     if (!opts.mine) fail("commit requires --mine in V0 (only owned-patch commits are supported).");
     let ctx = activeContext(store);
@@ -647,11 +676,18 @@ program
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
-      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
-      pathClaimedBySelf: pathsClaimedBySelf(store, ctx.actorId, Date.now()),
+      onlyPaths: onlyPathsFrom(store, paths),
+      ...ownershipSignals(store, ctx.actorId!),
     });
 
     if (selection.files.length === 0 && selection.wholeFiles.length === 0) {
+      if (selection.skippedUnowned.length) {
+        fail(
+          "nothing you own to commit here. New files you never claimed or edited were left out: " +
+            selection.skippedUnowned.join(", ") +
+            " — if they're yours, claim them (quilt claim <path>) or pass --include-unclaimed.",
+        );
+      }
       if (selection.skippedBinary.length) {
         fail(
           "nothing committable at line level, and these binary/too-large files are unclaimed: " +
@@ -723,6 +759,13 @@ program
         pc.yellow("  ⚠ Skipped binary/too-large files nobody claimed: ") +
           selection.skippedBinary.join(", ") +
           pc.yellow("\n    (claim a file to commit it whole: quilt claim <path>)\n"),
+      );
+    }
+    if (selection.skippedUnowned.length) {
+      process.stdout.write(
+        pc.yellow("  ⚠ Left out new files you never claimed or edited: ") +
+          selection.skippedUnowned.join(", ") +
+          pc.yellow("\n    (if they're yours: quilt claim <path>, or --include-unclaimed; else ignore)\n"),
       );
     }
     if (selection.blockedFiles.length) {

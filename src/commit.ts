@@ -34,6 +34,10 @@ export interface Selection {
   /** Binary/too-large files skipped because nobody claimed them. Surfaced
    * LOUDLY: a silently dropped lockfile is a broken build for everyone. */
   skippedBinary: string[];
+  /** NEW untracked files skipped because the actor never claimed or captured
+   * them (inference alone made them "owned") — surfaced so a default commit
+   * never silently attaches a file the actor didn't touch. */
+  skippedUnowned: string[];
   hasMixed: boolean;
   totalAdded: number;
   totalRemoved: number;
@@ -224,6 +228,22 @@ export function selectOwned(
      * lets a binary/too-large file (a lockfile, an asset) ride into the commit
      * whole, since no line-level split exists for it. */
     pathClaimedBySelf?: (path: string) => boolean;
+    /** an explicit repo-relative path allow-list: commit ONLY these files of
+     * yours (a hard filter, not a hint). Empty/undefined = all your owned
+     * files. Lets an actor scope its commit and never sweep an unnamed file. */
+    onlyPaths?: Set<string>;
+    /** true if the actor has CAPTURED authorship for this path (a hook/MCP
+     * edit recorded it). With `othersActive`, the signal that separates a file
+     * the actor really produced from one inference merely swept onto it. */
+    pathCapturedBySelf?: (path: string) => boolean;
+    /** true if any OTHER actor holds a live claim (a CONTESTED tree). Only then
+     * is an inference-only new file suspect: another actor is around, so an
+     * untracked file the actor never claimed or captured could be theirs (or an
+     * orphan) — inference may have attributed it while the tree was briefly
+     * uncontested, and that attribution persists. Solo trees keep the simple
+     * rule: a new file in your tree is yours. Mirrors the engine's own
+     * contested-tree inference gate. */
+    othersActive?: boolean;
   } = {},
 ): Selection {
   const actor = model.activeActorId;
@@ -232,12 +252,17 @@ export function selectOwned(
   const blockedFiles: string[] = [];
   const wholeFiles: string[] = [];
   const skippedBinary: string[] = [];
+  const skippedUnowned: string[] = [];
   let hasMixed = false;
   let totalAdded = 0;
   let totalRemoved = 0;
 
   for (const file of model.files) {
     if (actor === null) continue;
+    // An explicit path filter is a HARD boundary: a named commit touches only
+    // the named files, so an unnamed change (an orphan untracked file, another
+    // actor's leftover) can never ride along.
+    if (opts.onlyPaths && !opts.onlyPaths.has(file.path)) continue;
     if (file.binary) {
       // No line-level ownership exists for a binary or too-large file
       // (package-lock.json is the canonical case). A claim is the ownership
@@ -246,6 +271,22 @@ export function selectOwned(
       // silent skip and shipped a broken build.
       if (opts.pathClaimedBySelf?.(file.path)) wholeFiles.push(file.path);
       else skippedBinary.push(file.path);
+      continue;
+    }
+    // In a CONTESTED tree (another actor holds a live claim), a NEW untracked
+    // file with no ownership signal beyond inference (never claimed, never
+    // captured) is not committed by default — it could be an orphan or another
+    // actor's leftover, and sweeping it in is how `commit --mine` silently
+    // attaches a file the actor never touched. Included once claimed or with
+    // --include-unclaimed, and surfaced so the skip is never silent. Solo trees
+    // are exempt: with nobody else around, a new file in your tree is yours.
+    const inferenceOnlyNewFile =
+      (opts.othersActive ?? false) &&
+      file.isNew &&
+      !(opts.pathClaimedBySelf?.(file.path) ?? false) &&
+      !(opts.pathCapturedBySelf?.(file.path) ?? false);
+    if (inferenceOnlyNewFile && !(opts.includeMixed ?? false)) {
+      skippedUnowned.push(file.path);
       continue;
     }
     const includeMixedHere =
@@ -305,6 +346,7 @@ export function selectOwned(
     blockedFiles,
     wholeFiles,
     skippedBinary,
+    skippedUnowned,
     hasMixed,
     totalAdded,
     totalRemoved,
