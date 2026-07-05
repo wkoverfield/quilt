@@ -362,6 +362,16 @@ export function listWaiters(store: Store, now: number): Waiter[] {
   return (store.readClaims().waiters ?? []).filter((w) => w.expiresAt > now);
 }
 
+/** The actors queued behind `claim` (waiting on a target it overlaps) — so a
+ * holder can SEE who's waiting on it and commit promptly, instead of releasing
+ * blind. Excludes the claim's own actor. */
+export function waitersBehind(store: Store, claim: Claim, now: number): string[] {
+  const target: ClaimTarget = { path: claim.path, symbol: claim.symbol, dir: claim.dir };
+  return listWaiters(store, now)
+    .filter((w) => w.actor !== claim.actor && overlaps(target, w))
+    .map((w) => w.actor);
+}
+
 /**
  * Release an actor's claims. With no targets, release ALL of the actor's claims.
  * A target naming a file (no symbol) releases every claim the actor holds on

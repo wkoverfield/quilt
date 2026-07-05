@@ -17,7 +17,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pendingGrants, markGrantsNotified } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
@@ -128,15 +128,43 @@ function printSetupStep(step: SetupStep, dryRun: boolean): void {
   process.stdout.write(verb + `${step.action} ${step.file} — ${step.detail}\n`);
 }
 
-/** Print active advisory claims below a status view. */
-function printClaims(store: Store): void {
-  const claims = listClaims(store, Date.now());
+/** Print active advisory claims below a status view. When `forActor` is set,
+ * annotate that actor's own claims with how many agents are queued behind them
+ * — so a holder sees the pressure and commits promptly instead of releasing
+ * blind. */
+function printClaims(store: Store, forActor?: string | null): void {
+  const now = Date.now();
+  const claims = listClaims(store, now);
   if (claims.length === 0) return;
   process.stdout.write(pc.dim(pc.bold("  Claimed (reserved for editing):\n")));
   for (const c of claims) {
-    process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}\n`);
+    let tail = pc.dim(c.actor);
+    if (forActor && c.actor === forActor) {
+      const behind = waitersBehind(store, c, now);
+      if (behind.length) {
+        tail += pc.yellow(`  ← ${behind.length} waiting (${behind.join(", ")}) — commit to hand off`);
+      }
+    }
+    process.stdout.write(`    ${claimLabel(c)}   ${tail}${c.viaQueue ? pc.dim("  (from queue)") : ""}\n`);
   }
   process.stdout.write("\n");
+}
+
+/** Surface any claims auto-granted off the queue for `actorId` since it last
+ * looked, and mark them announced (shout exactly once). Used by both `status`
+ * and `claim`, so an agent discovers its grant on either natural check-back —
+ * not only via status. Returns the grant labels (for JSON callers). */
+function surfaceGrants(store: Store, actorId: string | null): string[] {
+  if (!actorId) return [];
+  const grants = pendingGrants(store, actorId, Date.now());
+  if (grants.length === 0) return [];
+  process.stdout.write(pc.green(pc.bold("  ✓ Granted while you waited:\n")));
+  for (const c of grants) {
+    process.stdout.write(`    ${claimLabel(c)}${c.intent ? pc.dim(`  (${c.intent})`) : ""}\n`);
+  }
+  process.stdout.write(pc.dim("    it's yours now — re-read the file and layer your change on top.\n\n"));
+  markGrantsNotified(store, actorId, Date.now());
+  return grants.map((c) => claimLabel(c));
 }
 
 /** Print any preserved (clobbered) work below a status view. */
@@ -369,8 +397,8 @@ program
       : [];
     // Async claims: surface anything auto-granted off the queue since this
     // actor last looked, then mark it announced so it shouts exactly once.
-    const grants = ctx.actorId ? pendingGrants(store, ctx.actorId, Date.now()) : [];
     if (opts.json) {
+      const grants = ctx.actorId ? pendingGrants(store, ctx.actorId, Date.now()) : [];
       process.stdout.write(
         JSON.stringify(
           {
@@ -385,20 +413,12 @@ program
       if (ctx.actorId && grants.length) markGrantsNotified(store, ctx.actorId, Date.now());
       return;
     }
-    if (grants.length) {
-      process.stdout.write(
-        pc.green(pc.bold("  ✓ Granted while you waited:\n")));
-      for (const c of grants) {
-        process.stdout.write(`    ${claimLabel(c)}${c.intent ? pc.dim(`  (${c.intent})`) : ""}\n`);
-      }
-      process.stdout.write(pc.dim("    it's yours now — re-read the file and layer your change on top.\n\n"));
-      if (ctx.actorId) markGrantsNotified(store, ctx.actorId, Date.now());
-    }
+    surfaceGrants(store, ctx.actorId);
     process.stdout.write(renderStatus(model, shortHead(store.paths.repoRoot)));
     if (watcherRunning(store)) {
       process.stdout.write(pc.dim("  watching: live (quilt watch)\n\n"));
     }
-    printClaims(store);
+    printClaims(store, ctx.actorId);
     if (warnings.length) {
       process.stdout.write(pc.yellow(pc.bold("  Dependency heads-up:\n")));
       for (const w of warnings) {
@@ -828,6 +848,10 @@ program
 
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     if (opts.wait !== undefined && opts.queue) fail("--wait and --queue are opposite strategies; pick one (block, or register and keep working).");
+    // Retrying a claim is a natural check-back for a queued grant — surface it
+    // here too, so an agent that re-claims (instead of running status) still
+    // learns it was auto-granted off the queue.
+    if (!opts.json) surfaceGrants(store, ctx.actorId);
     let results = acquireClaims(
       store,
       ctx.actorId!,

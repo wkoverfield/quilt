@@ -162,3 +162,29 @@ test("queuePosition counts a whole-file waiter ahead of a later symbol waiter (m
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("holder-side visibility: a holder's status shows who's queued behind it", () => {
+  const dir = makeRepo();
+  try {
+    q(dir, ["claim", "shared.js", "--intent", "A holds"], "A");
+    q(dir, ["claim", "shared.js", "--queue", "--intent", "B waits"], "B");
+    const s = q(dir, ["status"], "A");
+    assert.match(s.stdout, /1 waiting \(B\)/, "the holder sees the waiter and is told to commit to hand off");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a queued grant surfaces on a plain claim RETRY, not only via status", () => {
+  const dir = makeRepo();
+  try {
+    q(dir, ["claim", "shared.js"], "A");
+    q(dir, ["claim", "shared.js", "--queue"], "B");
+    q(dir, ["release", "shared.js"], "A"); // auto-grants to B
+    // B never runs `status` — it just retries the claim, and learns it's theirs.
+    const r = q(dir, ["claim", "shared.js"], "B");
+    assert.match(r.stdout, /Granted while you waited/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

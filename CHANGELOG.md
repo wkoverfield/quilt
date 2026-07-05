@@ -18,6 +18,8 @@ All notable changes to Quilt are documented here. The format is based on
   idle grant re-promotes the next waiter, and abandoned interest expires. The
   `quilt fleet` view shows the queue. No daemon — auto-grant happens on the next
   reconcile any actor triggers.
+  - The holder SEES who's queued behind it (`quilt status`: "← 1 waiting (B) — commit to hand off"), so it hands off promptly instead of releasing blind.
+  - A grant is discoverable on either natural check-back — `quilt status` OR a plain `claim` retry both surface "Granted while you waited" (not status-only).
 - **Global `--as <id>` flag**: a per-command way to set your actor
   (`quilt --as builder-a claim …`), the ergonomic alternative to prefixing
   `QUILT_ACTOR=<id>` on every call. An explicit env var still wins.
