@@ -99,11 +99,16 @@ rather than error, so if native edits aren't being captured, check that
 
 The dogfood fleets earned these rules the hard way:
 
-1. **Claim whole files BEFORE editing.** Attribution is decided at edit time
-   and is never retroactive. A whole-file claim placed before you edit binds
-   your external (editor-tool) edits to your actor id; claiming after the
-   fact does not re-attribute what you already wrote. `quilt_edit` /
-   `quilt_write` are the always-bound path regardless of claims.
+1. **Captured edits need no ceremony; external edits need a claim FIRST.**
+   Edits that flow through the capture layer (Claude Code's native tools with
+   the hooks installed, or `quilt_edit`/`quilt_write`) are attributed
+   automatically — for work nobody else touches, edit and `commit_mine`, no
+   claims required. Everything else (bash, scripts, codegen) is invisible to
+   capture: a whole-file claim placed BEFORE the edit is what binds it to
+   you. Attribution is decided at edit time and never retroactive — claiming
+   after the fact does not re-attribute what you already wrote. Claims are
+   also how you protect code from other actors while you work, whichever way
+   you edit.
 2. **Symbol claims are for sharing one file, and they must be real.** A
    symbol that isn't in the file is DENIED (with a near-miss suggestion) —
    a granted claim that binds nothing would protect nothing. Adding a new
@@ -114,10 +119,13 @@ The dogfood fleets earned these rules the hard way:
 4. **`commit_mine` auto-releases** the committed files' claims. The loop is
    claim → edit → commit_mine; a trailing `release` is only for abandoning
    work (its response now says this instead of a bare `released: 0`).
-5. **Claims renew while you're active.** Any quilt call refreshes your
-   claims, so they can't silently lapse mid-task. A denial tells you when
-   the holder's claim expires, so pace retries against that instead of
-   guessing.
+5. **Claims renew while you're active, and denials are waitable.** Any quilt
+   call refreshes your claims, so they can't silently lapse mid-task. A
+   denial tells you who holds the code, what they said they're doing, and
+   when their lease lapses — and instead of polling, pass `wait` on the
+   claim (CLI `--wait`) to block until the holder releases (commit
+   auto-release included) or their lease expires, then re-read and layer on
+   top.
 6. **Shared-tree proof discipline.** Repo-wide gates (tsc, tests) can fail
    mid-wave because of OTHER actors' in-flight work — that's the price of
    same-checkout visibility (which also means codegen and cross-layer types

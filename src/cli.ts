@@ -17,7 +17,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
@@ -769,7 +769,8 @@ program
   .option("--json", "emit JSON")
   .option("--intent <text>", "a short why for this claim, shown to anyone it blocks")
   .option("--creating", "allow symbol claims for symbols you are ABOUT TO ADD (they bind at write time)")
-  .action((paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean }) => {
+  .option("--wait [seconds]", "block until denied targets free up (holder releases, commits, or their lease lapses); default window 600s")
+  .action(async (paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean; wait?: string | boolean }) => {
     const store = requireStore();
     const ctx = activeContext(store);
 
@@ -792,7 +793,7 @@ program
     }
 
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
-    const results = acquireClaims(
+    let results = acquireClaims(
       store,
       ctx.actorId!,
       ctx.session?.id ?? null,
@@ -801,12 +802,46 @@ program
       opts.intent,
       { creating: opts.creating },
     );
+    let waitNote = "";
+    const heldNow = results.filter((r) => !r.granted && r.holder);
+    const fatalNow = results.some((r) => !r.granted && !r.holder);
+    if (opts.wait !== undefined && heldNow.length > 0 && !fatalNow) {
+      // The blocking-wait primitive: instead of the agent blind-polling, hold
+      // here and return the moment the holders release (commit auto-release
+      // included) or the window elapses.
+      const waitSec = typeof opts.wait === "string" ? Number(opts.wait) : 600;
+      if (!Number.isFinite(waitSec) || waitSec <= 0) fail(`invalid --wait value "${opts.wait}"`);
+      if (!opts.json) {
+        for (const r of heldNow) {
+          const t = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
+          process.stdout.write(
+            pc.yellow("  … waiting ") + `${t} ${pc.dim(`(held by ${r.holder}`)}` +
+              pc.dim(r.holderIntent ? ` — ${r.holderIntent})` : ")") + "\n",
+          );
+        }
+      }
+      const outcome = await acquireClaimsWait(
+        store,
+        ctx.actorId!,
+        ctx.session?.id ?? null,
+        paths,
+        opts.intent,
+        { creating: opts.creating, waitMs: waitSec * 1000 },
+      );
+      results = outcome.results;
+      waitNote = outcome.timedOut
+        ? `gave up after ${Math.round(outcome.waitedMs / 1000)}s — still held`
+        : outcome.waitedMs > 500
+          ? `freed up after ${Math.round(outcome.waitedMs / 1000)}s`
+          : "";
+    }
     // Push-awareness: warn if anything just claimed depends on a symbol another
     // actor is currently changing, so the actor learns at reservation time.
     const warnings = dependencyWarnings(store, ctx.actorId!, Date.now());
     if (opts.json) {
       process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
     } else {
+      if (waitNote) process.stdout.write(pc.dim(`  (${waitNote})\n`));
       for (const r of results) {
         const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {

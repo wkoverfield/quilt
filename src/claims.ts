@@ -238,6 +238,65 @@ export function acquireClaims(
  * A target naming a file (no symbol) releases every claim the actor holds on
  * that file (whole-file and any symbol claims).
  */
+export interface WaitOutcome {
+  /** the final acquire pass's results. */
+  results: ClaimResult[];
+  /** how long this call actually blocked. */
+  waitedMs: number;
+  /** true when the wait window elapsed with holder-denials still standing. */
+  timedOut: boolean;
+}
+
+/**
+ * `acquireClaims`, but BLOCK on holder-denials until they free up or `waitMs`
+ * elapses — the primitive the dogfood fleet was missing. Without it a denied
+ * agent's only strategy was blind polling: "get denied, guess when to retry,
+ * hope." This waits server-side and returns the moment the holder releases
+ * (commit auto-release included), pacing polls against the holder's lease
+ * expiry so a dead holder costs at most one lease.
+ *
+ * Only HOLDER denials are waited on. A denial that waiting can't fix — a
+ * target outside the repo, a symbol that doesn't exist — returns immediately,
+ * so a typo fails fast instead of hanging for the full window.
+ *
+ * Each retry re-runs the full acquire, which also refreshes the TTL on the
+ * caller's already-granted targets and keeps its blocked-on record fresh in
+ * the fleet view: a waiting agent stays visibly waiting.
+ */
+export async function acquireClaimsWait(
+  store: Store,
+  actorId: string,
+  sessionId: string | null,
+  rawPaths: string[],
+  intent: string | undefined,
+  opts: { creating?: boolean; waitMs: number; pollMs?: number },
+): Promise<WaitOutcome> {
+  const pollMs = opts.pollMs ?? 2000;
+  const start = Date.now();
+  for (;;) {
+    const now = Date.now();
+    const results = acquireClaims(store, actorId, sessionId, rawPaths, now, intent, {
+      creating: opts.creating,
+    });
+    const waitable = results.filter((r) => !r.granted && r.holder);
+    const fatal = results.some((r) => !r.granted && !r.holder);
+    if (waitable.length === 0 || fatal) {
+      return { results, waitedMs: now - start, timedOut: false };
+    }
+    const elapsed = now - start;
+    if (elapsed >= opts.waitMs) {
+      return { results, waitedMs: elapsed, timedOut: true };
+    }
+    // Sleep until the next poll — or the earliest holder lease expiry, or the
+    // end of our window, whichever comes first. Floor keeps a tight loop out.
+    const soonestLapse = Math.min(
+      ...waitable.map((r) => (r.holderExpiresAt ?? now + pollMs) - now),
+    );
+    const sleep = Math.max(250, Math.min(pollMs, soonestLapse, opts.waitMs - elapsed));
+    await new Promise((resolve) => setTimeout(resolve, sleep));
+  }
+}
+
 export interface ReleaseResult {
   /** live claims actually released by this call. */
   released: number;

@@ -4,6 +4,31 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`claim --wait` (MCP: `wait` seconds): block until denied targets free
+  up.** The verification fleet's #1 friction: after a denial, retrying was
+  blind polling — "get denied, guess when to retry, hope." The claim call can
+  now hold until the holder releases (commit auto-release included) or their
+  lease lapses, pacing itself against the lease expiry, and returns granted
+  the moment the way is clear. Denials waiting can't fix (bad path, missing
+  symbol) still fail fast. Each retry also refreshes the waiter's own claims
+  and keeps its blocked-on state fresh in the fleet view.
+
+### Changed
+
+- Positioning and protocol docs now lead with the shared-checkout reality:
+  captured edits need no claims at all for uncontested work (edit, then
+  `commit_mine`); claims are for binding UNCAPTURABLE edits (bash, codegen)
+  and for protecting code you don't want touched. The coordination snippet,
+  orchestrators guide, and README problem statement all updated — the
+  everyday value is surgical commits on one environment, not contention
+  ceremony.
+- `commit --mine` counts whole-staged binary files in its reported file
+  count (a pure-binary commit no longer prints "Committed 0 file(s)").
+
 ## [0.4.2] - 2026-07-04
 
 ### Fixed

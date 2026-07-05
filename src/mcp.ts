@@ -7,7 +7,7 @@ import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
 import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
 import { VERSION } from "./version.js";
@@ -310,18 +310,45 @@ export async function runMcpServer(store: Store): Promise<void> {
         paths: z.array(z.string()),
         intent: z.string().optional().describe("a short why for this claim, e.g. the ticket/task"),
         creating: z.boolean().optional().describe("allow symbol claims for symbols you are ABOUT TO ADD to an existing file (they bind at write time). Without it, a symbol missing from the file is denied."),
+        wait: z.number().optional().describe("seconds to BLOCK waiting for holder-denied targets to free up (holder releases, commits, or their lease lapses) instead of polling yourself. Returns as soon as everything grants. Capped at 120 per call — re-call to keep waiting. Denials that waiting can't fix (bad path, missing symbol) return immediately."),
       },
     },
-    async ({ actor, paths, intent, creating }) => {
+    async ({ actor, paths, intent, creating, wait }) => {
       const actorId = resolveActor(actor, true)!;
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
-      const results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating });
+      let results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating });
+      let waited: { waitedMs: number; timedOut: boolean } | undefined;
+      const heldNow = results.some((r) => !r.granted && r.holder);
+      const fatalNow = results.some((r) => !r.granted && !r.holder);
+      if (wait && wait > 0 && heldNow && !fatalNow) {
+        // Block server-side instead of making the agent poll. Capped per call
+        // so a long wait can't trip the MCP client's tool timeout; the agent
+        // re-calls to extend (each re-call also refreshes its own claims).
+        const waitMs = Math.min(wait, 120) * 1000;
+        const outcome = await acquireClaimsWait(store, actorId, sessionId, paths, intent, {
+          creating,
+          waitMs,
+        });
+        results = outcome.results;
+        waited = { waitedMs: outcome.waitedMs, timedOut: outcome.timedOut };
+      }
       // Push-awareness at reservation time: tell the agent if anything it just
       // claimed depends on a symbol another actor is currently changing.
       // (A symbol claim that names nothing is DENIED with reason
       // symbol-not-found + a suggestion — it used to be granted-but-non-binding,
       // which produced a silent partial commit in the field.)
-      return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });
+      return ok({
+        results,
+        ...(waited
+          ? {
+              waitedMs: waited.waitedMs,
+              ...(waited.timedOut
+                ? { note: "wait window elapsed with targets still held — re-call with wait to keep waiting, or work elsewhere" }
+                : {}),
+            }
+          : {}),
+        dependencyWarnings: dependencyWarnings(store, actorId, Date.now()),
+      });
     },
   );
 
