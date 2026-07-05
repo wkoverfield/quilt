@@ -113,3 +113,33 @@ test("claim --wait grants when the holder's lease lapses (dead holder costs one 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("claim a.ts --wait b.ts fails LOUDLY — the optional-value flag must not swallow a path", () => {
+  const dir = makeRepo();
+  try {
+    writeFileSync(join(dir, "b.js"), "x\n");
+    // Commander parses b.js as the --wait value. Before the eager validation
+    // this exited 0 having claimed only shared.js — the agent believed it held
+    // both files. Now it must refuse before claiming ANYTHING.
+    const r = quilt(dir, ["claim", "shared.js", "--wait", "b.js"], "A");
+    assert.notEqual(r.status, 0, "a swallowed path is an error, not a success");
+    assert.match(r.stderr, /b\.js/, "the error names the swallowed value");
+    assert.match(r.stderr, /--wait/, "the error explains which flag ate it");
+    const list = quilt(dir, ["claim"], "A");
+    assert.ok(!list.stdout.includes("shared.js"), "nothing was claimed — the command failed whole");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("claim --wait with an explicit numeric value still works (--wait 1 times out cleanly)", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["claim", "shared.js", "--intent", "holding"], "A");
+    const r = quilt(dir, ["claim", "shared.js", "--wait", "1"], "B");
+    assert.notEqual(r.status, 0, "still held after the window: denial");
+    assert.match(r.stdout, /gave up after/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

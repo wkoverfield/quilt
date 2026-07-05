@@ -17,7 +17,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
@@ -164,7 +164,7 @@ function surfaceGrants(store: Store, actorId: string | null): string[] {
     process.stdout.write(`    ${claimLabel(c)}${c.intent ? pc.dim(`  (${c.intent})`) : ""}\n`);
   }
   process.stdout.write(pc.dim("    it's yours now — re-read the file and layer your change on top.\n\n"));
-  markGrantsNotified(store, actorId, Date.now());
+  markGrantsNotified(store, actorId, Date.now(), grants);
   return grants.map((c) => claimLabel(c));
 }
 
@@ -182,13 +182,21 @@ function printClobbers(store: Store): void {
 }
 
 /** Normalize commit/preview path args to a repo-relative allow-list, or
- * undefined when none were given (commit all your owned files). */
+ * undefined when none were given (commit all your owned files). Entries name a
+ * file or a directory prefix. `.`/the repo root means "everything" (""). A path
+ * that escapes the repo is a hard error — silently dropping it would shrink
+ * the commit with no signal. */
 function onlyPathsFrom(store: Store, paths: string[] | undefined): Set<string> | undefined {
   if (!paths || paths.length === 0) return undefined;
   const set = new Set<string>();
   for (const p of paths) {
+    if (p === "." || resolve(store.paths.repoRoot, p) === resolve(store.paths.repoRoot)) {
+      set.add("");
+      continue;
+    }
     const rel = repoRelative(store.paths.repoRoot, p);
-    if (rel) set.add(rel);
+    if (rel === null) fail(`path "${p}" is outside this repository`);
+    set.add(rel!);
   }
   return set;
 }
@@ -202,6 +210,7 @@ function ownershipSignals(store: Store, actorId: string) {
   return {
     pathClaimedByOther: pathsClaimedByOthers(store, actorId, now),
     pathClaimedBySelf: pathsClaimedBySelf(store, actorId, now),
+    pathClaimedBySelfAny: pathsClaimedBySelfAny(store, actorId, now),
     pathCapturedBySelf: capturedBySelf(store, actorId),
     othersActive: othersHoldLiveClaims(store, actorId, now),
   };
@@ -218,7 +227,7 @@ program
   // it never collides with `start --actor`. It just seeds the same env the rest
   // of the resolution already reads, so it composes with sessions and hooks
   // unchanged. An explicit env var still wins if both are set.
-  .option("--as <id>", "act as this actor (same as QUILT_ACTOR=<id>, per command)")
+  .option("--as <id>", "act as this actor for this command (sets QUILT_ACTOR; an explicit QUILT_ACTOR env var wins)")
   .hook("preAction", (thisCommand) => {
     const as = thisCommand.opts().as as string | undefined;
     if (as && !process.env.QUILT_ACTOR) process.env.QUILT_ACTOR = as;
@@ -437,7 +446,7 @@ program
           2,
         ) + "\n",
       );
-      if (ctx.actorId && grants.length) markGrantsNotified(store, ctx.actorId, Date.now());
+      if (ctx.actorId && grants.length) markGrantsNotified(store, ctx.actorId, Date.now(), grants);
       return;
     }
     surfaceGrants(store, ctx.actorId);
@@ -642,6 +651,13 @@ program
         ),
       );
     }
+    if (selection.skippedUnowned.length) {
+      process.stdout.write(
+        pc.yellow("  ⚠ Would leave out new files you never claimed or edited: ") +
+          selection.skippedUnowned.join(", ") +
+          pc.yellow("\n    (if they're yours: quilt claim <path>, or --include-unclaimed; else ignore)\n\n"),
+      );
+    }
   });
 
 program
@@ -715,6 +731,15 @@ program
             "  (no changes were made)\n\n",
         ),
       );
+      // The dry run is the verification surface — a skip invisible here defeats
+      // the point of previewing.
+      if (selection.skippedUnowned.length) {
+        process.stdout.write(
+          pc.yellow("  ⚠ Would leave out new files you never claimed or edited: ") +
+            selection.skippedUnowned.join(", ") +
+            pc.yellow("\n    (if they're yours: quilt claim <path>, or --include-unclaimed; else ignore)\n"),
+        );
+      }
       return;
     }
 
@@ -891,6 +916,17 @@ program
 
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     if (opts.wait !== undefined && opts.queue) fail("--wait and --queue are opposite strategies; pick one (block, or register and keep working).");
+    // Validate --wait EAGERLY, not just when a target turns out to be held.
+    // `--wait <seconds>` is an optional-value flag, so `claim a.ts --wait b.ts`
+    // parses b.ts as the wait value — without this check the claim on b.ts is
+    // silently swallowed and the command exits 0 having claimed only a.ts.
+    const waitSec = typeof opts.wait === "string" ? Number(opts.wait) : opts.wait === true ? 600 : undefined;
+    if (opts.wait !== undefined && (!Number.isFinite(waitSec!) || waitSec! <= 0)) {
+      fail(
+        `invalid --wait value "${opts.wait}" — expected seconds. ` +
+          `If "${opts.wait}" was meant as a path, put --wait AFTER the paths or pass --wait=<seconds>.`,
+      );
+    }
     // Retrying a claim is a natural check-back for a queued grant — surface it
     // here too, so an agent that re-claims (instead of running status) still
     // learns it was auto-granted off the queue.
@@ -905,14 +941,13 @@ program
       { creating: opts.creating, queue: opts.queue },
     );
     let waitNote = "";
+    let waited: { waitedMs: number; timedOut: boolean } | undefined;
     const heldNow = results.filter((r) => !r.granted && r.holder);
     const fatalNow = results.some((r) => !r.granted && !r.holder);
     if (opts.wait !== undefined && heldNow.length > 0 && !fatalNow) {
       // The blocking-wait primitive: instead of the agent blind-polling, hold
       // here and return the moment the holders release (commit auto-release
-      // included) or the window elapses.
-      const waitSec = typeof opts.wait === "string" ? Number(opts.wait) : 600;
-      if (!Number.isFinite(waitSec) || waitSec <= 0) fail(`invalid --wait value "${opts.wait}"`);
+      // included) or the window elapses. (waitSec validated eagerly above.)
       if (!opts.json) {
         for (const r of heldNow) {
           const t = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
@@ -928,9 +963,10 @@ program
         ctx.session?.id ?? null,
         paths,
         opts.intent,
-        { creating: opts.creating, waitMs: waitSec * 1000 },
+        { creating: opts.creating, waitMs: waitSec! * 1000 },
       );
       results = outcome.results;
+      waited = { waitedMs: outcome.waitedMs, timedOut: outcome.timedOut };
       waitNote = outcome.timedOut
         ? `gave up after ${Math.round(outcome.waitedMs / 1000)}s — still held`
         : outcome.waitedMs > 500
@@ -941,7 +977,16 @@ program
     // actor is currently changing, so the actor learns at reservation time.
     const warnings = dependencyWarnings(store, ctx.actorId!, Date.now());
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
+      // Wait outcome rides in JSON too — a script must be able to tell a
+      // timeout (still held, retryable) from an instant denial. Same shape the
+      // MCP surface returns.
+      process.stdout.write(
+        JSON.stringify(
+          { results, warnings, ...(waited ? { waitedMs: waited.waitedMs, timedOut: waited.timedOut } : {}) },
+          null,
+          2,
+        ) + "\n",
+      );
     } else {
       if (waitNote) process.stdout.write(pc.dim(`  (${waitNote})\n`));
       for (const r of results) {

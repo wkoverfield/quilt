@@ -26,17 +26,17 @@ quilt setup     # wire Quilt into your repo (Claude Code, Cursor, or plain git)
 ## The problem
 
 You want your agents in ONE checkout: one `node_modules`, one build, one dev
-server, one environment to keep working — not a worktree per agent, each with
+server, one environment to keep working, not a worktree per agent, each with
 its own install and its own drift. But on a shared checkout, plain git bites
 even when agents work on completely different things: the first `git commit -am`
 sweeps everyone else's uncommitted files into one blob, codegen and lockfile
 churn get credited to whoever committed last, and two agents occasionally do
-land on the same line — where one silently overwrites the other. None of that
+land on the same line, where one silently overwrites the other. None of that
 requires agents to be working on the same task. It's just what a shared
 checkout does by default.
 
 Quilt makes the shared checkout safe. Every agent commits exactly its own
-lines and nothing else — disjoint work stays disjoint all the way into
+lines and nothing else: disjoint work stays disjoint all the way into
 history, with no ceremony. And when two agents genuinely want the same code,
 that becomes a coordinated handoff instead of a silent loss. It holds as you
 add agents.
@@ -121,8 +121,8 @@ command list.
 ## Why not worktrees?
 
 A worktree per agent is the usual answer, and for fully independent tasks it
-works. But every worktree is another environment to build — another install,
-another build cache, another dev server — and isolation just moves the
+works. But every worktree is another environment to build (another install,
+another build cache, another dev server) and isolation just moves the
 collision to merge time. Those costs grow with the number of agents; the whole
 point of a shared checkout is paying for the environment once.
 

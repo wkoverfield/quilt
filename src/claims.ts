@@ -93,6 +93,19 @@ function overlaps(a: ClaimTarget, b: { path: string; symbol?: string; dir?: bool
   return a.symbol === b.symbol;
 }
 
+/** Does an existing claim `c` FULLY COVER target `t`? Strictly one-directional,
+ * unlike overlaps(): a symbol claim overlaps its file's whole-file target but
+ * does not cover it. The distinction matters in promoteWaiters — "already
+ * satisfied" means the actor holds AT LEAST what it queued for, or the queued
+ * interest dies while the actor still lacks the wider reservation. */
+function covers(c: Claim, t: ClaimTarget): boolean {
+  if (c.dir) return underDir(c.path, t.path);
+  if (t.dir) return false; // only a same-or-ancestor dir claim covers a dir target
+  if (c.path !== t.path) return false;
+  if (c.symbol === undefined) return true; // whole file covers the file and any symbol in it
+  return t.symbol !== undefined && c.symbol === t.symbol;
+}
+
 /**
  * Acquire advisory claims for an actor. A reservation that overlaps one held by
  * a different (live) actor is denied; one the actor already holds (or that has
@@ -127,6 +140,12 @@ export function acquireClaims(
     file.claims = active(file.claims, now);
     file.blocks = (file.blocks ?? []).filter((b) => b.expiresAt > now);
     file.waiters = (file.waiters ?? []).filter((w) => w.expiresAt > now);
+    // The queue outranks a walk-up. Acquiring is also the moment expired leases
+    // get pruned, so without this a direct claimant would win a just-freed
+    // target ahead of every waiter that was told "you're next" — promote the
+    // queue FIRST, then evaluate this claim against the post-promotion state
+    // (a promoted waiter now holds the target, so the walk-up is denied/queued).
+    promoteWaiters(file, now);
     const sameTarget = (b: Block, t: ClaimTarget) =>
       b.actor === actorId && b.path === t.path && b.symbol === t.symbol;
     const sameWaiter = (w: Waiter, t: ClaimTarget) =>
@@ -303,14 +322,29 @@ export function promoteWaiters(file: ClaimsFile, now: number, sessionFallback: s
   const remaining: Waiter[] = [];
   for (const w of waiters) {
     const target: ClaimTarget = { path: w.path, symbol: w.symbol, dir: w.dir };
-    // Already satisfied — the actor claimed it directly while waiting.
-    if (file.claims.some((c) => c.actor === w.actor && overlaps(target, c))) continue;
+    // Already satisfied — the actor holds at least what it queued for (it
+    // re-claimed directly while waiting). COVERS, not overlaps: holding
+    // deals.js#foo must not swallow a queued interest in whole-file deals.js.
+    if (file.claims.some((c) => c.actor === w.actor && covers(c, target))) continue;
     // Still held by someone else — stays queued (and holds its FIFO slot).
-    if (file.claims.some((c) => c.actor !== w.actor && overlaps(target, c))) {
+    // A still-queued EARLIER waiter reserves its target too: queuePosition told
+    // a later overlapping waiter it was behind this one, so promoting the later
+    // one past it (whole-file waiter blocked by one symbol holder while a fresh
+    // symbol waiter slips through the free half) would starve the head of the
+    // queue under churn. `remaining` holds exactly the earlier, still-blocked
+    // waiters at this point in the oldest-first walk.
+    if (
+      file.claims.some((c) => c.actor !== w.actor && overlaps(target, c)) ||
+      remaining.some((r) => r.actor !== w.actor && overlaps(target, r))
+    ) {
       remaining.push(w);
       continue;
     }
-    // Free: grant it, off the queue.
+    // Free: grant it, off the queue. The lease lives at least as long as the
+    // interest window the actor was promised — a grant issued while the actor
+    // is heads-down elsewhere must not silently lapse before the waiter TTL it
+    // replaced would have (granted at t+1m, actor back at t+40m, still theirs).
+    const grantExpiry = Math.max(now + CLAIM_TTL_MS, w.expiresAt);
     const claim: Claim = {
       path: w.path,
       symbol: w.symbol,
@@ -318,8 +352,8 @@ export function promoteWaiters(file: ClaimsFile, now: number, sessionFallback: s
       actor: w.actor,
       session: w.session ?? sessionFallback,
       acquiredAt: new Date(now).toISOString(),
-      expiresAt: now + CLAIM_TTL_MS,
-      expiresAtIso: new Date(now + CLAIM_TTL_MS).toISOString(),
+      expiresAt: grantExpiry,
+      expiresAtIso: new Date(grantExpiry).toISOString(),
       intent: w.intent,
       viaQueue: true,
     };
@@ -342,13 +376,19 @@ export function pendingGrants(store: Store, actorId: string, now: number): Claim
   );
 }
 
-/** Mark this actor's un-announced queued grants as surfaced. Locked. */
-export function markGrantsNotified(store: Store, actorId: string, now: number): void {
+/** Mark queued grants as surfaced. Pass the grants that were ACTUALLY shown
+ * (the pendingGrants read the caller just printed/returned) — marking "all
+ * un-notified" instead would stamp a grant promoted between that read and this
+ * write, and it would never be announced anywhere. Locked. */
+export function markGrantsNotified(store: Store, actorId: string, now: number, shown: Claim[]): void {
+  if (shown.length === 0) return;
+  const key = (c: Claim) => `${c.path} ${c.symbol ?? ""} ${c.dir ? "d" : ""} ${c.acquiredAt}`;
+  const shownKeys = new Set(shown.map(key));
   store.withLock(() => {
     const file = store.readClaims();
     let changed = false;
     for (const c of file.claims) {
-      if (c.actor === actorId && c.viaQueue && !c.notifiedAt) {
+      if (c.actor === actorId && c.viaQueue && !c.notifiedAt && shownKeys.has(key(c))) {
         c.notifiedAt = now;
         changed = true;
       }
@@ -485,6 +525,21 @@ export function releaseClaims(
         (b) => !(b.holder === actorId && matchesTarget(b.path, b.symbol)),
       );
     }
+    // Releasing a target also CANCELS this actor's own queued interest in it —
+    // "release" means "I no longer want this code," whether that's a held claim
+    // or a spot in line. Without this, an actor that moved on stays queued and
+    // gets auto-granted a claim it will never use, wedging the target for
+    // everyone genuinely behind it.
+    if (file.waiters?.length) {
+      const before = file.waiters.length;
+      file.waiters = file.waiters.filter(
+        (w) => !(w.actor === actorId && matchesTarget(w.path, w.symbol)),
+      );
+      if (file.waiters.length < before && released === 0 && expired === 0) {
+        // A pure interest-cancel still frees a queue slot others may advance into.
+        promoteWaiters(file, now);
+      }
+    }
     // A freed target may be exactly what a queued waiter was waiting for —
     // auto-grant the earliest before writing, so the async claim lands the
     // instant this actor lets go (including a commit's auto-release).
@@ -545,6 +600,25 @@ export function pathsClaimedBySelf(
   const own = listClaims(store, now).filter(
     (c) => c.actor === actorId && c.symbol === undefined,
   );
+  return (path: string) => own.some((c) => claimCoversPath(c, path));
+}
+
+/**
+ * A predicate over paths: does `actorId` hold ANY live claim touching this
+ * path — whole-file, directory, OR symbol? The ownership signal for the
+ * contested-tree orphan gate: an actor that forward-claimed `new.ts#helper
+ * --creating` before writing the file followed the protocol exactly, and its
+ * new file must not read as an unclaimed orphan. (Contrast pathsClaimedBySelf,
+ * which deliberately excludes symbol claims — that one gates committing a
+ * BINARY whole, where file-granularity reservation is the point.)
+ */
+export function pathsClaimedBySelfAny(
+  store: Store,
+  actorId: string | null,
+  now: number,
+): (path: string) => boolean {
+  if (!actorId) return () => false;
+  const own = listClaims(store, now).filter((c) => c.actor === actorId);
   return (path: string) => own.some((c) => claimCoversPath(c, path));
 }
 

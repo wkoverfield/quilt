@@ -2,12 +2,13 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { randomBytes, randomUUID } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 import type { Store } from "./state.js";
 import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, othersHoldLiveClaims, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
 import { applyAndRecordEdit, applyAndRecordWrite, capturedBySelf } from "./authorship.js";
 import { VERSION } from "./version.js";
@@ -26,14 +27,25 @@ import type { Actor, ActorType, Session } from "./types.js";
  */
 export async function runMcpServer(store: Store): Promise<void> {
   const repoRoot = store.paths.repoRoot;
-  const mcpOnlyPaths = (paths: string[] | undefined): Set<string> | undefined => {
-    if (!paths || paths.length === 0) return undefined;
+  // Entries name a file or a directory prefix; "." / the repo root means
+  // "everything" (""). Returns the invalid (outside-repo) entries alongside so
+  // callers can refuse loudly instead of silently shrinking the commit.
+  const mcpOnlyPaths = (
+    paths: string[] | undefined,
+  ): { set: Set<string> | undefined; invalid: string[] } => {
+    if (!paths || paths.length === 0) return { set: undefined, invalid: [] };
     const set = new Set<string>();
+    const invalid: string[] = [];
     for (const p of paths) {
+      if (p === "." || resolvePath(repoRoot, p) === resolvePath(repoRoot)) {
+        set.add("");
+        continue;
+      }
       const rel = repoRelative(repoRoot, p);
-      if (rel) set.add(rel);
+      if (rel === null) invalid.push(p);
+      else set.add(rel);
     }
-    return set;
+    return { set, invalid };
   };
   // The ownership predicates every selectOwned caller must pass — claim and
   // capture signals plus the contested-tree flag. One builder so no tool
@@ -44,6 +56,7 @@ export async function runMcpServer(store: Store): Promise<void> {
     return {
       pathClaimedByOther: pathsClaimedByOthers(store, actorId, now),
       pathClaimedBySelf: pathsClaimedBySelf(store, actorId, now),
+      pathClaimedBySelfAny: pathsClaimedBySelfAny(store, actorId, now),
       pathCapturedBySelf: capturedBySelf(store, actorId),
       othersActive: othersHoldLiveClaims(store, actorId, now),
     };
@@ -201,7 +214,7 @@ export async function runMcpServer(store: Store): Promise<void> {
         // Collisions an agent kicked up for a human and not yet resolved.
         needsYou: openEscalations(store),
       });
-      if (actorId && grants.length) markGrantsNotified(store, actorId, Date.now());
+      if (actorId && grants.length) markGrantsNotified(store, actorId, Date.now(), grants);
       return resp;
     },
   );
@@ -245,11 +258,15 @@ export async function runMcpServer(store: Store): Promise<void> {
     },
     async ({ actor, includeUnclaimed, paths }) => {
       const actorId = resolveActor(actor, true)!;
+      const scoped = mcpOnlyPaths(paths);
+      if (scoped.invalid.length) {
+        return ok({ error: `paths outside this repository: ${scoped.invalid.join(", ")}` });
+      }
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
-        onlyPaths: mcpOnlyPaths(paths),
+        onlyPaths: scoped.set,
         ...ownershipSignals(actorId),
       });
       return ok({
@@ -280,11 +297,18 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actorIn, true)!;
       // resolveActor registered the actor if it was first-seen, so it exists.
       const actor = store.findActor(actorId)!;
+      const scoped = mcpOnlyPaths(paths);
+      if (scoped.invalid.length) {
+        return ok({
+          committed: false,
+          reason: `paths outside this repository: ${scoped.invalid.join(", ")}`,
+        });
+      }
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
-        onlyPaths: mcpOnlyPaths(paths),
+        onlyPaths: scoped.set,
         ...ownershipSignals(actorId),
       });
       if (sel.files.length === 0 && sel.wholeFiles.length === 0) {
@@ -357,6 +381,16 @@ export async function runMcpServer(store: Store): Promise<void> {
     async ({ actor, paths, intent, creating, wait, queue }) => {
       const actorId = resolveActor(actor, true)!;
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
+      // Same contract as the CLI: wait and queue are opposite strategies. Both
+      // at once would time out saying "targets still held, work elsewhere"
+      // while a live waiter lingers — the actor later holds a claim it was
+      // never told about, wedging everyone queued behind it.
+      if (wait && queue) {
+        return ok({
+          error: "wait and queue are opposite strategies; pick one (block, or register and keep working)",
+          results: [],
+        });
+      }
       let results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating, queue });
       let waited: { waitedMs: number; timedOut: boolean } | undefined;
       const heldNow = results.some((r) => !r.granted && r.holder);

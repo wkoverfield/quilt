@@ -8,29 +8,76 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
-- **Async claims — `claim --queue` (MCP: `queue: true`): register interest and
+- **`commit --mine [paths...]` and `preview --mine [paths...]`: a hard path
+  allow-list (MCP: `paths` array on `commit_mine` / `preview_mine`).** Naming
+  files or directory prefixes commits exactly those and nothing else, so an
+  unnamed change can never ride along. A path outside the repo is a loud error,
+  not a silent shrink. From fleet round 4: `commit --mine mine.ts` used to
+  ignore the path entirely and sweep everything the actor owned.
+- **The contested-tree orphan gate.** When another actor holds a live claim, a
+  NEW untracked file the actor never claimed and never captured is left out of
+  `commit --mine` loudly (`skippedUnowned` in JSON/MCP, plus a warning naming
+  the escape hatches: claim it, or `--include-unclaimed`). Inference
+  attribution persists, so an orphan attributed in a briefly-uncontested tree
+  would otherwise ride into commits forever. Solo trees are exempt: a new file
+  in your tree is yours. A forward symbol claim (`new.ts#helper --creating`)
+  counts as claiming the file, and hook/MCP-captured edits count as authorship.
+
+- **Async claims, `claim --queue` (MCP: `queue: true`): register interest and
   get AUTO-GRANTED when the target frees, without blocking.** The verification
   fleet's follow-on ask after `--wait`: "a blocked call is a blocked agent." A
   queued claim returns immediately; when the holder releases (commit
   auto-release included) or their lease lapses, the earliest waiter is granted a
   real claim and discovers it at its next `quilt status` / `get_status`
-  (`grantedWhileWaiting`) — no blocking, no polling. FIFO and self-healing: an
+  (`grantedWhileWaiting`). No blocking, no polling. FIFO and self-healing: an
   idle grant re-promotes the next waiter, and abandoned interest expires. The
-  `quilt fleet` view shows the queue. No daemon — auto-grant happens on the next
+  `quilt fleet` view shows the queue. No daemon: auto-grant happens on the next
   reconcile any actor triggers.
   - The holder SEES who's queued behind it (`quilt status`: "← 1 waiting (B) — commit to hand off"), so it hands off promptly instead of releasing blind.
-  - A grant is discoverable on either natural check-back — `quilt status` OR a plain `claim` retry both surface "Granted while you waited" (not status-only).
+  - A grant is discoverable on either natural check-back: `quilt status` OR a plain `claim` retry both surface "Granted while you waited" (not status-only).
 - **Global `--as <id>` flag**: a per-command way to set your actor
   (`quilt --as builder-a claim …`), the ergonomic alternative to prefixing
   `QUILT_ACTOR=<id>` on every call. An explicit env var still wins.
 - **`claim --wait` (MCP: `wait` seconds): block until denied targets free
   up.** The verification fleet's #1 friction: after a denial, retrying was
-  blind polling — "get denied, guess when to retry, hope." The claim call can
+  blind polling ("get denied, guess when to retry, hope"). The claim call can
   now hold until the holder releases (commit auto-release included) or their
   lease lapses, pacing itself against the lease expiry, and returns granted
   the moment the way is clear. Denials waiting can't fix (bad path, missing
   symbol) still fail fast. Each retry also refreshes the waiter's own claims
   and keeps its blocked-on state fresh in the fleet view.
+
+### Fixed (queue fairness and safety, pre-release)
+
+- The queue outranks a walk-up: acquiring now promotes waiters first, so a
+  direct claim can no longer steal a just-lapsed lease ahead of an actor that
+  was told "you're next."
+- An earlier still-blocked waiter reserves its target: a later overlapping
+  waiter (mixed granularity) can no longer jump the head of the queue.
+- A queued interest is no longer dropped when the actor holds a NARROWER
+  overlapping claim (holding `deals.js#foo` used to silently void a queued
+  interest in whole-file `deals.js`).
+- A queued grant now lives at least as long as the interest window it replaced
+  (the waiter TTL), so an actor heads-down elsewhere cannot silently lose a
+  target it was first in line for.
+- `release` also cancels the actor's own queued interest in the released
+  targets, so a departed actor is never auto-granted a claim it walked away
+  from.
+- `claim --wait` validates its value eagerly: `claim a.ts --wait b.ts` (the
+  optional-value flag swallowing a path) now fails loudly before claiming
+  anything, instead of exiting 0 having claimed only `a.ts`.
+- Grant announcements are marked notified surgically (only the grants actually
+  shown), closing a race where a grant promoted mid-command was stamped
+  notified without ever being surfaced.
+- MCP `claim` now rejects `wait` + `queue` together, matching the CLI: the
+  combo left a live waiter behind a timed-out wait, later auto-granting a claim
+  the agent was never told about.
+- `--wait` outcome (`waitedMs`, `timedOut`) now rides in `claim --json` output
+  too, matching the MCP shape, so a script can tell a timeout from an instant
+  denial.
+- `commit --dry-run` and human `preview` now surface `skippedUnowned`, so the
+  orphan gate is visible on the verification surfaces, not only on the real
+  commit.
 
 ### Changed
 
@@ -38,7 +85,7 @@ All notable changes to Quilt are documented here. The format is based on
   captured edits need no claims at all for uncontested work (edit, then
   `commit_mine`); claims are for binding UNCAPTURABLE edits (bash, codegen)
   and for protecting code you don't want touched. The coordination snippet,
-  orchestrators guide, and README problem statement all updated — the
+  orchestrators guide, and README problem statement all updated: the
   everyday value is surgical commits on one environment, not contention
   ceremony.
 - `commit --mine` counts whole-staged binary files in its reported file

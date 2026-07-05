@@ -236,6 +236,12 @@ export function selectOwned(
      * edit recorded it). With `othersActive`, the signal that separates a file
      * the actor really produced from one inference merely swept onto it. */
     pathCapturedBySelf?: (path: string) => boolean;
+    /** like pathClaimedBySelf but at ANY granularity (symbol claims count) —
+     * the orphan gate's ownership signal. A forward symbol claim
+     * (`new.ts#helper --creating`) is the documented way to pre-claim a file
+     * you're about to create; it must satisfy the gate even though it can't
+     * commit a binary whole. */
+    pathClaimedBySelfAny?: (path: string) => boolean;
     /** true if any OTHER actor holds a live claim (a CONTESTED tree). Only then
      * is an inference-only new file suspect: another actor is around, so an
      * untracked file the actor never claimed or captured could be theirs (or an
@@ -261,8 +267,15 @@ export function selectOwned(
     if (actor === null) continue;
     // An explicit path filter is a HARD boundary: a named commit touches only
     // the named files, so an unnamed change (an orphan untracked file, another
-    // actor's leftover) can never ride along.
-    if (opts.onlyPaths && !opts.onlyPaths.has(file.path)) continue;
+    // actor's leftover) can never ride along. An entry names a file OR a
+    // directory prefix (`commit --mine src/` scopes to everything under src/),
+    // matching how claims treat directory targets.
+    if (opts.onlyPaths) {
+      const hit = [...opts.onlyPaths].some(
+        (p) => p === "" || p === file.path || file.path.startsWith(p + "/"),
+      );
+      if (!hit) continue;
+    }
     if (file.binary) {
       // No line-level ownership exists for a binary or too-large file
       // (package-lock.json is the canonical case). A claim is the ownership
@@ -280,10 +293,11 @@ export function selectOwned(
     // attaches a file the actor never touched. Included once claimed or with
     // --include-unclaimed, and surfaced so the skip is never silent. Solo trees
     // are exempt: with nobody else around, a new file in your tree is yours.
+    const claimedAny = opts.pathClaimedBySelfAny ?? opts.pathClaimedBySelf;
     const inferenceOnlyNewFile =
       (opts.othersActive ?? false) &&
       file.isNew &&
-      !(opts.pathClaimedBySelf?.(file.path) ?? false) &&
+      !(claimedAny?.(file.path) ?? false) &&
       !(opts.pathCapturedBySelf?.(file.path) ?? false);
     if (inferenceOnlyNewFile && !(opts.includeMixed ?? false)) {
       skippedUnowned.push(file.path);

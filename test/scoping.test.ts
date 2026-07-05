@@ -307,3 +307,52 @@ test("MCP: contested tree — an inference-only new file is skipped and surfaced
     cleanup(dir);
   }
 });
+
+test("a forward symbol claim (--creating) on a new file satisfies the contested-tree gate", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    quilt(dir, ["start", "--actor", "B", "--type", "agent"]);
+    quilt(dir, ["claim", "seed.txt"], "B"); // contested from the start
+    // A follows the documented protocol exactly: forward-claim the symbol it's
+    // about to create, then write the file via bash.
+    const claim = quilt(dir, ["claim", "helper.ts#helper", "--creating"], "A");
+    assert.equal(claim.status, 0, claim.stderr);
+    write(dir, "helper.ts", "export function helper() { return 1; }\n");
+    const res = quilt(dir, ["commit", "--mine", "-m", "add helper"], "A");
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(headFiles(dir), ["helper.ts"], "the forward-claimed file commits");
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("commit --mine <dir>/ scopes to everything under the directory", () => {
+  const dir = makeRepo();
+  try {
+    spawnSync("git", ["init", "-q"], { cwd: dir });
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    spawnSync("mkdir", ["-p", join(dir, "src")]);
+    write(dir, "src/a.ts", "export const a = 1;\n");
+    write(dir, "src/b.ts", "export const b = 2;\n");
+    write(dir, "other.ts", "export const o = 3;\n");
+    const res = quilt(dir, ["commit", "--mine", "src", "-m", "src only"], "A");
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(headFiles(dir), ["src/a.ts", "src/b.ts"], "the directory arg matches its contents");
+  } finally {
+    cleanup(dir);
+  }
+});
+
+test("commit --mine with a path outside the repo fails loudly, not silently empty", () => {
+  const dir = makeRepo();
+  try {
+    quilt(dir, ["start", "--actor", "A", "--type", "agent"]);
+    write(dir, "mine.ts", "export const a = 1;\n");
+    const res = quilt(dir, ["commit", "--mine", "../elsewhere.ts", "-m", "x"], "A");
+    assert.notEqual(res.status, 0);
+    assert.match(res.stderr, /outside this repository/);
+  } finally {
+    cleanup(dir);
+  }
+});

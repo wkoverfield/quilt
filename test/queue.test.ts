@@ -188,3 +188,113 @@ test("a queued grant surfaces on a plain claim RETRY, not only via status", () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a symbol claim does NOT swallow the actor's queued interest in the whole file (covers, not overlaps)", () => {
+  const dir = makeRepo();
+  try {
+    // B holds one symbol; A holds a different one — legal concurrency.
+    q(dir, ["claim", "shared.js#f", "--intent", "B's function"], "B");
+    q(dir, ["claim", "shared.js#g", "--creating", "--intent", "A's function"], "A");
+    // B wants the WHOLE file next; A's symbol claim blocks that, so B queues.
+    const queued = q(dir, ["claim", "shared.js", "--queue", "--intent", "refactor whole file"], "B");
+    assert.equal(queued.status, 0, queued.stderr);
+    assert.match(queued.stdout, /queued\s+shared\.js/);
+    // A releases. Promotion must GRANT B the whole file — B's own narrower
+    // symbol claim overlaps the target but does not cover it, and the old
+    // overlaps() check silently dropped the waiter here (auto-grant never came).
+    q(dir, ["release", "shared.js#g"], "A");
+    const status = q(dir, ["status"], "B");
+    assert.match(status.stdout, /Granted while you waited/, "the whole-file grant arrived");
+    assert.match(status.stdout, /shared\.js/);
+    // And the claim list shows B holding the whole file, not just the symbol.
+    const list = q(dir, ["claim"], "B");
+    assert.match(list.stdout, /shared\.js\s+B/, "whole-file claim exists for B");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a walk-up claim cannot steal a lapsed lease ahead of the queue (queue outranks direct)", () => {
+  const dir = makeRepo();
+  try {
+    q(dir, ["claim", "shared.js"], "A");
+    q(dir, ["claim", "shared.js", "--queue"], "B"); // told "you're next"
+    // A dies; its lease lapses with nobody reconciling in between.
+    const cp = join(dir, ".quilt", "claims.json");
+    const file = JSON.parse(readFileSync(cp, "utf8"));
+    file.claims.find((c: any) => c.actor === "A").expiresAt = Date.now() - 1;
+    writeFileSync(cp, JSON.stringify(file));
+    // Newcomer C walks up and claims directly. Acquire itself prunes the lapsed
+    // lease — the queue must be promoted FIRST, so B wins and C is denied.
+    const c = q(dir, ["claim", "shared.js"], "C");
+    assert.notEqual(c.status, 0, "the walk-up loses to the queue");
+    assert.match(c.stdout, /held by B/);
+    const s = q(dir, ["status"], "B");
+    assert.match(s.stdout, /Granted while you waited/, "B got the grant it was promised");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a later symbol waiter is NOT promoted past an earlier still-blocked whole-file waiter", () => {
+  const dir = makeRepo();
+  try {
+    // Two symbol holders; A queues for the WHOLE file first, then B queues for #g.
+    q(dir, ["claim", "shared.js#f", "--creating"], "H1");
+    q(dir, ["claim", "shared.js#g", "--creating"], "H2");
+    q(dir, ["claim", "shared.js", "--queue"], "A");
+    const b = q(dir, ["claim", "shared.js#g", "--queue", "--creating"], "B");
+    assert.match(b.stdout, /1 ahead of you/, "B is told A is ahead");
+    // H2 frees #g. A is still blocked by H1 — but A's head-of-queue interest
+    // reserves the file, so B must NOT jump it.
+    q(dir, ["release", "shared.js#g"], "H2");
+    const sB = q(dir, ["status"], "B");
+    assert.ok(!sB.stdout.includes("Granted while you waited"), "B did not jump the queue");
+    // When H1 also frees, A (first in line) gets the whole file, then B waits on A.
+    q(dir, ["release", "shared.js#f"], "H1");
+    const sA = q(dir, ["status"], "A");
+    assert.match(sA.stdout, /Granted while you waited/, "the head of the queue wins");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("release cancels the actor's own queued interest (no zombie auto-grant later)", () => {
+  const dir = makeRepo();
+  try {
+    q(dir, ["claim", "shared.js"], "A");
+    q(dir, ["claim", "shared.js", "--queue"], "B");
+    // B changes its mind and releases the target it was queued for.
+    q(dir, ["release", "shared.js"], "B");
+    // A frees the file; B must NOT be silently granted a claim it walked away from.
+    q(dir, ["release", "shared.js"], "A");
+    const s = q(dir, ["status"], "B");
+    assert.ok(!s.stdout.includes("Granted while you waited"), "no zombie grant for B");
+    const list = q(dir, ["claim"], "B");
+    assert.ok(!/shared\.js\s+B/.test(list.stdout), "B holds nothing");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a queued grant lives at least as long as the interest window it replaced", () => {
+  const dir = makeRepo();
+  try {
+    q(dir, ["claim", "shared.js"], "A");
+    q(dir, ["claim", "shared.js", "--queue"], "B");
+    q(dir, ["release", "shared.js"], "A"); // promotes B immediately
+    const cp = join(dir, ".quilt", "claims.json");
+    const file = JSON.parse(readFileSync(cp, "utf8"));
+    const grant = file.claims.find((c: any) => c.actor === "B" && c.viaQueue);
+    assert.ok(grant, "B was promoted");
+    // Waiter TTL (60m) outlives the claim TTL (30m): the grant must carry the
+    // longer window, or an actor away for 40 minutes silently loses a target
+    // it was first in line for.
+    assert.ok(
+      grant.expiresAt - Date.now() > 45 * 60 * 1000,
+      `grant expiry too short: ${grant.expiresAt - Date.now()}ms`,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
