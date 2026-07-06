@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Store } from "./state.js";
-import type { Claim, Block } from "./types.js";
+import type { Claim, Block, Waiter, ClaimsFile } from "./types.js";
 import { repoRelative } from "./paths.js";
 import { canParse, closestName, parseSymbols } from "./symbols.js";
 
@@ -13,6 +13,10 @@ import { canParse, closestName, parseSymbols } from "./symbols.js";
 export const CLAIM_TTL_MS = 30 * 60 * 1000;
 /** How long a recorded denial lingers without a retry. Short — a block is news. */
 export const BLOCK_TTL_MS = 90 * 1000;
+/** How long a queued interest survives without the actor coming back. Longer
+ * than a claim — a waiter is often off doing other work — but bounded so an
+ * agent that never returns can't wedge the queue behind it. */
+export const WAITER_TTL_MS = 60 * 60 * 1000;
 
 export interface ClaimTarget {
   path: string;
@@ -37,6 +41,10 @@ export interface ClaimResult {
   reason?: "outside-repo" | "symbol-not-found" | "symbols-unsupported";
   /** for symbol-not-found: a close existing symbol name, if one exists. */
   suggestion?: string;
+  /** when denied AND the actor asked to queue: it's now registered for
+   * auto-grant when the target frees. `queuePosition` is 1-based (1 = next). */
+  queued?: boolean;
+  queuePosition?: number;
 }
 
 function active(claims: Claim[], now: number): Claim[] {
@@ -72,8 +80,9 @@ function underDir(dirPath: string, p: string): boolean {
   return p === dirPath || p.startsWith(dirPath + "/");
 }
 
-/** Two reservations overlap when they could cover the same lines. */
-function overlaps(a: ClaimTarget, b: Claim): boolean {
+/** Two reservations overlap when they could cover the same lines. `b` only
+ * needs `path`/`symbol`/`dir`, so claims AND waiters both fit. */
+function overlaps(a: ClaimTarget, b: { path: string; symbol?: string; dir?: boolean }): boolean {
   // A directory claim on either side covers everything under its prefix.
   if (a.dir && b.dir) return underDir(a.path, b.path) || underDir(b.path, a.path);
   if (a.dir) return underDir(a.path, b.path);
@@ -82,6 +91,19 @@ function overlaps(a: ClaimTarget, b: Claim): boolean {
   // A whole-file reservation on either side covers everything in the file.
   if (a.symbol === undefined || b.symbol === undefined) return true;
   return a.symbol === b.symbol;
+}
+
+/** Does an existing claim `c` FULLY COVER target `t`? Strictly one-directional,
+ * unlike overlaps(): a symbol claim overlaps its file's whole-file target but
+ * does not cover it. The distinction matters in promoteWaiters — "already
+ * satisfied" means the actor holds AT LEAST what it queued for, or the queued
+ * interest dies while the actor still lacks the wider reservation. */
+function covers(c: Claim, t: ClaimTarget): boolean {
+  if (c.dir) return underDir(c.path, t.path);
+  if (t.dir) return false; // only a same-or-ancestor dir claim covers a dir target
+  if (c.path !== t.path) return false;
+  if (c.symbol === undefined) return true; // whole file covers the file and any symbol in it
+  return t.symbol !== undefined && c.symbol === t.symbol;
 }
 
 /**
@@ -105,6 +127,11 @@ export function acquireClaims(
      * that binds nothing protects nothing, and granted-but-non-binding is how
      * the dogfood fleet shipped a silent partial commit. */
     creating?: boolean;
+    /** On a HOLDER denial, register interest instead of just reporting denied:
+     * the actor is auto-granted the target when it frees (the async `--queue`
+     * path). Non-blocking. Denials waiting can't fix (bad path, missing symbol)
+     * are never queued. */
+    queue?: boolean;
   } = {},
 ): ClaimResult[] {
   const cleanIntent = intent?.trim() ? intent.trim() : undefined;
@@ -112,8 +139,17 @@ export function acquireClaims(
     const file = store.readClaims();
     file.claims = active(file.claims, now);
     file.blocks = (file.blocks ?? []).filter((b) => b.expiresAt > now);
+    file.waiters = (file.waiters ?? []).filter((w) => w.expiresAt > now);
+    // The queue outranks a walk-up. Acquiring is also the moment expired leases
+    // get pruned, so without this a direct claimant would win a just-freed
+    // target ahead of every waiter that was told "you're next" — promote the
+    // queue FIRST, then evaluate this claim against the post-promotion state
+    // (a promoted waiter now holds the target, so the walk-up is denied/queued).
+    promoteWaiters(file, now);
     const sameTarget = (b: Block, t: ClaimTarget) =>
       b.actor === actorId && b.path === t.path && b.symbol === t.symbol;
+    const sameWaiter = (w: Waiter, t: ClaimTarget) =>
+      w.actor === actorId && w.path === t.path && w.symbol === t.symbol && Boolean(w.dir) === Boolean(t.dir);
     const results: ClaimResult[] = [];
     for (const raw of rawPaths) {
       const parsed = parseTarget(raw);
@@ -171,13 +207,43 @@ export function acquireClaims(
         (c) => c.actor !== actorId && overlaps(target, c),
       );
       if (conflict) {
-        results.push({
+        const denied: ClaimResult = {
           ...target,
           granted: false,
           holder: conflict.actor,
           holderIntent: conflict.intent,
           holderExpiresAt: conflict.expiresAt,
-        });
+        };
+        // Async path: register interest so the actor is auto-granted when the
+        // holder frees, instead of blocking or blind-polling. Dedup by
+        // actor+target (re-queuing just refreshes the TTL and keeps FIFO order).
+        if (opts.queue) {
+          const existing = file.waiters.find((w) => sameWaiter(w, target));
+          if (existing) {
+            existing.expiresAt = now + WAITER_TTL_MS;
+            existing.session = sessionId;
+            if (cleanIntent !== undefined) existing.intent = cleanIntent;
+          } else {
+            file.waiters.push({
+              path: target.path,
+              symbol: target.symbol,
+              dir: target.dir || undefined,
+              actor: actorId,
+              session: sessionId,
+              intent: cleanIntent,
+              queuedAt: new Date(now).toISOString(),
+              expiresAt: now + WAITER_TTL_MS,
+            });
+          }
+          denied.queued = true;
+          // 1-based FIFO position among the waiters that ACTUALLY conflict with
+          // this target — using the same overlaps() rule promoteWaiters grants
+          // by, so a whole-file waiter ahead of a symbol waiter (and vice versa)
+          // is counted. file.waiters is in insertion (queuedAt) order.
+          denied.queuePosition =
+            file.waiters.filter((w) => overlaps(target, w)).findIndex((w) => sameWaiter(w, target)) + 1;
+        }
+        results.push(denied);
         // Record the denial so the fleet view can show who's blocked on whom,
         // carrying the holder's intent so the block explains itself.
         const prior = file.blocks.find((b) => sameTarget(b, target));
@@ -198,8 +264,9 @@ export function acquireClaims(
         }
         continue;
       }
-      // Granted: this actor is no longer blocked on this target.
+      // Granted: this actor is no longer blocked on, or waiting for, this target.
       file.blocks = file.blocks.filter((b) => !sameTarget(b, target));
+      file.waiters = file.waiters.filter((w) => !sameWaiter(w, target));
 
       const own = file.claims.find(
         (c) =>
@@ -234,10 +301,181 @@ export function acquireClaims(
 }
 
 /**
+ * Auto-grant queued waiters against the current claim state, in FIFO order.
+ * Mutates `file` in place and returns the claims newly granted off the queue
+ * (for ledger/notification). The heart of async claims: whenever a target
+ * frees (a release, a commit's auto-release, or a lease lapse), the earliest
+ * live waiter whose target is now free gets a real claim — `viaQueue`, not yet
+ * notified, so the actor discovers it at its next quilt call.
+ *
+ * FIFO falls out naturally: waiters are tried oldest-first, and a waiter that's
+ * granted immediately HOLDS the target, so the next same-target waiter sees the
+ * fresh conflict and stays queued. A waiter whose actor already holds the code
+ * (it re-claimed directly) is just dropped. Callers must hold the store lock.
+ */
+export function promoteWaiters(file: ClaimsFile, now: number, sessionFallback: string | null = null): Claim[] {
+  file.claims = active(file.claims, now);
+  const waiters = (file.waiters ?? [])
+    .filter((w) => w.expiresAt > now)
+    .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt));
+  const granted: Claim[] = [];
+  const remaining: Waiter[] = [];
+  for (const w of waiters) {
+    const target: ClaimTarget = { path: w.path, symbol: w.symbol, dir: w.dir };
+    // Already satisfied — the actor holds at least what it queued for (it
+    // re-claimed directly while waiting). COVERS, not overlaps: holding
+    // deals.js#foo must not swallow a queued interest in whole-file deals.js.
+    if (file.claims.some((c) => c.actor === w.actor && covers(c, target))) continue;
+    // Still held by someone else — stays queued (and holds its FIFO slot).
+    // A still-queued EARLIER waiter reserves its target too: queuePosition told
+    // a later overlapping waiter it was behind this one, so promoting the later
+    // one past it (whole-file waiter blocked by one symbol holder while a fresh
+    // symbol waiter slips through the free half) would starve the head of the
+    // queue under churn. `remaining` holds exactly the earlier, still-blocked
+    // waiters at this point in the oldest-first walk.
+    if (
+      file.claims.some((c) => c.actor !== w.actor && overlaps(target, c)) ||
+      remaining.some((r) => r.actor !== w.actor && overlaps(target, r))
+    ) {
+      remaining.push(w);
+      continue;
+    }
+    // Free: grant it, off the queue. The lease lives at least as long as the
+    // interest window the actor was promised — a grant issued while the actor
+    // is heads-down elsewhere must not silently lapse before the waiter TTL it
+    // replaced would have (granted at t+1m, actor back at t+40m, still theirs).
+    const grantExpiry = Math.max(now + CLAIM_TTL_MS, w.expiresAt);
+    const claim: Claim = {
+      path: w.path,
+      symbol: w.symbol,
+      dir: w.dir || undefined,
+      actor: w.actor,
+      session: w.session ?? sessionFallback,
+      acquiredAt: new Date(now).toISOString(),
+      expiresAt: grantExpiry,
+      expiresAtIso: new Date(grantExpiry).toISOString(),
+      intent: w.intent,
+      viaQueue: true,
+    };
+    file.claims.push(claim);
+    granted.push(claim);
+  }
+  file.waiters = remaining;
+  return granted;
+}
+
+/**
+ * The queued grants for `actorId` not yet surfaced to it — the "granted while
+ * you waited" callout. Reading them does NOT mark them notified; call
+ * `markGrantsNotified` (inside a lock) once you've shown them, so they shout
+ * exactly once. A pure read otherwise.
+ */
+export function pendingGrants(store: Store, actorId: string, now: number): Claim[] {
+  return active(store.readClaims().claims, now).filter(
+    (c) => c.actor === actorId && c.viaQueue && !c.notifiedAt,
+  );
+}
+
+/** Mark queued grants as surfaced. Pass the grants that were ACTUALLY shown
+ * (the pendingGrants read the caller just printed/returned) — marking "all
+ * un-notified" instead would stamp a grant promoted between that read and this
+ * write, and it would never be announced anywhere. Locked. */
+export function markGrantsNotified(store: Store, actorId: string, now: number, shown: Claim[]): void {
+  if (shown.length === 0) return;
+  const key = (c: Claim) => `${c.path} ${c.symbol ?? ""} ${c.dir ? "d" : ""} ${c.acquiredAt}`;
+  const shownKeys = new Set(shown.map(key));
+  store.withLock(() => {
+    const file = store.readClaims();
+    let changed = false;
+    for (const c of file.claims) {
+      if (c.actor === actorId && c.viaQueue && !c.notifiedAt && shownKeys.has(key(c))) {
+        c.notifiedAt = now;
+        changed = true;
+      }
+    }
+    if (changed) store.writeClaims(file);
+  });
+}
+
+/** All active waiters (the queue), for the fleet view. */
+export function listWaiters(store: Store, now: number): Waiter[] {
+  return (store.readClaims().waiters ?? []).filter((w) => w.expiresAt > now);
+}
+
+/** The actors queued behind `claim` (waiting on a target it overlaps) — so a
+ * holder can SEE who's waiting on it and commit promptly, instead of releasing
+ * blind. Excludes the claim's own actor. */
+export function waitersBehind(store: Store, claim: Claim, now: number): string[] {
+  const target: ClaimTarget = { path: claim.path, symbol: claim.symbol, dir: claim.dir };
+  return listWaiters(store, now)
+    .filter((w) => w.actor !== claim.actor && overlaps(target, w))
+    .map((w) => w.actor);
+}
+
+/**
  * Release an actor's claims. With no targets, release ALL of the actor's claims.
  * A target naming a file (no symbol) releases every claim the actor holds on
  * that file (whole-file and any symbol claims).
  */
+export interface WaitOutcome {
+  /** the final acquire pass's results. */
+  results: ClaimResult[];
+  /** how long this call actually blocked. */
+  waitedMs: number;
+  /** true when the wait window elapsed with holder-denials still standing. */
+  timedOut: boolean;
+}
+
+/**
+ * `acquireClaims`, but BLOCK on holder-denials until they free up or `waitMs`
+ * elapses — the primitive the dogfood fleet was missing. Without it a denied
+ * agent's only strategy was blind polling: "get denied, guess when to retry,
+ * hope." This waits server-side and returns the moment the holder releases
+ * (commit auto-release included), pacing polls against the holder's lease
+ * expiry so a dead holder costs at most one lease.
+ *
+ * Only HOLDER denials are waited on. A denial that waiting can't fix — a
+ * target outside the repo, a symbol that doesn't exist — returns immediately,
+ * so a typo fails fast instead of hanging for the full window.
+ *
+ * Each retry re-runs the full acquire, which also refreshes the TTL on the
+ * caller's already-granted targets and keeps its blocked-on record fresh in
+ * the fleet view: a waiting agent stays visibly waiting.
+ */
+export async function acquireClaimsWait(
+  store: Store,
+  actorId: string,
+  sessionId: string | null,
+  rawPaths: string[],
+  intent: string | undefined,
+  opts: { creating?: boolean; waitMs: number; pollMs?: number },
+): Promise<WaitOutcome> {
+  const pollMs = opts.pollMs ?? 2000;
+  const start = Date.now();
+  for (;;) {
+    const now = Date.now();
+    const results = acquireClaims(store, actorId, sessionId, rawPaths, now, intent, {
+      creating: opts.creating,
+    });
+    const waitable = results.filter((r) => !r.granted && r.holder);
+    const fatal = results.some((r) => !r.granted && !r.holder);
+    if (waitable.length === 0 || fatal) {
+      return { results, waitedMs: now - start, timedOut: false };
+    }
+    const elapsed = now - start;
+    if (elapsed >= opts.waitMs) {
+      return { results, waitedMs: elapsed, timedOut: true };
+    }
+    // Sleep until the next poll — or the earliest holder lease expiry, or the
+    // end of our window, whichever comes first. Floor keeps a tight loop out.
+    const soonestLapse = Math.min(
+      ...waitable.map((r) => (r.holderExpiresAt ?? now + pollMs) - now),
+    );
+    const sleep = Math.max(250, Math.min(pollMs, soonestLapse, opts.waitMs - elapsed));
+    await new Promise((resolve) => setTimeout(resolve, sleep));
+  }
+}
+
 export interface ReleaseResult {
   /** live claims actually released by this call. */
   released: number;
@@ -287,6 +525,25 @@ export function releaseClaims(
         (b) => !(b.holder === actorId && matchesTarget(b.path, b.symbol)),
       );
     }
+    // Releasing a target also CANCELS this actor's own queued interest in it —
+    // "release" means "I no longer want this code," whether that's a held claim
+    // or a spot in line. Without this, an actor that moved on stays queued and
+    // gets auto-granted a claim it will never use, wedging the target for
+    // everyone genuinely behind it.
+    if (file.waiters?.length) {
+      const before = file.waiters.length;
+      file.waiters = file.waiters.filter(
+        (w) => !(w.actor === actorId && matchesTarget(w.path, w.symbol)),
+      );
+      if (file.waiters.length < before && released === 0 && expired === 0) {
+        // A pure interest-cancel still frees a queue slot others may advance into.
+        promoteWaiters(file, now);
+      }
+    }
+    // A freed target may be exactly what a queued waiter was waiting for —
+    // auto-grant the earliest before writing, so the async claim lands the
+    // instant this actor lets go (including a commit's auto-release).
+    if (released > 0 || expired > 0) promoteWaiters(file, now);
     store.writeClaims(file);
     return { released, expired };
   });
@@ -344,6 +601,37 @@ export function pathsClaimedBySelf(
     (c) => c.actor === actorId && c.symbol === undefined,
   );
   return (path: string) => own.some((c) => claimCoversPath(c, path));
+}
+
+/**
+ * A predicate over paths: does `actorId` hold ANY live claim touching this
+ * path — whole-file, directory, OR symbol? The ownership signal for the
+ * contested-tree orphan gate: an actor that forward-claimed `new.ts#helper
+ * --creating` before writing the file followed the protocol exactly, and its
+ * new file must not read as an unclaimed orphan. (Contrast pathsClaimedBySelf,
+ * which deliberately excludes symbol claims — that one gates committing a
+ * BINARY whole, where file-granularity reservation is the point.)
+ */
+export function pathsClaimedBySelfAny(
+  store: Store,
+  actorId: string | null,
+  now: number,
+): (path: string) => boolean {
+  if (!actorId) return () => false;
+  const own = listClaims(store, now).filter((c) => c.actor === actorId);
+  return (path: string) => own.some((c) => claimCoversPath(c, path));
+}
+
+/**
+ * Is the tree CONTESTED for `actorId` — does any OTHER actor hold a live claim
+ * anywhere? The same signal the engine's inference gate uses (`engine.ts`
+ * `othersHaveLiveClaims`): while another actor is active, an unclaimed,
+ * uncaptured new file could be anyone's, so `selectOwned` must not sweep it
+ * into a commit by default. Solo (uncontested) trees keep the simple rule: a
+ * new file in your tree is yours.
+ */
+export function othersHoldLiveClaims(store: Store, actorId: string | null, now: number): boolean {
+  return listClaims(store, now).some((c) => c.actor !== actorId);
 }
 
 /**

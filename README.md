@@ -25,14 +25,21 @@ quilt setup     # wire Quilt into your repo (Claude Code, Cursor, or plain git)
 
 ## The problem
 
-You can run about three coding agents on one repo before they start clobbering
-each other. Two edit the same file and one silently overwrites the other. Their
-commits tangle into one blob you can't attribute. The usual advice is "run
-fewer," or "give each agent its own worktree."
+You want your agents in ONE checkout: one `node_modules`, one build, one dev
+server, one environment to keep working, not a worktree per agent, each with
+its own install and its own drift. But on a shared checkout, plain git bites
+even when agents work on completely different things: the first `git commit -am`
+sweeps everyone else's uncommitted files into one blob, codegen and lockfile
+churn get credited to whoever committed last, and two agents occasionally do
+land on the same line, where one silently overwrites the other. None of that
+requires agents to be working on the same task. It's just what a shared
+checkout does by default.
 
-Quilt lifts that ceiling. The agents share one checkout, and Quilt keeps
-attribution clean, prevents collisions, and gives each agent its own clean commit.
-And it holds as you add agents.
+Quilt makes the shared checkout safe. Every agent commits exactly its own
+lines and nothing else: disjoint work stays disjoint all the way into
+history, with no ceremony. And when two agents genuinely want the same code,
+that becomes a coordinated handoff instead of a silent loss. It holds as you
+add agents.
 
 `./examples/fleet.sh` runs seven agents against one checkout. The two endings:
 
@@ -114,8 +121,10 @@ command list.
 ## Why not worktrees?
 
 A worktree per agent is the usual answer, and for fully independent tasks it
-works. But isolation moves the problem to the end, and its costs grow with the
-number of agents.
+works. But every worktree is another environment to build (another install,
+another build cache, another dev server) and isolation just moves the
+collision to merge time. Those costs grow with the number of agents; the whole
+point of a shared checkout is paying for the environment once.
 
 |                                 | Run fewer agents | Worktree per agent          | Quilt                       |
 | ------------------------------- | ---------------- | --------------------------- | --------------------------- |

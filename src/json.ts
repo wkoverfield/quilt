@@ -66,6 +66,7 @@ export function mineJson(selection: Selection, includePatch: boolean) {
     // build for everyone; claim it to include it).
     wholeFiles: selection.wholeFiles,
     skippedBinary: selection.skippedBinary,
+    skippedUnowned: selection.skippedUnowned,
     ...(includePatch ? { patch: selection.patch } : {}),
   };
 }

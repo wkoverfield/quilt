@@ -17,13 +17,14 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
-import { acquireClaims, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, type Check } from "./doctor.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
-import { recordAuthorship } from "./authorship.js";
+import { recordAuthorship, capturedBySelf } from "./authorship.js";
+import { repoRelative } from "./paths.js";
 import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -128,15 +129,43 @@ function printSetupStep(step: SetupStep, dryRun: boolean): void {
   process.stdout.write(verb + `${step.action} ${step.file} — ${step.detail}\n`);
 }
 
-/** Print active advisory claims below a status view. */
-function printClaims(store: Store): void {
-  const claims = listClaims(store, Date.now());
+/** Print active advisory claims below a status view. When `forActor` is set,
+ * annotate that actor's own claims with how many agents are queued behind them
+ * — so a holder sees the pressure and commits promptly instead of releasing
+ * blind. */
+function printClaims(store: Store, forActor?: string | null): void {
+  const now = Date.now();
+  const claims = listClaims(store, now);
   if (claims.length === 0) return;
   process.stdout.write(pc.dim(pc.bold("  Claimed (reserved for editing):\n")));
   for (const c of claims) {
-    process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}\n`);
+    let tail = pc.dim(c.actor);
+    if (forActor && c.actor === forActor) {
+      const behind = waitersBehind(store, c, now);
+      if (behind.length) {
+        tail += pc.yellow(`  ← ${behind.length} waiting (${behind.join(", ")}) — commit to hand off`);
+      }
+    }
+    process.stdout.write(`    ${claimLabel(c)}   ${tail}${c.viaQueue ? pc.dim("  (from queue)") : ""}\n`);
   }
   process.stdout.write("\n");
+}
+
+/** Surface any claims auto-granted off the queue for `actorId` since it last
+ * looked, and mark them announced (shout exactly once). Used by both `status`
+ * and `claim`, so an agent discovers its grant on either natural check-back —
+ * not only via status. Returns the grant labels (for JSON callers). */
+function surfaceGrants(store: Store, actorId: string | null): string[] {
+  if (!actorId) return [];
+  const grants = pendingGrants(store, actorId, Date.now());
+  if (grants.length === 0) return [];
+  process.stdout.write(pc.green(pc.bold("  ✓ Granted while you waited:\n")));
+  for (const c of grants) {
+    process.stdout.write(`    ${claimLabel(c)}${c.intent ? pc.dim(`  (${c.intent})`) : ""}\n`);
+  }
+  process.stdout.write(pc.dim("    it's yours now — re-read the file and layer your change on top.\n\n"));
+  markGrantsNotified(store, actorId, Date.now(), grants);
+  return grants.map((c) => claimLabel(c));
 }
 
 /** Print any preserved (clobbered) work below a status view. */
@@ -152,11 +181,57 @@ function printClobbers(store: Store): void {
   process.stdout.write(pc.dim("    recover with: quilt restore <path>\n\n"));
 }
 
+/** Normalize commit/preview path args to a repo-relative allow-list, or
+ * undefined when none were given (commit all your owned files). Entries name a
+ * file or a directory prefix. `.`/the repo root means "everything" (""). A path
+ * that escapes the repo is a hard error — silently dropping it would shrink
+ * the commit with no signal. */
+function onlyPathsFrom(store: Store, paths: string[] | undefined): Set<string> | undefined {
+  if (!paths || paths.length === 0) return undefined;
+  const set = new Set<string>();
+  for (const p of paths) {
+    if (p === "." || resolve(store.paths.repoRoot, p) === resolve(store.paths.repoRoot)) {
+      set.add("");
+      continue;
+    }
+    const rel = repoRelative(store.paths.repoRoot, p);
+    if (rel === null) fail(`path "${p}" is outside this repository`);
+    set.add(rel!);
+  }
+  return set;
+}
+
+/** The ownership predicates every `selectOwned` caller must pass — claim and
+ * capture signals plus the contested-tree flag. One builder so no command
+ * forgets a predicate (a missing predicate reads as "not owned" and wrongly
+ * skips a claimed or captured new file). */
+function ownershipSignals(store: Store, actorId: string) {
+  const now = Date.now();
+  return {
+    pathClaimedByOther: pathsClaimedByOthers(store, actorId, now),
+    pathClaimedBySelf: pathsClaimedBySelf(store, actorId, now),
+    pathClaimedBySelfAny: pathsClaimedBySelfAny(store, actorId, now),
+    pathCapturedBySelf: capturedBySelf(store, actorId),
+    othersActive: othersHoldLiveClaims(store, actorId, now),
+  };
+}
+
 const program = new Command();
 program
   .name("quilt")
   .description("Actor-owned patches for Git. Same repo. Many agents. Clean commits.")
-  .version(VERSION);
+  .version(VERSION)
+  // A uniform identity flag for every command — the ergonomic alternative to
+  // prefixing `QUILT_ACTOR=<id>` on each call (which is easy to forget, and a
+  // forgotten prefix misattributes silently). Named `--as` (not `--actor`) so
+  // it never collides with `start --actor`. It just seeds the same env the rest
+  // of the resolution already reads, so it composes with sessions and hooks
+  // unchanged. An explicit env var still wins if both are set.
+  .option("--as <id>", "act as this actor for this command (sets QUILT_ACTOR; an explicit QUILT_ACTOR env var wins)")
+  .hook("preAction", (thisCommand) => {
+    const as = thisCommand.opts().as as string | undefined;
+    if (as && !process.env.QUILT_ACTOR) process.env.QUILT_ACTOR = as;
+  });
 
 program
   .command("init")
@@ -356,21 +431,30 @@ program
     const warnings = ctx.actorId
       ? dependencyWarnings(store, ctx.actorId, Date.now())
       : [];
+    // Async claims: surface anything auto-granted off the queue since this
+    // actor last looked, then mark it announced so it shouts exactly once.
     if (opts.json) {
+      const grants = ctx.actorId ? pendingGrants(store, ctx.actorId, Date.now()) : [];
       process.stdout.write(
         JSON.stringify(
-          { ...statusJson(model, headSha(store.paths.repoRoot)), dependencyWarnings: warnings },
+          {
+            ...statusJson(model, headSha(store.paths.repoRoot)),
+            dependencyWarnings: warnings,
+            grantedWhileWaiting: grants.map((c) => claimLabel(c)),
+          },
           null,
           2,
         ) + "\n",
       );
+      if (ctx.actorId && grants.length) markGrantsNotified(store, ctx.actorId, Date.now(), grants);
       return;
     }
+    surfaceGrants(store, ctx.actorId);
     process.stdout.write(renderStatus(model, shortHead(store.paths.repoRoot)));
     if (watcherRunning(store)) {
       process.stdout.write(pc.dim("  watching: live (quilt watch)\n\n"));
     }
-    printClaims(store);
+    printClaims(store, ctx.actorId);
     if (warnings.length) {
       process.stdout.write(pc.yellow(pc.bold("  Dependency heads-up:\n")));
       for (const w of warnings) {
@@ -487,7 +571,7 @@ program
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     reconcile(store, ctx.actorId);
     const model = buildModel(store, ctx.actorId);
-    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership());
+    const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), ownershipSignals(store, ctx.actorId));
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, false), null, 2) + "\n");
       return;
@@ -540,10 +624,11 @@ program
 program
   .command("preview")
   .description("Preview the exact patch `commit --mine` would create")
+  .argument("[paths...]", "limit to these files (default: all your owned files)")
   .option("--mine", "preview your owned patch (default)")
   .option("--include-unclaimed", "also include hunks that touch unattributed lines")
   .option("--json", "emit the patch as JSON")
-  .action((opts) => {
+  .action((paths: string[], opts) => {
     const store = requireStore();
     const ctx = activeContext(store);
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
@@ -551,8 +636,8 @@ program
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
-      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
-      pathClaimedBySelf: pathsClaimedBySelf(store, ctx.actorId, Date.now()),
+      onlyPaths: onlyPathsFrom(store, paths),
+      ...ownershipSignals(store, ctx.actorId),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify(mineJson(selection, true), null, 2) + "\n");
@@ -566,16 +651,24 @@ program
         ),
       );
     }
+    if (selection.skippedUnowned.length) {
+      process.stdout.write(
+        pc.yellow("  ⚠ Would leave out new files you never claimed or edited: ") +
+          selection.skippedUnowned.join(", ") +
+          pc.yellow("\n    (if they're yours: quilt claim <path>, or --include-unclaimed; else ignore)\n\n"),
+      );
+    }
   });
 
 program
   .command("commit")
   .description("Commit only your owned patch")
+  .argument("[paths...]", "limit the commit to these files (default: all your owned files)")
   .option("--mine", "commit your owned hunks (required)")
   .requiredOption("-m, --message <message>", "commit message")
   .option("--dry-run", "show what would happen without committing")
   .option("--include-unclaimed", "also commit hunks that touch unattributed lines")
-  .action((opts) => {
+  .action((paths: string[], opts) => {
     const store = requireStore();
     if (!opts.mine) fail("commit requires --mine in V0 (only owned-patch commits are supported).");
     let ctx = activeContext(store);
@@ -599,11 +692,18 @@ program
     const model = buildModel(store, ctx.actorId);
     const selection = selectOwned(model, store.paths.repoRoot, store.readOwnership(), {
       includeMixed: opts.includeUnclaimed,
-      pathClaimedByOther: pathsClaimedByOthers(store, ctx.actorId, Date.now()),
-      pathClaimedBySelf: pathsClaimedBySelf(store, ctx.actorId, Date.now()),
+      onlyPaths: onlyPathsFrom(store, paths),
+      ...ownershipSignals(store, ctx.actorId!),
     });
 
     if (selection.files.length === 0 && selection.wholeFiles.length === 0) {
+      if (selection.skippedUnowned.length) {
+        fail(
+          "nothing you own to commit here. New files you never claimed or edited were left out: " +
+            selection.skippedUnowned.join(", ") +
+            " — if they're yours, claim them (quilt claim <path>) or pass --include-unclaimed.",
+        );
+      }
       if (selection.skippedBinary.length) {
         fail(
           "nothing committable at line level, and these binary/too-large files are unclaimed: " +
@@ -623,13 +723,23 @@ program
       if (res.reason && res.reason !== "dry-run") {
         fail(res.reason);
       }
+      const dryCount = selection.files.length + selection.wholeFiles.length;
       process.stdout.write(
         pc.dim(
-          `  dry-run: would commit ${selection.files.length} file(s), ` +
+          `  dry-run: would commit ${dryCount} file(s), ` +
             `+${selection.totalAdded}/-${selection.totalRemoved} as ${ctx.actor!.displayName}.\n` +
             "  (no changes were made)\n\n",
         ),
       );
+      // The dry run is the verification surface — a skip invisible here defeats
+      // the point of previewing.
+      if (selection.skippedUnowned.length) {
+        process.stdout.write(
+          pc.yellow("  ⚠ Would leave out new files you never claimed or edited: ") +
+            selection.skippedUnowned.join(", ") +
+            pc.yellow("\n    (if they're yours: quilt claim <path>, or --include-unclaimed; else ignore)\n"),
+        );
+      }
       return;
     }
 
@@ -651,9 +761,13 @@ program
     // Re-observe so the freshly committed lines drop out of ownership.
     reconcile(store, ctx.actorId);
 
+    // Count line-level files AND whole-staged binaries — a pure-binary commit
+    // committed real work even though `files` (the line-level split) is empty,
+    // so reporting "0 file(s)" reads as if nothing happened.
+    const committedCount = selection.files.length + selection.wholeFiles.length;
     process.stdout.write(
       pc.green("✓ ") +
-        `Committed ${selection.files.length} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
+        `Committed ${committedCount} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
         `(${res.commitSha!.slice(0, 7)}).\n` +
         pc.dim("  Other actors' changes remain in the working tree.\n") +
         (rel.released > 0
@@ -670,6 +784,13 @@ program
         pc.yellow("  ⚠ Skipped binary/too-large files nobody claimed: ") +
           selection.skippedBinary.join(", ") +
           pc.yellow("\n    (claim a file to commit it whole: quilt claim <path>)\n"),
+      );
+    }
+    if (selection.skippedUnowned.length) {
+      process.stdout.write(
+        pc.yellow("  ⚠ Left out new files you never claimed or edited: ") +
+          selection.skippedUnowned.join(", ") +
+          pc.yellow("\n    (if they're yours: quilt claim <path>, or --include-unclaimed; else ignore)\n"),
       );
     }
     if (selection.blockedFiles.length) {
@@ -769,7 +890,9 @@ program
   .option("--json", "emit JSON")
   .option("--intent <text>", "a short why for this claim, shown to anyone it blocks")
   .option("--creating", "allow symbol claims for symbols you are ABOUT TO ADD (they bind at write time)")
-  .action((paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean }) => {
+  .option("--wait [seconds]", "block until denied targets free up (holder releases, commits, or their lease lapses); default window 600s")
+  .option("--queue", "async: if denied, register interest and get auto-granted when it frees — don't block, keep working (check back with quilt status)")
+  .action(async (paths: string[], opts: { json?: boolean; intent?: string; creating?: boolean; wait?: string | boolean; queue?: boolean }) => {
     const store = requireStore();
     const ctx = activeContext(store);
 
@@ -785,32 +908,105 @@ program
       }
       process.stdout.write(pc.bold("\n  Active claims:\n\n"));
       for (const c of claims) {
-        process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}\n`);
+        process.stdout.write(`    ${claimLabel(c)}   ${pc.dim(c.actor)}` + (c.viaQueue ? pc.dim("  (granted from queue)") : "") + "\n");
       }
       process.stdout.write("\n");
       return;
     }
 
     if (!ctx.actorId) fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
-    const results = acquireClaims(
+    if (opts.wait !== undefined && opts.queue) fail("--wait and --queue are opposite strategies; pick one (block, or register and keep working).");
+    // Validate --wait EAGERLY, not just when a target turns out to be held.
+    // `--wait <seconds>` is an optional-value flag, so `claim a.ts --wait b.ts`
+    // parses b.ts as the wait value — without this check the claim on b.ts is
+    // silently swallowed and the command exits 0 having claimed only a.ts.
+    const waitSec = typeof opts.wait === "string" ? Number(opts.wait) : opts.wait === true ? 600 : undefined;
+    if (opts.wait !== undefined && (!Number.isFinite(waitSec!) || waitSec! <= 0)) {
+      fail(
+        `invalid --wait value "${opts.wait}" — expected seconds. ` +
+          `If "${opts.wait}" was meant as a path, put --wait AFTER the paths or pass --wait=<seconds>.`,
+      );
+    }
+    // Retrying a claim is a natural check-back for a queued grant — surface it
+    // here too, so an agent that re-claims (instead of running status) still
+    // learns it was auto-granted off the queue.
+    if (!opts.json) surfaceGrants(store, ctx.actorId);
+    let results = acquireClaims(
       store,
       ctx.actorId!,
       ctx.session?.id ?? null,
       paths,
       Date.now(),
       opts.intent,
-      { creating: opts.creating },
+      { creating: opts.creating, queue: opts.queue },
     );
+    let waitNote = "";
+    let waited: { waitedMs: number; timedOut: boolean } | undefined;
+    const heldNow = results.filter((r) => !r.granted && r.holder);
+    const fatalNow = results.some((r) => !r.granted && !r.holder);
+    if (opts.wait !== undefined && heldNow.length > 0 && !fatalNow) {
+      // The blocking-wait primitive: instead of the agent blind-polling, hold
+      // here and return the moment the holders release (commit auto-release
+      // included) or the window elapses. (waitSec validated eagerly above.)
+      if (!opts.json) {
+        for (const r of heldNow) {
+          const t = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
+          process.stdout.write(
+            pc.yellow("  … waiting ") + `${t} ${pc.dim(`(held by ${r.holder}`)}` +
+              pc.dim(r.holderIntent ? ` — ${r.holderIntent})` : ")") + "\n",
+          );
+        }
+      }
+      const outcome = await acquireClaimsWait(
+        store,
+        ctx.actorId!,
+        ctx.session?.id ?? null,
+        paths,
+        opts.intent,
+        { creating: opts.creating, waitMs: waitSec! * 1000 },
+      );
+      results = outcome.results;
+      waited = { waitedMs: outcome.waitedMs, timedOut: outcome.timedOut };
+      waitNote = outcome.timedOut
+        ? `gave up after ${Math.round(outcome.waitedMs / 1000)}s — still held`
+        : outcome.waitedMs > 500
+          ? `freed up after ${Math.round(outcome.waitedMs / 1000)}s`
+          : "";
+    }
     // Push-awareness: warn if anything just claimed depends on a symbol another
     // actor is currently changing, so the actor learns at reservation time.
     const warnings = dependencyWarnings(store, ctx.actorId!, Date.now());
     if (opts.json) {
-      process.stdout.write(JSON.stringify({ results, warnings }, null, 2) + "\n");
+      // Wait outcome rides in JSON too — a script must be able to tell a
+      // timeout (still held, retryable) from an instant denial. Same shape the
+      // MCP surface returns.
+      process.stdout.write(
+        JSON.stringify(
+          { results, warnings, ...(waited ? { waitedMs: waited.waitedMs, timedOut: waited.timedOut } : {}) },
+          null,
+          2,
+        ) + "\n",
+      );
     } else {
+      if (waitNote) process.stdout.write(pc.dim(`  (${waitNote})\n`));
       for (const r of results) {
         const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
           process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
+        } else if (r.queued) {
+          // Async: registered, not blocked. The agent moves on and the grant
+          // lands at its next quilt call.
+          const ahead = (r.queuePosition ?? 1) - 1;
+          process.stdout.write(
+            pc.cyan("  … queued  ") + target +
+              pc.dim(` (held by ${r.holder}` + (r.holderIntent ? ` — ${r.holderIntent}` : "") + ")") + "\n",
+          );
+          process.stdout.write(
+            pc.dim(
+              `      ${ahead === 0 ? "you're next" : `${ahead} ahead of you`}; ` +
+                "auto-granted when it frees — keep working, then re-check with quilt status\n",
+            ),
+          );
         } else {
           const why =
             r.reason === "outside-repo"
@@ -833,13 +1029,19 @@ program
               pc.dim(`      their claim lapses ${new Date(r.holderExpiresAt).toISOString()} unless renewed\n`),
             );
           }
+          if (!opts.queue) {
+            process.stdout.write(
+              pc.dim("      tip: --queue to be auto-granted when it frees, or --wait to block\n"),
+            );
+          }
         }
       }
       for (const w of warnings) {
         process.stdout.write(pc.yellow("  ⚠ heads-up ") + formatWarning(w) + "\n");
       }
     }
-    if (results.some((r) => !r.granted)) process.exitCode = 1;
+    // A queued target is a SUCCESS (registered — keep working), not a denial.
+    if (results.some((r) => !r.granted && !r.queued)) process.exitCode = 1;
   });
 
 program

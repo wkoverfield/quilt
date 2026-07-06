@@ -2,16 +2,18 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { randomBytes, randomUUID } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
 import type { Store } from "./state.js";
 import { headSha, shortHead } from "./git.js";
 import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
-import { acquireClaims, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf } from "./claims.js";
+import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
 import { recordOutcome, openEscalations } from "./outcomes.js";
-import { applyAndRecordEdit, applyAndRecordWrite } from "./authorship.js";
+import { applyAndRecordEdit, applyAndRecordWrite, capturedBySelf } from "./authorship.js";
 import { VERSION } from "./version.js";
 import { dependencyWarnings } from "./push.js";
+import { repoRelative } from "./paths.js";
 import type { Actor, ActorType, Session } from "./types.js";
 
 /**
@@ -25,6 +27,40 @@ import type { Actor, ActorType, Session } from "./types.js";
  */
 export async function runMcpServer(store: Store): Promise<void> {
   const repoRoot = store.paths.repoRoot;
+  // Entries name a file or a directory prefix; "." / the repo root means
+  // "everything" (""). Returns the invalid (outside-repo) entries alongside so
+  // callers can refuse loudly instead of silently shrinking the commit.
+  const mcpOnlyPaths = (
+    paths: string[] | undefined,
+  ): { set: Set<string> | undefined; invalid: string[] } => {
+    if (!paths || paths.length === 0) return { set: undefined, invalid: [] };
+    const set = new Set<string>();
+    const invalid: string[] = [];
+    for (const p of paths) {
+      if (p === "." || resolvePath(repoRoot, p) === resolvePath(repoRoot)) {
+        set.add("");
+        continue;
+      }
+      const rel = repoRelative(repoRoot, p);
+      if (rel === null) invalid.push(p);
+      else set.add(rel);
+    }
+    return { set, invalid };
+  };
+  // The ownership predicates every selectOwned caller must pass — claim and
+  // capture signals plus the contested-tree flag. One builder so no tool
+  // forgets a predicate (a missing predicate reads as "not owned" and wrongly
+  // skips a claimed or captured new file).
+  const ownershipSignals = (actorId: string) => {
+    const now = Date.now();
+    return {
+      pathClaimedByOther: pathsClaimedByOthers(store, actorId, now),
+      pathClaimedBySelf: pathsClaimedBySelf(store, actorId, now),
+      pathClaimedBySelfAny: pathsClaimedBySelfAny(store, actorId, now),
+      pathCapturedBySelf: capturedBySelf(store, actorId),
+      othersActive: othersHoldLiveClaims(store, actorId, now),
+    };
+  };
   const nowIso = () => new Date().toISOString();
 
   let active: { actorId: string; session: Session | null } | null = null;
@@ -162,16 +198,24 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, false);
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok({
+      // Async claims: targets auto-granted off the queue since you last looked.
+      // Surfacing marks them announced, so this is the natural "check back"
+      // point after a `queue`d claim — no polling, no blocking.
+      const grants = actorId ? pendingGrants(store, actorId, Date.now()) : [];
+      const resp = ok({
         ...statusJson(model, headSha(repoRoot)),
         clobbers: store.readClobbers().clobbers.filter((c) => !c.restored),
         claims: listClaims(store, Date.now()),
+        // Targets you queued for that are now YOURS — re-read and layer on top.
+        grantedWhileWaiting: grants.map((c) => (c.dir ? c.path + "/" : c.symbol ? `${c.path}#${c.symbol}` : c.path)),
         // Push-awareness at the orient step: a symbol this actor already claimed
         // depends on one another actor is changing. Mirrors `quilt status --json`.
         dependencyWarnings: actorId ? dependencyWarnings(store, actorId, Date.now()) : [],
         // Collisions an agent kicked up for a human and not yet resolved.
         needsYou: openEscalations(store),
       });
+      if (actorId && grants.length) markGrantsNotified(store, actorId, Date.now(), grants);
+      return resp;
     },
   );
 
@@ -182,7 +226,7 @@ export async function runMcpServer(store: Store): Promise<void> {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
-      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), { pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()), pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()) }), false));
+      return ok(mineJson(selectOwned(model, repoRoot, store.readOwnership(), ownershipSignals(actorId)), false));
     },
   );
 
@@ -210,21 +254,26 @@ export async function runMcpServer(store: Store): Promise<void> {
     "preview_mine",
     {
       description: "Preview the exact patch commit_mine would create.",
-      inputSchema: { actor: actorArg, includeUnclaimed: z.boolean().optional() },
+      inputSchema: { actor: actorArg, includeUnclaimed: z.boolean().optional(), paths: z.array(z.string()).optional().describe("limit to these files (default: all your owned files)") },
     },
-    async ({ actor, includeUnclaimed }) => {
+    async ({ actor, includeUnclaimed, paths }) => {
       const actorId = resolveActor(actor, true)!;
+      const scoped = mcpOnlyPaths(paths);
+      if (scoped.invalid.length) {
+        return ok({ error: `paths outside this repository: ${scoped.invalid.join(", ")}` });
+      }
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
-        pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
-        pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()),
+        onlyPaths: scoped.set,
+        ...ownershipSignals(actorId),
       });
       return ok({
         patch: sel.patch,
         wholeFiles: sel.wholeFiles,
         skippedBinary: sel.skippedBinary,
+        skippedUnowned: sel.skippedUnowned,
         files: sel.files,
         totalAdded: sel.totalAdded,
         totalRemoved: sel.totalRemoved,
@@ -241,18 +290,26 @@ export async function runMcpServer(store: Store): Promise<void> {
         actor: actorArg,
         message: z.string(),
         includeUnclaimed: z.boolean().optional(),
+        paths: z.array(z.string()).optional().describe("limit the commit to these files (default: all your owned files) — a hard filter, so an unnamed orphan/leftover is never swept in"),
       },
     },
-    async ({ actor: actorIn, message, includeUnclaimed }) => {
+    async ({ actor: actorIn, message, includeUnclaimed, paths }) => {
       const actorId = resolveActor(actorIn, true)!;
       // resolveActor registered the actor if it was first-seen, so it exists.
       const actor = store.findActor(actorId)!;
+      const scoped = mcpOnlyPaths(paths);
+      if (scoped.invalid.length) {
+        return ok({
+          committed: false,
+          reason: `paths outside this repository: ${scoped.invalid.join(", ")}`,
+        });
+      }
       reconcile(store, actorId);
       const model = buildModel(store, actorId);
       const sel = selectOwned(model, repoRoot, store.readOwnership(), {
         includeMixed: includeUnclaimed,
-        pathClaimedByOther: pathsClaimedByOthers(store, actorId, Date.now()),
-        pathClaimedBySelf: pathsClaimedBySelf(store, actorId, Date.now()),
+        onlyPaths: scoped.set,
+        ...ownershipSignals(actorId),
       });
       if (sel.files.length === 0 && sel.wholeFiles.length === 0) {
         return ok({
@@ -260,6 +317,12 @@ export async function runMcpServer(store: Store): Promise<void> {
           reason: "no owned changes to commit",
           ...(sel.skippedBinary.length
             ? { skippedBinary: sel.skippedBinary, note: "binary/too-large files need a claim to commit whole" }
+            : {}),
+          ...(sel.skippedUnowned.length
+            ? {
+                skippedUnowned: sel.skippedUnowned,
+                note: "new files you never claimed or edited were left out (another actor is active) — claim them or pass includeUnclaimed if they're yours",
+              }
             : {}),
         });
       }
@@ -288,6 +351,7 @@ export async function runMcpServer(store: Store): Promise<void> {
               releasedClaims,
               wholeFiles: sel.wholeFiles,
               skippedBinary: sel.skippedBinary,
+              skippedUnowned: sel.skippedUnowned,
               note:
                 "committed files' claims were auto-released — no separate release call needed" +
                 (sel.skippedBinary.length
@@ -310,18 +374,56 @@ export async function runMcpServer(store: Store): Promise<void> {
         paths: z.array(z.string()),
         intent: z.string().optional().describe("a short why for this claim, e.g. the ticket/task"),
         creating: z.boolean().optional().describe("allow symbol claims for symbols you are ABOUT TO ADD to an existing file (they bind at write time). Without it, a symbol missing from the file is denied."),
+        wait: z.number().optional().describe("seconds to BLOCK waiting for holder-denied targets to free up (holder releases, commits, or their lease lapses) instead of polling yourself. Returns as soon as everything grants. Capped at 120 per call — re-call to keep waiting. Denials that waiting can't fix (bad path, missing symbol) return immediately."),
+        queue: z.boolean().optional().describe("ASYNC alternative to wait: if denied by a holder, register interest and return immediately — you are AUTO-GRANTED the target when it frees. Do NOT block. Keep working; the grant appears in get_status as `grantedWhileWaiting`. Best when you have other work to do meanwhile."),
       },
     },
-    async ({ actor, paths, intent, creating }) => {
+    async ({ actor, paths, intent, creating, wait, queue }) => {
       const actorId = resolveActor(actor, true)!;
       const sessionId = active?.actorId === actorId ? active?.session?.id ?? null : null;
-      const results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating });
+      // Same contract as the CLI: wait and queue are opposite strategies. Both
+      // at once would time out saying "targets still held, work elsewhere"
+      // while a live waiter lingers — the actor later holds a claim it was
+      // never told about, wedging everyone queued behind it.
+      if (wait && queue) {
+        return ok({
+          error: "wait and queue are opposite strategies; pick one (block, or register and keep working)",
+          results: [],
+        });
+      }
+      let results = acquireClaims(store, actorId, sessionId, paths, Date.now(), intent, { creating, queue });
+      let waited: { waitedMs: number; timedOut: boolean } | undefined;
+      const heldNow = results.some((r) => !r.granted && r.holder);
+      const fatalNow = results.some((r) => !r.granted && !r.holder);
+      if (wait && wait > 0 && heldNow && !fatalNow) {
+        // Block server-side instead of making the agent poll. Capped per call
+        // so a long wait can't trip the MCP client's tool timeout; the agent
+        // re-calls to extend (each re-call also refreshes its own claims).
+        const waitMs = Math.min(wait, 120) * 1000;
+        const outcome = await acquireClaimsWait(store, actorId, sessionId, paths, intent, {
+          creating,
+          waitMs,
+        });
+        results = outcome.results;
+        waited = { waitedMs: outcome.waitedMs, timedOut: outcome.timedOut };
+      }
       // Push-awareness at reservation time: tell the agent if anything it just
       // claimed depends on a symbol another actor is currently changing.
       // (A symbol claim that names nothing is DENIED with reason
       // symbol-not-found + a suggestion — it used to be granted-but-non-binding,
       // which produced a silent partial commit in the field.)
-      return ok({ results, dependencyWarnings: dependencyWarnings(store, actorId, Date.now()) });
+      return ok({
+        results,
+        ...(waited
+          ? {
+              waitedMs: waited.waitedMs,
+              ...(waited.timedOut
+                ? { note: "wait window elapsed with targets still held — re-call with wait to keep waiting, or work elsewhere" }
+                : {}),
+            }
+          : {}),
+        dependencyWarnings: dependencyWarnings(store, actorId, Date.now()),
+      });
     },
   );
 

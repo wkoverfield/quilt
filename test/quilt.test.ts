@@ -449,6 +449,9 @@ test("a claimed binary file commits whole; an unclaimed one is skipped loudly", 
     const second = quilt(dir, ["commit", "--mine", "-m", "with blob"], "dev");
     assert.equal(second.status, 0, second.stderr);
     assert.match(second.stdout, /Committed whole.*blob\.bin/s);
+    // The count includes the whole-staged binary — a pure-binary commit must
+    // not report "Committed 0 file(s)" as if nothing happened.
+    assert.match(second.stdout, /Committed 1 file\(s\)/, "whole-staged binary is counted");
     const files = spawnSync("git", ["show", "--name-only", "--format=", "HEAD"], {
       cwd: dir, encoding: "utf8",
     }).stdout.trim();
@@ -458,5 +461,31 @@ test("a claimed binary file commits whole; an unclaimed one is skipped loudly", 
     assert.deepEqual(blob.stdout, Buffer.from([0x71, 0x00, 0x75, 0x69, 0x6c, 0x74]));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Prefix ergonomics: the global `--actor` flag is a per-command alternative to
+// the QUILT_ACTOR env prefix (which is easy to forget). Fleet-agent feedback.
+test("--actor flag acts as that identity, and an explicit env var still wins", () => {
+  const dir = makeRepo();
+  try {
+    write(dir, "a.ts", "export const x = 1;\n");
+    commitAll(dir, "init");
+    assert.equal(quilt(dir, ["init"]).status, 0);
+
+    // --actor with no env: acts as flagged id.
+    const nc = { ...process.env, NO_COLOR: "1" };
+    const r = spawnSync("node", [CLI, "--as", "flagged", "claim", "a.ts"], { cwd: dir, encoding: "utf8", env: nc });
+    assert.match(r.stdout ?? "", /claimed a\.ts/);
+    const who = spawnSync("node", [CLI, "--as", "flagged", "whoami"], { cwd: dir, encoding: "utf8", env: nc });
+    assert.match(who.stdout ?? "", /flagged/);
+
+    // env var wins when both are present (env is the stronger, per-process signal).
+    const both = spawnSync("node", [CLI, "--as", "flagged", "whoami"], {
+      cwd: dir, encoding: "utf8", env: { ...process.env, NO_COLOR: "1", QUILT_ACTOR: "fromenv" },
+    });
+    assert.match(both.stdout ?? "", /fromenv/);
+  } finally {
+    cleanup(dir);
   }
 });

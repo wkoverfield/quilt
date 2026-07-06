@@ -29,20 +29,29 @@ You share this checkout with other agents. Coordinate through Quilt:
   process or MCP connection, pick a stable id — your role or task name (e.g.
   \`auth-agent\`) — and pass it as \`actor\` on every Quilt call, since a shared
   connection can't tell you apart automatically.
-- BEFORE you edit a file, \`claim\` it — WHOLE FILES by default (\`src/auth.ts\`),
-  a directory for codegen output (\`convex/_generated/\`). The claim is what
-  BINDS your external edits to your id; attribution is decided at edit time
-  and is never retroactive, so claim first, then edit. Use \`path#symbol\`
-  only to share one file with another actor, and pass \`creating: true\` if
-  the symbol doesn't exist yet. Pass a short intent too — the why (your
-  ticket/task) — which is shown to anyone you block.
+- If your edits flow through the capture layer (Claude Code's native
+  Edit/Write tools with the quilt hooks installed, or \`quilt_edit\` /
+  \`quilt_write\`), attribution is automatic — you can edit and
+  \`commit_mine\` with no claims at all for work nobody else touches.
+- CLAIM before editing when either applies: (a) you're editing via bash,
+  scripts, or codegen (nothing captures those — a whole-file claim placed
+  BEFORE the edit is what binds them to you; attribution is edit-time and
+  never retroactive), or (b) you want the code protected from other actors
+  while you work. Claim WHOLE FILES (\`src/auth.ts\`) or a directory for
+  codegen (\`convex/_generated/\`); use \`path#symbol\` only to share one
+  file with another actor (pass \`creating: true\` if the symbol doesn't
+  exist yet). Always pass a short intent — the why (your ticket/task) —
+  it's shown to anyone you block.
 - If your claim is denied, another agent holds that code and is mid-change. The
   response carries their holderIntent (what they are doing) and when their
   claim lapses. Use it instead of forcing your change through: if they are
-  already doing your change, drop yours; if it is compatible, adapt around it;
-  if your goals are genuinely opposed (you each need the same line to be
-  different things), do NOT overwrite them — escalate the target with a reason
-  naming both intents, and move on. A human decides.
+  already doing your change, drop yours; if it is compatible, adapt around it
+  (pass \`queue: true\` on the claim to be AUTO-GRANTED it when they release —
+  don't block, keep working, and it lands in your next get_status; or \`wait\`
+  to block until they release, then re-read and layer on top); if your goals
+  are genuinely opposed (you each need the same line to be different things),
+  do NOT overwrite them — escalate the target with a reason naming both
+  intents, and move on. A human decides.
 - When you reconcile a clash yourself (merge both intents, or adapt), resolve the
   target with a short note so the decision is recorded.
 - The claim response may include \`dependencyWarnings\`: a function you depend on
