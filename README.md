@@ -56,7 +56,7 @@ WITH quilt      6 clean commits, one per agent, each exactly its own lines.
 ## When two agents want the same file
 
 Fanning out on disjoint files is the easy case. The real test is contention.
-A denied claim isn't a dead end — it carries the holder's stated intent and
+A denied claim isn't a dead end. It carries the holder's stated intent and
 when their lease lapses:
 
 ```txt
