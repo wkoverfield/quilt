@@ -51,3 +51,20 @@ relevant `.quilt/` state (minus anything private) are useful to include.
 
 By contributing, you agree that your contributions are licensed under the
 project's [MIT license](LICENSE).
+
+## Release notes and public copy
+
+Everything a user can read without cloning the repo is written FOR users:
+GitHub release notes, the CHANGELOG, the README, docs pages, and npm copy.
+
+The standard for a release:
+
+- Title: `vX.Y.Z: short user-facing theme`. No em dashes.
+- Body: one line on what the release means for a user, then `## Added` /
+  `## Fixed` / `## Changed` sections as needed, then an
+  `**Install:** npm install -g @quilt-dev/cli` line and a full-changelog link.
+- Say what changed and why a user cares. Never include internal QA
+  bookkeeping (test counts, bench scores) or internal process narration
+  (dogfood waves, review fleets, agent counts, phase numbers). That material
+  belongs in commit messages and pull request bodies.
+- No em dashes in prose. CLI output strings quoted verbatim are exempt.
