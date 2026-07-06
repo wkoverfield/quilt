@@ -1,6 +1,6 @@
 {
   "name": "@quilt-dev/cli",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "mcpName": "io.github.wkoverfield/quilt",
   "description": "Actor-owned patches for Git. Same repo. Many agents. Clean commits.",
   "type": "module",

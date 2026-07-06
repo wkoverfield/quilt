@@ -6,6 +6,8 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-05
+
 ### Added
 
 - **`commit --mine [paths...]` and `preview --mine [paths...]`: a hard path
