@@ -14,8 +14,8 @@ All notable changes to Quilt are documented here. The format is based on
   allow-list (MCP: `paths` array on `commit_mine` / `preview_mine`).** Naming
   files or directory prefixes commits exactly those and nothing else, so an
   unnamed change can never ride along. A path outside the repo is a loud error,
-  not a silent shrink. From fleet round 4: `commit --mine mine.ts` used to
-  ignore the path entirely and sweep everything the actor owned.
+  not a silent shrink. Previously `commit --mine mine.ts` ignored the path
+  entirely and swept in everything the actor owned.
 - **The contested-tree orphan gate.** When another actor holds a live claim, a
   NEW untracked file the actor never claimed and never captured is left out of
   `commit --mine` loudly (`skippedUnowned` in JSON/MCP, plus a warning naming
@@ -26,8 +26,8 @@ All notable changes to Quilt are documented here. The format is based on
   counts as claiming the file, and hook/MCP-captured edits count as authorship.
 
 - **Async claims, `claim --queue` (MCP: `queue: true`): register interest and
-  get AUTO-GRANTED when the target frees, without blocking.** The verification
-  fleet's follow-on ask after `--wait`: "a blocked call is a blocked agent." A
+  get AUTO-GRANTED when the target frees, without blocking.** A blocked call is
+  a blocked agent. A
   queued claim returns immediately; when the holder releases (commit
   auto-release included) or their lease lapses, the earliest waiter is granted a
   real claim and discovers it at its next `quilt status` / `get_status`
@@ -41,8 +41,8 @@ All notable changes to Quilt are documented here. The format is based on
   (`quilt --as builder-a claim …`), the ergonomic alternative to prefixing
   `QUILT_ACTOR=<id>` on every call. An explicit env var still wins.
 - **`claim --wait` (MCP: `wait` seconds): block until denied targets free
-  up.** The verification fleet's #1 friction: after a denial, retrying was
-  blind polling ("get denied, guess when to retry, hope"). The claim call can
+  up.** After a denial, retrying used to mean blind polling: get denied, guess
+  when to retry, hope. The claim call can
   now hold until the holder releases (commit auto-release included) or their
   lease lapses, pacing itself against the lease expiry, and returns granted
   the moment the way is clear. Denials waiting can't fix (bad path, missing
@@ -98,7 +98,7 @@ All notable changes to Quilt are documented here. The format is based on
 ### Fixed
 
 - **Binary and too-large files are no longer silently dropped from commits**
-  (dogfood phase 7: `package-lock.json` tripped the too-large-to-diff
+  (in real use, `package-lock.json` tripped the too-large-to-diff
   classification and vanished from `commit_mine` without a word — a broken
   build for everyone until a manual commit). No line-level split exists for
   such files, so the claim is the ownership signal: a file covered by your
@@ -123,7 +123,7 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Fixed
 
-- **Symbol claims that bind nothing are now denied** (the 20-hour dogfood's
+- **Symbol claims that bind nothing are now denied** (real fleets'
   #1 finding). A symbol claim naming nothing real in the file — a typo, a
   schema table property, an unparseable file type — was granted but bound
   nothing: the claimant's external edits attributed elsewhere and its
@@ -231,7 +231,7 @@ All notable changes to Quilt are documented here. The format is based on
 - **`commit_mine` says it auto-released** the committed files' claims
   (`releasedClaims: N` + note). `release` with nothing held explains the
   auto-release instead of a bare `released: 0` — the paper cut every single
-  dogfood agent hit.
+  real agent hit.
 - **Denials carry the holder's claim expiry** (`holderExpiresAt`), so a
   blocked actor can pace retries instead of guessing.
 - Claims carry `expiresAtIso` alongside the epoch `expiresAt`, matching
@@ -251,8 +251,8 @@ All notable changes to Quilt are documented here. The format is based on
 - **Directory claims**: a trailing slash (`convex/_generated/`) reserves every
   current and future path under the prefix — one claim for codegen output
   instead of guessing filenames in advance.
-- The coordination snippet and docs now teach the binding rules the dogfood
-  fleet learned the hard way: whole-file claims BEFORE editing, attribution is
+- The coordination snippet and docs now teach the binding rules real fleets
+  learned the hard way: whole-file claims BEFORE editing, attribution is
   edit-time and never retroactive, commit auto-releases, shared-tree proof
   discipline, gitignore tooling artifacts.
 
