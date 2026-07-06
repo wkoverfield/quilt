@@ -50,7 +50,7 @@
     "commander": "^15.0.0",
     "picocolors": "^1.1.1",
     "tree-sitter-wasms": "0.1.13",
-    "web-tree-sitter": "0.26.10",
+    "web-tree-sitter": "0.24.7",
     "zod": "^4.4.3"
   },
   "devDependencies": {
