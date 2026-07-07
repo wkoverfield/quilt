@@ -221,7 +221,11 @@ export async function runMcpServer(store: Store): Promise<void> {
 
   server.registerTool(
     "get_my_changes",
-    { description: "Summarize the changes you own.", inputSchema: { actor: actorArg } },
+    {
+      description:
+        "List the changes YOU own in the working tree: the files and hunks attributed to your actor id, with per-file added/removed line counts. The 'what have I done so far' view, scoped to just you. Review your own work with it before committing — use get_status for who-owns-what across all actors, or preview_mine for the exact patch commit_mine would produce.",
+      inputSchema: { actor: actorArg },
+    },
     async ({ actor }) => {
       const actorId = resolveActor(actor, true)!;
       reconcile(store, actorId);
@@ -253,8 +257,13 @@ export async function runMcpServer(store: Store): Promise<void> {
   server.registerTool(
     "preview_mine",
     {
-      description: "Preview the exact patch commit_mine would create.",
-      inputSchema: { actor: actorArg, includeUnclaimed: z.boolean().optional(), paths: z.array(z.string()).optional().describe("limit to these files (default: all your owned files)") },
+      description:
+        "Show the exact patch commit_mine would create right now: only your owned hunks as a unified diff, plus the files, whole-file additions, and added/removed line totals. A dry run, nothing is written. Review it before commit_mine to confirm you are committing your lines and nothing else.",
+      inputSchema: {
+        actor: actorArg,
+        includeUnclaimed: z.boolean().optional().describe("also include new/untracked files you authored but never claimed (default: false, so an unclaimed orphan is left out while another actor is active)"),
+        paths: z.array(z.string()).optional().describe("limit to these files (default: all your owned files)"),
+      },
     },
     async ({ actor, includeUnclaimed, paths }) => {
       const actorId = resolveActor(actor, true)!;
@@ -285,11 +294,11 @@ export async function runMcpServer(store: Store): Promise<void> {
     "commit_mine",
     {
       description:
-        "Commit only your owned hunks as a normal git commit, leaving other actors' changes in the tree.",
+        "Commit ONLY your owned hunks as an ordinary git commit, leaving every other actor's changes untouched in the working tree. This is how each agent lands its own work in a shared checkout without sweeping up anyone else's. The committed files' claims auto-release, so no separate release call is needed. Preview it first with preview_mine.",
       inputSchema: {
         actor: actorArg,
-        message: z.string(),
-        includeUnclaimed: z.boolean().optional(),
+        message: z.string().describe("the commit message"),
+        includeUnclaimed: z.boolean().optional().describe("also commit new/untracked files you authored but never claimed (default: false, so an unclaimed orphan is never swept into your commit while another actor is active)"),
         paths: z.array(z.string()).optional().describe("limit the commit to these files (default: all your owned files) — a hard filter, so an unnamed orphan/leftover is never swept in"),
       },
     },
@@ -526,12 +535,12 @@ export async function runMcpServer(store: Store): Promise<void> {
     "quilt_write",
     {
       description:
-        "Write a whole file (create or overwrite) through Quilt, recording you as the author of its contents at write time. Use for new files. Pass `why`.",
+        "Create or overwrite a whole file through Quilt instead of your raw editor, recording YOU as the author of its contents at write time, so attribution is exact even when several agents share this checkout, with no claims or reconcile guesswork. Use this for new files; use quilt_edit to change part of an existing one. Pass `why` (your ticket/task). If another agent holds this path, the write is denied with their intent so you can reconcile instead of clobbering.",
       inputSchema: {
         actor: actorArg,
         path: z.string().describe("file path (repo-relative or absolute; stored repo-relative)"),
-        content: z.string().describe("full file contents"),
-        why: z.string().optional(),
+        content: z.string().describe("full file contents to write"),
+        why: z.string().optional().describe("a short why for this write, e.g. the ticket/task"),
       },
     },
     async ({ actor, path, content, why }) => {
