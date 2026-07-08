@@ -75,6 +75,17 @@ test("appendCoordination creates content with the marker when none exists", () =
   for (const term of ["intent", "holderIntent", "escalate", "resolve"]) {
     assert.ok(r.content.includes(term), `coordination snippet should mention ${term}`);
   }
+  // MCP-optional framing leads: the zero-approval hook path is the product,
+  // the claim tools are the optional layer. (The first external fleet read the
+  // old MCP-first snippet and concluded Quilt was unusable when the MCP server
+  // wasn't approved — while the hooks were protecting every edit.)
+  assert.ok(r.content.includes("quilt commit --mine"), "the CLI commit path is taught");
+  assert.ok(r.content.includes("captured and protected by the quilt hooks"), "leads with the zero-approval path");
+  assert.ok(/NOT in your MCP list[\s\S]*still protected/.test(r.content), "says missing MCP tools still means protected");
+  assert.ok(
+    r.content.indexOf("captured and protected by the quilt hooks") < r.content.indexOf("CLAIM before editing"),
+    "hooks lead, claims are the optional-advanced section",
+  );
 });
 
 test("appendCoordination appends to existing CLAUDE.md exactly once", () => {
@@ -167,7 +178,10 @@ test("planSetup skips files that are already wired", () => {
 test("quilt setup wires a fresh repo and is idempotent", () => {
   const dir = tmpRepo();
   try {
-    const run = () => spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8" });
+    // QUILT_NO_UPDATE_CHECK keeps the test hermetic: setup's staleness nudge
+    // would otherwise touch the network (or its daily cache) once.
+    const run = () =>
+      spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8", env: { ...process.env, QUILT_NO_UPDATE_CHECK: "1" } });
     const first = run();
     assert.equal(first.status, 0, first.stderr);
     assert.ok(existsSync(join(dir, ".quilt")), "Quilt initialized");

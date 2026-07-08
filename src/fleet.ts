@@ -86,7 +86,11 @@ export interface FleetView {
 
 /** Compute the current fleet view. Read-only. */
 export function fleetSnapshot(store: Store, now: number): FleetView {
-  const model = buildModel(store, null); // read-only: no active actor, no reconcile
+  // Read-only: no active actor, no reconcile. The ledger overlay is what keeps
+  // this honest for captured-but-not-yet-reconciled edits — without it a file
+  // whose author the ledger already knows renders as "Unattributed / 0 actors"
+  // exactly where a user first looks.
+  const model = buildModel(store, null, { ledgerOverlay: true });
   const claims = listClaims(store, now);
   const known = store.readActors();
 

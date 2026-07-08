@@ -68,6 +68,15 @@ export function gitBytes(args: string[], opts: GitRunOptions): Buffer {
   return res.stdout ?? Buffer.alloc(0);
 }
 
+/** The raw `git --version` line (e.g. "git version 2.50.1"), or null if git
+ * can't be run at all. Used by `quilt doctor` to catch a stale system git
+ * (pre-2.18 breaks the `status --no-renames` flag Quilt relies on). */
+export function gitVersionString(): string | null {
+  const res = spawnSync("git", ["--version"], { encoding: "utf8" });
+  if (res.error || res.status !== 0) return null;
+  return res.stdout.trim() || null;
+}
+
 /** Absolute path to the repository working-tree root, or null if not a repo. */
 export function repoRoot(cwd: string): string | null {
   const res = git(["rev-parse", "--show-toplevel"], { cwd, check: false });

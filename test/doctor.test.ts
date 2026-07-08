@@ -8,7 +8,9 @@ import { Store } from "../src/state.js";
 import { initSymbols } from "../src/symbols.js";
 import { applyAndRecordEdit } from "../src/authorship.js";
 import { mergeHookSettings } from "../src/onboard.js";
-import { diagnose, type DoctorReport } from "../src/doctor.js";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { diagnose, parseGitVersion, probeMcpServer, type DoctorReport } from "../src/doctor.js";
 
 before(async () => {
   await initSymbols();
@@ -110,6 +112,154 @@ test("doctor is healthy when wired, identified, and capturing", () => {
     const r = diagnose(s, { actorEnv: "alpha" });
     assert.equal(r.verdict, "healthy");
     assert.equal(r.captureCount, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- version staleness (the highest-leverage check: the first external user
+// ran a five-versions-stale install and nothing ever told him) ---
+
+test("doctor nudges when behind the published latest", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    const r = diagnose(s, { latest: "9.9.9", currentVersion: "0.4.4" });
+    const v = check(r, "Version");
+    assert.equal(v?.status, "warn");
+    assert.match(v!.detail, /0\.4\.4/);
+    assert.match(v!.detail, /9\.9\.9/);
+    assert.match(v!.hint ?? "", /quilt update/, "the nudge names the exact update command");
+    assert.equal(r.verdict, "warnings");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("doctor treats a pre-0.4.0 build as not-ready (broken, not merely stale)", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    // No `latest` needed: below the minimum is knowable offline.
+    const r = diagnose(s, { currentVersion: "0.3.0" });
+    const v = check(r, "Version");
+    assert.equal(v?.status, "fail");
+    assert.match(v!.detail, /auto-identity/);
+    assert.equal(r.verdict, "not-ready");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("doctor stays silent about versions when the check failed (offline) and ok when current", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    // latest: null = the daily check failed (offline). No Version check at all,
+    // and the verdict is unaffected — a nudge must never require the network.
+    const offline = diagnose(s, { latest: null, currentVersion: "0.4.4" });
+    assert.equal(check(offline, "Version"), undefined);
+    assert.notEqual(offline.verdict, "not-ready");
+
+    const current = diagnose(s, { latest: "0.4.4", currentVersion: "0.4.4" });
+    assert.equal(check(current, "Version")?.status, "ok");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- git version (a pre-2.18 system git breaks `status --no-renames` with a
+// cryptic error inside every command — doctor must name it and the fix) ---
+
+test("parseGitVersion handles real-world version strings", () => {
+  assert.deepEqual(parseGitVersion("git version 2.50.1 (Apple Git-155)"), { major: 2, minor: 50 });
+  assert.deepEqual(parseGitVersion("git version 2.15.0"), { major: 2, minor: 15 });
+  assert.equal(parseGitVersion("not git at all"), null);
+});
+
+test("doctor fails loudly on a pre-2.18 git and names the PATH-shadowing fix", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    const r = diagnose(s, { gitVersion: "git version 2.15.0" });
+    const g = check(r, "Git");
+    assert.equal(g?.status, "fail");
+    assert.match(g!.detail, /2\.15/);
+    assert.match(g!.detail, /no-renames/, "the failing flag is named");
+    assert.match(g!.hint ?? "", /PATH/);
+    assert.equal(r.verdict, "not-ready");
+
+    // A modern git is an ok check; git unrunnable at all is a fail.
+    assert.equal(check(diagnose(s, { gitVersion: "git version 2.50.1" }), "Git")?.status, "ok");
+    assert.equal(check(diagnose(s, { gitVersion: null }), "Git")?.status, "fail");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- MCP: the approval reality note, and the live self-test ---
+
+test("doctor notes that MCP claim tools need client approval while hooks work without it", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { quilt: { command: "quilt", args: ["mcp"] } } }));
+    const r = diagnose(s, {});
+    const a = check(r, "MCP approval");
+    assert.equal(a?.status, "info", "informational — doctor can't see the client's approval state");
+    assert.match(a!.detail + (a!.hint ?? ""), /approv/);
+    assert.match(a!.hint ?? "", /hooks/, "says the hooks protect without approval");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("doctor renders the MCP self-test result (ok and failure)", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    const ok = diagnose(s, { mcpProbe: { ok: true, toolCount: 13 } });
+    assert.equal(check(ok, "MCP self-test")?.status, "ok");
+    assert.match(check(ok, "MCP self-test")!.detail, /13 tools/);
+
+    const bad = diagnose(s, { mcpProbe: { ok: false, toolCount: 0, error: "spawn quilt ENOENT" } });
+    assert.equal(check(bad, "MCP self-test")?.status, "warn");
+    assert.match(check(bad, "MCP self-test")!.hint ?? "", /hooks still protect/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("probeMcpServer drives a real initialize/tools-list handshake against dist/cli.js", async () => {
+  const CLI = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
+  const dir = gitRepo();
+  initStore(dir); // quilt mcp refuses to run uninitialized
+  try {
+    const r = await probeMcpServer({ command: [process.execPath, CLI, "mcp"], cwd: dir, timeoutMs: 10_000 });
+    assert.equal(r.ok, true, r.error);
+    assert.ok(r.toolCount >= 10, `expected the full tool set, got ${r.toolCount}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("probeMcpServer fails safe: dead command, exiting server, and silence all resolve", async () => {
+  const dir = gitRepo();
+  try {
+    const missing = await probeMcpServer({ command: ["quilt-definitely-not-a-command"], cwd: dir, timeoutMs: 3000 });
+    assert.equal(missing.ok, false);
+
+    const exits = await probeMcpServer({ command: [process.execPath, "-e", "process.exit(1)"], cwd: dir, timeoutMs: 3000 });
+    assert.equal(exits.ok, false);
+    assert.match(exits.error ?? "", /exited/);
+
+    const silent = await probeMcpServer({
+      command: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+      cwd: dir,
+      timeoutMs: 500,
+    });
+    assert.equal(silent.ok, false);
+    assert.match(silent.error ?? "", /no response/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

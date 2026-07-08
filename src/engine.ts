@@ -622,13 +622,37 @@ function classifyHunk(
   return { hunk, ownership: ownership_, actors, conflicted, overlap };
 }
 
+/**
+ * Overlay the authorship ledger onto an in-memory ownership map (ledger wins),
+ * WITHOUT persisting anything. For read-only views (fleet): reconcile performs
+ * this same overlay and writes it back, but until some actor's next reconcile
+ * runs, a captured-at-edit line's author lives only in the ledger — and fleet,
+ * which never reconciles by design, would show that edit as "unattributed" in
+ * the one view a user watches first. Stale ledger keys (lines no longer in the
+ * working diff) are harmless here: hunk classification looks up only the keys
+ * actually present in the current diff.
+ */
+export function overlayLedgerOwnership(store: Store, ownership: OwnershipFile): void {
+  const log = readAuthorship(store);
+  for (const [path, lines] of foldedAuthorship(store, log)) {
+    const f = (ownership.files[path] ??= { added: {}, removed: {} });
+    for (const [key, actor] of lines) f.added[key] = actor;
+  }
+  for (const [path, lines] of foldedRemovals(log)) {
+    const f = (ownership.files[path] ??= { added: {}, removed: {} });
+    for (const [key, actor] of lines) f.removed[key] = actor;
+  }
+}
+
 /** Build the read-only worktree model used by status / mine / preview / commit. */
 export function buildModel(
   store: Store,
   activeActorId: string | null,
+  opts: { ledgerOverlay?: boolean } = {},
 ): WorktreeModel {
   const repoRoot = store.paths.repoRoot;
   const ownership = store.readOwnership();
+  if (opts.ledgerOverlay) overlayLedgerOwnership(store, ownership);
   const files: FileModel[] = [];
 
   // Live claims by OTHER actors, for the attribution-pending read: an

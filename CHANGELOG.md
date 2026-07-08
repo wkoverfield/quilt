@@ -6,6 +6,50 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Version staleness is now visible, and updating is one command.** `quilt
+  doctor` and `quilt setup` check the installed version against npm (cached
+  daily, bounded, and silent when offline; `QUILT_NO_UPDATE_CHECK=1` opts
+  out). Behind is a warning with the exact update command; below 0.4.0 makes
+  doctor's verdict not-ready, because pre-auto-identity builds capture nothing
+  for unnamed sessions. The new `quilt update` detects how Quilt was installed
+  (npm/pnpm/bun) and runs the right update, or prints it when the installer
+  can't be detected confidently. The hook path (`hook-pre`/`hook-post`) never
+  touches the network.
+- **`quilt doctor` catches a stale system git.** Quilt needs `git status
+  --no-renames` (git 2.18+); a pre-2018 git on PATH used to fail deep inside
+  every command with a cryptic usage error. Doctor now names the version, the
+  breaking flag, and the usual fix (an old git shadowing a newer one on PATH).
+- **`quilt doctor` live-tests the MCP server.** It spawns the exact command
+  wired in `.mcp.json`, drives a real initialize/tools-list handshake, and
+  reports "server starts and lists N tools" or a clear failure. It also states
+  what it cannot see: the agent client still has to approve the server (Claude
+  Code: `/mcp`) for the claim tools to appear in a session.
+- **Wrong-directory guidance.** Running `quilt setup`/`init`/`doctor` one
+  level above the repo (a checkout root whose app lives in a subfolder) now
+  refuses and names the child repo to `cd` into, instead of wiring agent
+  config at a directory no session reads.
+
+### Changed
+
+- **The coordination snippet and setup output now lead with the
+  zero-approval path.** Hooks capture and protect edits with nothing to
+  approve and nothing to call; `quilt commit --mine` works with or without
+  the MCP server; the MCP claim tools are framed as the optional prevention
+  layer they are. Setup also says, in so many words, that Claude Code will
+  ask to approve the quilt MCP server and that the hooks protect you either
+  way. (The first external fleet read the old MCP-first framing, found no
+  quilt tools in an unapproved session, and concluded Quilt was unusable
+  while the hooks were protecting every edit underneath.)
+
+### Fixed
+
+- **`quilt fleet` no longer shows hook-captured edits as "Unattributed / 0
+  actors".** The read-only fleet view now overlays the authorship ledger, so
+  an edit whose author the ledger already knows is attributed immediately,
+  before any actor's next reconcile, in the one view a user watches first.
+
 ## [0.4.3] - 2026-07-05
 
 ### Added

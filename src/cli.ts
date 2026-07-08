@@ -2,8 +2,8 @@
 import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
 import { repoRoot, shortHead, headSha } from "./git.js";
@@ -20,7 +20,8 @@ import { runWatch, watcherRunning } from "./watch.js";
 import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
 import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
-import { diagnose, type Check } from "./doctor.js";
+import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
+import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
 import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
 import { recordAuthorship, capturedBySelf } from "./authorship.js";
@@ -42,10 +43,66 @@ function fail(msg: string): never {
   process.exit(1);
 }
 
+/** Immediate child directories of `cwd` that are git repos — the "you're one
+ * level ABOVE the repo" case (a checkout root whose app lives in a subfolder).
+ * Capped at 3: enough to name the right place without scanning forever. */
+function childGitRepos(cwd: string): string[] {
+  const out: string[] = [];
+  try {
+    for (const e of readdirSync(cwd, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name.startsWith(".")) continue;
+      if (existsSync(join(cwd, e.name, ".git"))) out.push(e.name);
+      if (out.length >= 3) break;
+    }
+  } catch {
+    /* unreadable dir — fall through to the generic error */
+  }
+  return out;
+}
+
 function findRepo(): string {
   const root = repoRoot(process.cwd());
-  if (!root) fail("not inside a git repository. Run this from a git working tree.");
+  if (!root) {
+    // Setup run one level above the repo would wire .mcp.json/.claude/ at a
+    // directory no agent session ever reads — never proceed here, and when a
+    // child IS a repo, name it instead of leaving the user to guess.
+    const children = childGitRepos(process.cwd());
+    if (children.length > 0) {
+      fail(
+        "not inside a git repository, but " +
+          children.map((c) => `${c}/`).join(", ") +
+          ` ${children.length === 1 ? "is one" : "are"}. Quilt runs inside the repo:\n` +
+          `  cd ${children[0]} && quilt setup`,
+      );
+    }
+    fail("not inside a git repository. Run this from a git working tree.");
+  }
   return root;
+}
+
+/** The `quilt` server invocation wired in .mcp.json (for the doctor self-test),
+ * or the default when the file can't be read. */
+function wiredMcpCommand(mcpJsonPath: string): string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(mcpJsonPath, "utf8")) as {
+      mcpServers?: { quilt?: { command?: unknown; args?: unknown } };
+    };
+    const q = parsed.mcpServers?.quilt;
+    if (q && typeof q.command === "string") {
+      const args = Array.isArray(q.args) ? q.args.filter((a): a is string => typeof a === "string") : [];
+      return [q.command, ...args];
+    }
+  } catch {
+    /* fall through */
+  }
+  return ["quilt", "mcp"];
+}
+
+/** The daily staleness check, unless opted out. Fail-silent: null when offline,
+ * disabled, or already checked today with no answer. Never throws. */
+async function latestVersionOrNull(): Promise<string | null> {
+  if (process.env.QUILT_NO_UPDATE_CHECK) return null;
+  return checkLatestVersion();
 }
 
 function requireStore(): Store {
@@ -264,7 +321,7 @@ program
   .command("setup")
   .description("Wire Quilt into this repo's agent orchestrator (.mcp.json + CLAUDE.md + capture hooks)")
   .option("--dry-run", "show what would change without writing")
-  .action((opts) => {
+  .action(async (opts) => {
     const root = findRepo();
     const store = new Store(root);
     const dryRun = Boolean(opts.dryRun);
@@ -332,7 +389,7 @@ program
       process.stdout.write(
         "\n" +
           pc.green("✓ ") +
-          "Quilt is wired in. Each agent: claim before editing, commit_mine when done.\n" +
+          "Quilt is wired in. Edits are captured and protected by the hooks automatically.\n" +
           pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
           pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
           pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
@@ -341,6 +398,17 @@ program
           pc.dim("  Docs: https://github.com/wkoverfield/quilt/blob/main/docs/orchestrators.md\n"),
       );
     }
+
+    // The wall the first external fleet hit: Claude Code loads .mcp.json
+    // servers only after a per-project approval, and nothing in Quilt's output
+    // ever said so — workers saw no quilt tools and concluded Quilt was broken,
+    // while the hooks were protecting every edit underneath.
+    process.stdout.write(
+      "\n" +
+        pc.cyan("→ ") +
+        "Claude Code will ask to approve the quilt MCP server — approve it (or run /mcp)\n" +
+        "  to get the optional claim tools. The hooks protect you either way.\n",
+    );
 
     // The generated config invokes plain `quilt` — if that doesn't resolve on
     // PATH (local/npx install), hooks and the MCP server would fail silently
@@ -354,6 +422,19 @@ program
           "`quilt` is not on your PATH — the hooks and MCP server this setup wired\n" +
           "  invoke plain `quilt` and will silently do nothing until it resolves.\n" +
           pc.dim("  Install globally: npm install -g @quilt-dev/cli\n"),
+      );
+    }
+
+    // Staleness nudge: the first external user was five versions behind and
+    // nothing ever told him. Cached daily, bounded, and fail-silent — offline
+    // setup stays exactly as fast and quiet as before.
+    const latest = await latestVersionOrNull();
+    if (latest && versionStanding(VERSION, latest) !== "current") {
+      process.stdout.write(
+        "\n" +
+          pc.yellow("⚠ ") +
+          `quilt ${VERSION} is behind the latest release (${latest}).\n` +
+          pc.dim(`  Update: quilt update   (or: ${NPM_UPDATE_COMMAND})\n`),
       );
     }
   });
@@ -1103,10 +1184,23 @@ program
   .command("doctor")
   .description("Check Quilt's health here: wiring, identity, and whether capture is actually flowing")
   .option("--json", "output the report as JSON")
-  .action((opts: { json?: boolean }) => {
+  .action(async (opts: { json?: boolean }) => {
     // Not requireStore: doctor should run pre-init and REPORT that, not error.
     const store = new Store(findRepo());
-    const report = diagnose(store, { actorEnv: process.env.QUILT_ACTOR });
+    // The async probes run up front, results handed to the sync diagnose:
+    // the daily staleness check (fail-silent) and — when the server is wired
+    // and the store initialized — a real initialize/tools-list handshake
+    // against the exact command .mcp.json wires.
+    const latest = await latestVersionOrNull();
+    let mcpProbe: McpProbeResult | undefined;
+    const wiring = detect(store.paths.repoRoot);
+    if (store.initialized && wiring.quiltWired) {
+      mcpProbe = await probeMcpServer({
+        command: wiredMcpCommand(wiring.mcpJsonPath),
+        cwd: store.paths.repoRoot,
+      });
+    }
+    const report = diagnose(store, { actorEnv: process.env.QUILT_ACTOR, latest, mcpProbe });
     if (opts.json) {
       process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       return;
@@ -1128,6 +1222,64 @@ program
     // Non-zero on not-ready so `quilt doctor` is usable as a CI/scripting gate.
     // Warnings stay 0 (advisory), matching the convention of linters.
     if (report.verdict === "not-ready") process.exitCode = 1;
+  });
+
+program
+  .command("update")
+  .description("Update Quilt to the latest published version (prints the exact command when the installer can't be detected)")
+  .option("--check", "only report the standing; don't run anything")
+  .action(async (opts: { check?: boolean }) => {
+    // Explicit command: always ask the registry fresh (no daily cache), with a
+    // more generous timeout than the background nudge.
+    const latest = await checkLatestVersion({ ttlMs: 0, timeoutMs: 8000 });
+    if (!latest) {
+      process.stdout.write(
+        pc.yellow("⚠ ") + "couldn't reach the npm registry to check the latest version.\n" +
+          pc.dim(`  When you're online: ${NPM_UPDATE_COMMAND}\n`),
+      );
+      process.exitCode = 1;
+      return;
+    }
+    if (compareVersions(VERSION, latest) >= 0) {
+      process.stdout.write(pc.green("✓ ") + `quilt ${VERSION} is up to date (latest is ${latest}).\n`);
+      return;
+    }
+    const critical = versionStanding(VERSION, latest) === "critical";
+    process.stdout.write(
+      `quilt ${VERSION} → ${latest} available.` +
+        (critical ? pc.red(` This build is critically stale: ${MIN_SAFE_REASON}.`) : "") +
+        "\n",
+    );
+    const mgr = detectInstallManager();
+    if (opts.check) {
+      process.stdout.write(pc.dim(`  Update: ${mgr?.command ?? NPM_UPDATE_COMMAND}\n`));
+      process.exitCode = 1; // scriptable: non-zero means "behind"
+      return;
+    }
+    if (!mgr || !mgr.runnable) {
+      // Can't confidently tell how this install landed — print, don't guess.
+      // A git-mutating tool must never rewrite its own binary on a guess.
+      process.stdout.write(
+        "Couldn't confidently detect how Quilt was installed, so nothing was run.\n" +
+          "Update with the command for your installer:\n" +
+          pc.dim(`  npm:  ${NPM_UPDATE_COMMAND}\n`) +
+          pc.dim("  pnpm: pnpm add -g @quilt-dev/cli@latest\n") +
+          pc.dim("  bun:  bun add -g @quilt-dev/cli@latest\n"),
+      );
+      return;
+    }
+    const argv = mgr.command.split(" ");
+    process.stdout.write(pc.dim(`  detected a ${mgr.name} install — running: `) + mgr.command + "\n\n");
+    const res = spawnSync(argv[0]!, argv.slice(1), { stdio: "inherit" });
+    if (res.status === 0) {
+      process.stdout.write("\n" + pc.green("✓ ") + `updated to ${latest}. Verify with: quilt --version\n`);
+    } else {
+      process.stdout.write(
+        "\n" + pc.yellow("⚠ ") + `the update command exited ${res.status ?? "on a signal"} — run it yourself:\n` +
+          `  ${mgr.command}\n`,
+      );
+      process.exitCode = 1;
+    }
   });
 
 program

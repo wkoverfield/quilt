@@ -180,21 +180,37 @@ Run `quilt init` once in the repo first.
 
 ## 2. Tell your agents to coordinate
 
-Drop this into `CLAUDE.md` (or each subagent's instructions). The only rule that
-matters: **pick a stable id for yourself and pass it as `actor` on every Quilt
-call.**
+Drop this into `CLAUDE.md` (or each subagent's instructions). The framing
+matters: the hooks protect agents with zero ceremony and zero approvals, and
+the MCP claim tools are the optional prevention layer on top. An agent that
+finds no quilt tools in its MCP list is still fully protected.
 
 ```md
-You share this checkout with other agents. Coordinate through Quilt:
+You share this checkout with other agents. Quilt protects your work
+automatically:
 
-- Identity is automatic: if you don't name yourself, Quilt derives an id from
-  your session/connection. But if you are one of SEVERAL subagents sharing one
-  process or MCP connection, pick a stable id, your role or task name (e.g.
-  `auth-agent`), and pass it as `actor` on every Quilt call, since a shared
-  connection can't tell you apart automatically.
-- Before you edit a file, `claim` what you're about to change
-  (`path#symbol`, e.g. `src/auth.ts#login`), and pass a short `intent`, the why
-  (your ticket/task). It's shown to anyone you block, so they can reconcile.
+- Your edits are captured and protected by the quilt hooks: nothing to
+  approve, nothing to call. Identity is automatic (each session gets its own
+  id), and every line you edit is attributed to you as you write it.
+- To commit only your lines, run `quilt commit --mine -m "<message>"` from
+  the shell. It works with or without the MCP server, and it leaves everyone
+  else's uncommitted work untouched. `quilt status` shows who owns what.
+- The quilt MCP tools (claim, commit_mine, get_status, ...) are an optional
+  prevention layer, available when the quilt MCP server is connected and
+  approved in your client. If the quilt tools are NOT in your MCP list you
+  are still protected: capture and attribution run in the hooks. Just commit
+  with the CLI.
+
+Optional, when the quilt MCP tools are connected:
+
+- If you are one of SEVERAL subagents sharing one process or MCP connection,
+  pick a stable id, your role or task name (e.g. `auth-agent`), and pass it
+  as `actor` on every quilt call, since a shared connection can't tell you
+  apart automatically.
+- `claim` what you're about to change BEFORE editing when you edit via
+  bash/scripts/codegen (capture can't see those), or when you want the code
+  protected from other actors while you work. Pass a short `intent`, the why
+  (your ticket/task); it's shown to anyone you block, so they can reconcile.
 - If your claim is denied, another agent holds that code and is mid-change. The
   response carries their `holderIntent`. Use it instead of forcing your change
   through: if they're already doing your change, drop yours; if it's compatible,
@@ -208,7 +224,12 @@ You share this checkout with other agents. Coordinate through Quilt:
   lines and leaves everyone else's work untouched.
 ```
 
-`quilt setup` writes this block for you.
+`quilt setup` writes this block (in its full form, including the queue/wait
+denial strategies) for you. One reality of Claude Code to know: `.mcp.json`
+servers load only after a per-project approval (`/mcp` shows the state), so a
+session that never approved the server has no quilt tools. That changes
+nothing about safety, capture and prevention run in the hooks, and the CLI
+commits per-actor either way.
 
 ## 3. The loop
 
