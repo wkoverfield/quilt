@@ -303,3 +303,41 @@ test("detect + doctor surface a stale coordination snippet", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("legacy block refresh cuts at the known final line, so trailing NON-heading user content survives", () => {
+  // The block was appended at EOF by setup, but users edit files: plain
+  // trailing paragraphs (no ## heading) must not be swallowed by the refresh.
+  const legacy04 = `<!-- quilt:coordination -->
+## Coordinating with other agents (Quilt)
+
+You share this checkout with other agents. Coordinate through Quilt:
+
+- CLAIM before editing when either applies. Always pass a short intent.
+- If denied, read holderIntent, escalate or resolve.
+- Repo-wide proof gates can fail mid-wave. Keep tooling artifacts (test snapshots,
+  scratch output) gitignored — quilt follows git's view of the tree.`;
+  const existing = `# rules\n\n${legacy04}\n\nmy own trailing note, not a heading\n- my own list item\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true);
+  assert.ok(r.content.includes(COORDINATION_MARKER));
+  assert.ok(!r.content.includes("Coordinate through Quilt:"), "old body gone");
+  assert.ok(r.content.includes("my own trailing note, not a heading"), "trailing paragraph survives");
+  assert.ok(r.content.includes("- my own list item"), "trailing list survives");
+  assert.equal(r.content.split("<!-- quilt:coordination").length - 1, 1);
+});
+
+test("legacy block refresh: pre-0.4 body (different final line) also cuts precisely", () => {
+  const legacyPre04 = `<!-- quilt:coordination -->
+## Coordinating with other agents (Quilt)
+
+You share this checkout with other agents. Coordinate through Quilt:
+
+- Before you edit a file, claim what you're about to change. Pass intent.
+- When your change is ready, commit_mine with your id. It commits only your
+  lines and leaves everyone else's work untouched.`;
+  const existing = `${legacyPre04}\n\nkeep this line\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true);
+  assert.ok(r.content.includes("keep this line"), "content after the pre-0.4 tail survives");
+  assert.ok(!r.content.includes("Before you edit a file, claim"), "old body gone");
+});

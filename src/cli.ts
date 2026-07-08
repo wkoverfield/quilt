@@ -408,10 +408,9 @@ program
       "\n" +
         pc.cyan("→ ") +
         "You're already protected: the capture hooks are live and need nothing else.\n" +
-        "  The optional quilt MCP tools appear after Claude Code restarts and approves\n" +
-        "  the server (check with /mcp). If an agent doesn't see them, it can still\n" +
-        "  coordinate with `quilt claim` / `quilt commit --mine` — the hooks protect\n" +
-        "  you either way.\n",
+        "  The optional MCP claim tools appear once Claude Code restarts and approves\n" +
+        "  the server (/mcp shows it). An agent without them still coordinates fine:\n" +
+        "  quilt claim to reserve, quilt commit --mine to commit its own lines.\n",
     );
 
     // The generated config invokes plain `quilt` — if that doesn't resolve on

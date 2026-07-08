@@ -111,3 +111,17 @@ test("detectInstallManager recognizes the common global installs and stays null 
   // A repo checkout (dev) matches nothing — the CLI must print, not run.
   assert.equal(detectInstallManager("/Users/x/code/quilt/dist/cli.js"), null);
 });
+
+test("detectInstallManager covers version-manager and Windows layouts", () => {
+  // nvm / fnm / asdf / n expose a real npm prefix: npm -g updates in place.
+  assert.equal(detectInstallManager("/Users/x/.nvm/versions/node/v20.11.0/lib/node_modules/@quilt-dev/cli/dist/cli.js")?.name, "npm");
+  assert.equal(detectInstallManager("/Users/x/.asdf/installs/nodejs/20.11.0/lib/node_modules/@quilt-dev/cli/dist/cli.js")?.name, "npm");
+  assert.equal(detectInstallManager("/usr/local/n/versions/node/20.11.0/lib/node_modules/@quilt-dev/cli/dist/cli.js")?.name, "npm");
+  // Windows npm global (backslashes normalized inside the detector).
+  assert.equal(detectInstallManager("C:\\Users\\x\\AppData\\Roaming\\npm\\node_modules\\@quilt-dev\\cli\\dist\\cli.js")?.name, "npm");
+  // Volta images also contain /lib/node_modules/ but need volta's own command,
+  // or `npm -g` silently installs a second copy beside the shimmed one.
+  const volta = detectInstallManager("/Users/x/.volta/tools/image/packages/@quilt-dev/cli/lib/node_modules/@quilt-dev/cli/dist/cli.js");
+  assert.equal(volta?.name, "volta");
+  assert.match(volta!.command, /volta install/);
+});

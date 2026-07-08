@@ -325,15 +325,37 @@ export function coordinationIsStale(content: string): boolean {
 }
 
 /**
+ * The final line of every legacy (pre-v2, end-marker-less) block Quilt ever
+ * shipped. The most precise boundary available: only quilt setup wrote these
+ * blocks, so the real-world population is exactly these bodies. Each entry is
+ * matched as a full block-final phrase (period included), which none of the
+ * bodies contain mid-block.
+ */
+const LEGACY_BLOCK_TAILS = [
+  // 0.4.x: "...scratch output) gitignored — quilt follows git's view of the tree."
+  "quilt follows git's view of the tree.",
+  // pre-0.4: "...It commits only your lines and leaves everyone else's work untouched."
+  "leaves everyone else's work untouched.\n",
+];
+
+/**
  * The end offset of the coordination block starting at `start`. Blocks written
- * by v2+ carry an explicit end marker; legacy blocks (no end marker) span the
- * marker line, the block's own `## Coordinating…` heading, and everything up
- * to the next `## ` heading (user content) or EOF — the block body itself
- * contains no `## ` headings, only list items.
+ * by v2+ carry an explicit end marker. Legacy blocks are bounded by their known
+ * final line (see LEGACY_BLOCK_TAILS) — the precise cut, so user content added
+ * after the block survives even when it isn't a `## ` heading. Fallbacks, in
+ * order: the next `## ` heading after the block's own, then EOF (the block was
+ * appended at EOF by setup, so EOF is the common real-world boundary anyway).
  */
 function coordinationBlockEnd(text: string, start: number): number {
   const endIdx = text.indexOf(COORDINATION_END_MARKER, start);
   if (endIdx !== -1) return endIdx + COORDINATION_END_MARKER.length;
+  // Earliest tail match wins, so a phrase echoed later in user content can
+  // never widen the cut.
+  const tailAt = LEGACY_BLOCK_TAILS.map((t) => text.indexOf(t, start)).filter((i) => i !== -1);
+  if (tailAt.length > 0) {
+    const lineEnd = text.indexOf("\n", Math.min(...tailAt));
+    return lineEnd === -1 ? text.length : lineEnd + 1;
+  }
   const ownHeading = text.indexOf("\n## ", start);
   if (ownHeading === -1) return text.length;
   const next = text.indexOf("\n## ", ownHeading + 4);

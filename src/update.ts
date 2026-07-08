@@ -198,8 +198,16 @@ export function detectInstallManager(entryPath: string = process.argv[1] ?? ""):
   if (p.includes("/yarn/global/") || p.includes("/.yarn/")) {
     return { name: "yarn", command: "yarn global add @quilt-dev/cli@latest", runnable: true };
   }
-  // npm's global tree: <prefix>/lib/node_modules/@quilt-dev/cli (or
-  // node_modules directly under an npm prefix on Windows).
+  // Volta keeps its own package images; `npm -g` under volta would install a
+  // parallel copy, so name volta's own command. Checked before the generic npm
+  // pattern because volta's image path also contains /lib/node_modules/.
+  if (p.includes("/.volta/") || p.includes("/volta/tools/")) {
+    return { name: "volta", command: "volta install @quilt-dev/cli@latest", runnable: true };
+  }
+  // npm's global tree: <prefix>/lib/node_modules/@quilt-dev/cli. Covers plain
+  // npm, homebrew node, and version managers that expose a real npm prefix
+  // (nvm, fnm, asdf, n) — for all of those `npm install -g` updates in place.
+  // The /npm/node_modules/ form is Windows (%AppData%\npm\node_modules).
   if (p.includes("/lib/node_modules/@quilt-dev/") || p.includes("/npm/node_modules/@quilt-dev/")) {
     return { name: "npm", command: NPM_UPDATE_COMMAND, runnable: true };
   }
