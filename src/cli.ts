@@ -400,14 +400,18 @@ program
     }
 
     // The wall the first external fleet hit: Claude Code loads .mcp.json
-    // servers only after a per-project approval, and nothing in Quilt's output
-    // ever said so — workers saw no quilt tools and concluded Quilt was broken,
-    // while the hooks were protecting every edit underneath.
+    // servers only after a restart + per-project approval, and nothing in
+    // Quilt's output ever said so — workers saw no quilt tools and concluded
+    // Quilt was broken, while the hooks were protecting every edit underneath.
+    // Make the restart a stated non-event, not a silent trap.
     process.stdout.write(
       "\n" +
         pc.cyan("→ ") +
-        "Claude Code will ask to approve the quilt MCP server — approve it (or run /mcp)\n" +
-        "  to get the optional claim tools. The hooks protect you either way.\n",
+        "You're already protected: the capture hooks are live and need nothing else.\n" +
+        "  The optional quilt MCP tools appear after Claude Code restarts and approves\n" +
+        "  the server (check with /mcp). If an agent doesn't see them, it can still\n" +
+        "  coordinate with `quilt claim` / `quilt commit --mine` — the hooks protect\n" +
+        "  you either way.\n",
     );
 
     // The generated config invokes plain `quilt` — if that doesn't resolve on

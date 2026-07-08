@@ -183,8 +183,8 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
     checks.push({
       label: "MCP approval",
       status: "info",
-      detail: "the claim tools also need the client's approval (Claude Code: /mcp)",
-      hint: "doctor can't see approval state — if quilt tools are missing in a session, approve the server there; the capture hooks protect edits either way",
+      detail: "the claim tools appear after the client restarts and approves the server (Claude Code: /mcp)",
+      hint: "doctor can't see approval state — a freshly-wired server missing from a session is expected until then; the capture hooks protect edits either way",
     });
   }
 

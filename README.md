@@ -20,7 +20,7 @@ a `.quilt/` sidecar you can delete without touching your repo.
 
 ```bash
 npm install -g @quilt-dev/cli
-quilt setup     # wire Quilt into your repo (Claude Code, Cursor, or plain git)
+quilt setup     # capture hooks wired, protection live (MCP tools optional, on top)
 ```
 
 ## The problem
@@ -94,7 +94,7 @@ rewrites it, and all state lives locally under `.quilt/`. No account, no daemon.
 ## Quickstart
 
 ```bash
-quilt setup      # wire Quilt into the repo (MCP server, hooks, coordination)
+quilt setup      # wire Quilt into the repo (capture hooks + optional MCP tools)
 quilt doctor     # confirm it's wired and capture is flowing
 ```
 

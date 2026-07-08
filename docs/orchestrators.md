@@ -6,22 +6,23 @@ code it's about to change, sees the others' in-flight work, and commits only its
 own, so the history stays clean and correctly attributed instead of one agent's
 commit swallowing everyone else's work.
 
-The whole integration is: **one shared Quilt MCP server, and each agent names
-itself on every call.**
+The whole integration is: **`quilt setup` once, and every agent is captured and
+protected by the hooks with zero ceremony.** The shared MCP server adds the
+optional claim tools on top, with each agent naming itself per call.
 
 ## Quick start: `quilt setup`
 
 In an agent repo, one command wires everything below up for you:
 
 ```sh
-quilt setup          # initializes Quilt, adds the MCP server, drops the snippet
+quilt setup          # initializes Quilt, wires the hooks, adds the optional MCP server
 quilt setup --dry-run  # preview the changes first
 ```
 
-It detects your orchestrator (Claude Code, Cursor, …), adds the `quilt` server to
-`.mcp.json` (merging, never clobbering), appends the coordination snippet to
-`CLAUDE.md`, and installs the capture hooks into `.claude/settings.json`. It's
-idempotent, safe to re-run. The manual steps below are what it does, if you'd
+It detects your orchestrator (Claude Code, Cursor, …), installs the capture
+hooks into `.claude/settings.json` (the load-bearing protection), appends the
+coordination snippet to `CLAUDE.md`, and adds the optional `quilt` server to
+`.mcp.json` (merging, never clobbering). It's idempotent, safe to re-run. The manual steps below are what it does, if you'd
 rather wire it by hand.
 
 ## Two ways to capture: hooks and MCP
