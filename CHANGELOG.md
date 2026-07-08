@@ -6,6 +6,8 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-07-08
+
 ### Added
 
 - **Version staleness is now visible, and updating is one command.** `quilt
@@ -37,11 +39,9 @@ All notable changes to Quilt are documented here. The format is based on
   zero-approval path.** Hooks capture and protect edits with nothing to
   approve and nothing to call; `quilt commit --mine` works with or without
   the MCP server; the MCP claim tools are framed as the optional prevention
-  layer they are. Setup also says, in so many words, that Claude Code will
-  ask to approve the quilt MCP server and that the hooks protect you either
-  way. (The first external fleet read the old MCP-first framing, found no
-  quilt tools in an unapproved session, and concluded Quilt was unusable
-  while the hooks were protecting every edit underneath.)
+  layer they are. Setup also states the Claude Code restart/approval step in
+  plain words, with the CLI fallback named, so a session without the MCP
+  tools reads as expected rather than broken.
 
 ### Fixed
 
