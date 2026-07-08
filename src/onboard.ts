@@ -15,54 +15,84 @@ export const HOOK_MATCHER = "Edit|Write|MultiEdit";
 export const HOOK_PRE_COMMAND = "quilt hook-pre";
 export const HOOK_POST_COMMAND = "quilt hook-post";
 
-/** Marker so the CLAUDE.md snippet is added at most once. */
-export const COORDINATION_MARKER = "<!-- quilt:coordination -->";
+/**
+ * Versioned marker so the CLAUDE.md snippet is added at most once AND can be
+ * refreshed in place when its content changes. The version bump is load-bearing:
+ * a presence-only (unversioned) check meant a repo onboarded under an older
+ * Quilt could never receive a rewritten snippet — `quilt setup` silently
+ * no-opped forever, freezing whatever framing it first shipped with.
+ * Bump the version whenever COORDINATION_BLOCK's content changes.
+ */
+export const COORDINATION_VERSION = 2;
+export const COORDINATION_MARKER = `<!-- quilt:coordination v${COORDINATION_VERSION} -->`;
+/** Closes the block so a future refresh can replace exactly the marked region. */
+export const COORDINATION_END_MARKER = "<!-- /quilt:coordination -->";
+/** Any generation of the start marker: legacy unversioned, or any vN. */
+const COORDINATION_MARKER_ANY = /<!--\s*quilt:coordination(?:\s+v\d+)?\s*-->/;
 
-/** The coordination instructions appended to CLAUDE.md. */
+/** The coordination instructions appended to CLAUDE.md.
+ *
+ * The automatic, zero-approval path (hooks + CLI) leads; the MCP claim tools
+ * are framed as the optional prevention layer they are. The first external
+ * fleet read the old MCP-first framing, found no quilt tools in their sessions
+ * (the server was never approved), and concluded Quilt was unusable while the
+ * hooks were capturing and protecting every edit underneath. */
 export const COORDINATION_BLOCK = `${COORDINATION_MARKER}
 ## Coordinating with other agents (Quilt)
 
-You share this checkout with other agents. Coordinate through Quilt:
+You share this checkout with other agents. Quilt protects your work
+automatically:
 
-- Identity is automatic: if you don't name yourself, Quilt derives an id from
-  your session/connection. But if you are one of SEVERAL subagents sharing one
-  process or MCP connection, pick a stable id — your role or task name (e.g.
-  \`auth-agent\`) — and pass it as \`actor\` on every Quilt call, since a shared
-  connection can't tell you apart automatically.
-- If your edits flow through the capture layer (Claude Code's native
-  Edit/Write tools with the quilt hooks installed, or \`quilt_edit\` /
-  \`quilt_write\`), attribution is automatic — you can edit and
-  \`commit_mine\` with no claims at all for work nobody else touches.
-- CLAIM before editing when either applies: (a) you're editing via bash,
-  scripts, or codegen (nothing captures those — a whole-file claim placed
-  BEFORE the edit is what binds them to you; attribution is edit-time and
+- Your edits are captured and protected by the quilt hooks: nothing to
+  approve, nothing to call. Identity is automatic (each session gets its own
+  id), and every line you edit is attributed to you as you write it.
+- To commit only your lines, run \`quilt commit --mine -m "<message>"\` from
+  the shell. It works with or without the MCP server, and it leaves everyone
+  else's uncommitted work untouched. \`quilt status\` shows who owns what.
+- The quilt MCP tools (claim, commit_mine, get_status, ...) are an optional
+  prevention layer, available when the quilt MCP server is connected and
+  approved in your client. If the quilt tools are NOT in your MCP list you
+  are still protected: capture and attribution run in the hooks. Just commit
+  with the CLI.
+
+Optional, when the quilt MCP tools are connected (CLI equivalents in
+parentheses):
+
+- Identity is automatic, but if you are one of SEVERAL subagents sharing one
+  process or MCP connection, pick a stable id, your role or task name (e.g.
+  \`auth-agent\`), and pass it as \`actor\` on every quilt call, since a
+  shared connection cannot tell you apart automatically.
+- CLAIM before editing when either applies: (a) you are editing via bash,
+  scripts, or codegen (nothing captures those; a whole-file claim placed
+  BEFORE the edit is what binds them to you, and attribution is edit-time,
   never retroactive), or (b) you want the code protected from other actors
   while you work. Claim WHOLE FILES (\`src/auth.ts\`) or a directory for
   codegen (\`convex/_generated/\`); use \`path#symbol\` only to share one
-  file with another actor (pass \`creating: true\` if the symbol doesn't
-  exist yet). Always pass a short intent — the why (your ticket/task) —
-  it's shown to anyone you block.
+  file with another actor (pass \`creating: true\` if the symbol does not
+  exist yet). Always pass a short intent, the why (your ticket/task); it is
+  shown to anyone you block. (CLI: \`quilt claim <target> --intent "..."\`.)
 - If your claim is denied, another agent holds that code and is mid-change. The
   response carries their holderIntent (what they are doing) and when their
   claim lapses. Use it instead of forcing your change through: if they are
   already doing your change, drop yours; if it is compatible, adapt around it
-  (pass \`queue: true\` on the claim to be AUTO-GRANTED it when they release —
+  (pass \`queue: true\` on the claim to be AUTO-GRANTED it when they release;
   don't block, keep working, and it lands in your next get_status; or \`wait\`
   to block until they release, then re-read and layer on top); if your goals
   are genuinely opposed (you each need the same line to be different things),
-  do NOT overwrite them — escalate the target with a reason naming both
+  do NOT overwrite them: escalate the target with a reason naming both
   intents, and move on. A human decides.
 - When you reconcile a clash yourself (merge both intents, or adapt), resolve the
   target with a short note so the decision is recorded.
 - The claim response may include \`dependencyWarnings\`: a function you depend on
   is being changed by another agent. Account for it.
-- When your change is ready, \`commit_mine\` with your id. It commits only your
-  lines, leaves everyone else's work untouched, and AUTO-RELEASES your claims
-  on the committed files — no separate release call is needed.
+- \`commit_mine\` (CLI: \`quilt commit --mine\`) commits only your lines,
+  leaves everyone else's work untouched, and AUTO-RELEASES your claims on the
+  committed files; no separate release call is needed.
 - Repo-wide proof gates (tsc, tests) can fail mid-wave because of OTHER
   agents' in-flight work. Verify your own hunks' independence, or let the
   orchestrator run proof at wave end. Keep tooling artifacts (test snapshots,
-  scratch output) gitignored — quilt follows git's view of the tree.`;
+  scratch output) gitignored: quilt follows git's view of the tree.
+${COORDINATION_END_MARKER}`;
 
 export interface Detected {
   mcpJsonPath: string;
@@ -81,7 +111,10 @@ export interface Detected {
   /** Signals a Claude Code / Cursor / generic agent setup is in use. */
   orchestrator: string | null;
   quiltWired: boolean;
+  /** the CURRENT version of the coordination snippet is present. */
   coordinationPresent: boolean;
+  /** a coordination snippet from an OLDER Quilt is present (refresh available). */
+  coordinationStale: boolean;
   hooksWired: boolean;
 }
 
@@ -109,8 +142,9 @@ export function detect(root: string): Detected {
           : null;
 
   const quiltWired = hasMcpJson && mcpServersHasQuilt(safeRead(mcpJsonPath));
-  const coordinationPresent =
-    hasClaudeMd && (safeRead(claudeMdPath) ?? "").includes(COORDINATION_MARKER);
+  const claudeMdContent = hasClaudeMd ? (safeRead(claudeMdPath) ?? "") : "";
+  const coordinationPresent = claudeMdContent.includes(COORDINATION_MARKER);
+  const coordinationStale = coordinationIsStale(claudeMdContent);
   const hooksWired = hasSettings && settingsHasQuiltHooks(safeRead(settingsPath));
 
   return {
@@ -127,6 +161,7 @@ export function detect(root: string): Detected {
     orchestrator,
     quiltWired,
     coordinationPresent,
+    coordinationStale,
     hooksWired,
   };
 }
@@ -266,14 +301,65 @@ export function mergeHookSettings(existing: string | null): MergeResult {
 }
 
 /**
- * Append the coordination snippet to CLAUDE.md. No-ops if the marker is already
- * present; otherwise appends with a blank-line separator.
+ * Add or refresh the coordination snippet in CLAUDE.md. No-op when the CURRENT
+ * version's marker is present; a block from an older Quilt (legacy unversioned
+ * marker, or an older vN) is replaced in place, everything around it preserved.
  */
 export function appendCoordination(existing: string | null): MergeResult {
   const base = existing ?? "";
   if (base.includes(COORDINATION_MARKER)) return { content: base, changed: false };
+  const stale = base.match(COORDINATION_MARKER_ANY);
+  if (stale && stale.index !== undefined) {
+    const end = coordinationBlockEnd(base, stale.index);
+    const tail = base.slice(end).replace(/^\n+/, "");
+    const content = base.slice(0, stale.index) + COORDINATION_BLOCK + "\n" + (tail ? "\n" + tail : "");
+    return { content, changed: true };
+  }
   const sep = base === "" ? "" : base.endsWith("\n") ? "\n" : "\n\n";
   return { content: base + sep + COORDINATION_BLOCK + "\n", changed: true };
+}
+
+/** True when the file carries a coordination block from an OLDER Quilt. */
+export function coordinationIsStale(content: string): boolean {
+  return !content.includes(COORDINATION_MARKER) && COORDINATION_MARKER_ANY.test(content);
+}
+
+/**
+ * The final line of every legacy (pre-v2, end-marker-less) block Quilt ever
+ * shipped. The most precise boundary available: only quilt setup wrote these
+ * blocks, so the real-world population is exactly these bodies. Each entry is
+ * matched as a full block-final phrase (period included), which none of the
+ * bodies contain mid-block.
+ */
+const LEGACY_BLOCK_TAILS = [
+  // 0.4.x: "...scratch output) gitignored — quilt follows git's view of the tree."
+  "quilt follows git's view of the tree.",
+  // pre-0.4: "...It commits only your lines and leaves everyone else's work untouched."
+  "leaves everyone else's work untouched.\n",
+];
+
+/**
+ * The end offset of the coordination block starting at `start`. Blocks written
+ * by v2+ carry an explicit end marker. Legacy blocks are bounded by their known
+ * final line (see LEGACY_BLOCK_TAILS) — the precise cut, so user content added
+ * after the block survives even when it isn't a `## ` heading. Fallbacks, in
+ * order: the next `## ` heading after the block's own, then EOF (the block was
+ * appended at EOF by setup, so EOF is the common real-world boundary anyway).
+ */
+function coordinationBlockEnd(text: string, start: number): number {
+  const endIdx = text.indexOf(COORDINATION_END_MARKER, start);
+  if (endIdx !== -1) return endIdx + COORDINATION_END_MARKER.length;
+  // Earliest tail match wins, so a phrase echoed later in user content can
+  // never widen the cut.
+  const tailAt = LEGACY_BLOCK_TAILS.map((t) => text.indexOf(t, start)).filter((i) => i !== -1);
+  if (tailAt.length > 0) {
+    const lineEnd = text.indexOf("\n", Math.min(...tailAt));
+    return lineEnd === -1 ? text.length : lineEnd + 1;
+  }
+  const ownHeading = text.indexOf("\n## ", start);
+  if (ownHeading === -1) return text.length;
+  const next = text.indexOf("\n## ", ownHeading + 4);
+  return next === -1 ? text.length : next + 1; // keep the newline before the user's next heading
 }
 
 export interface SetupStep {
@@ -318,7 +404,11 @@ export function planSetup(root: string): SetupStep[] {
     steps.push({
       file: "CLAUDE.md",
       action: d.hasClaudeMd ? "update" : "create",
-      detail: d.hasClaudeMd ? "append the coordination snippet" : "create with the coordination snippet",
+      detail: d.coordinationStale
+        ? "refresh the coordination snippet to the current version"
+        : d.hasClaudeMd
+          ? "append the coordination snippet"
+          : "create with the coordination snippet",
       content: md.content,
       path: d.claudeMdPath,
     });

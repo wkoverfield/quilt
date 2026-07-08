@@ -1,0 +1,6 @@
+{
+  "source": "custom_tool_call from rollout, codex-cli 0.142.5, 2026-07-08",
+  "name": "apply_patch",
+  "input": "*** Begin Patch\n*** Update File: x.js\n@@\n-  return 1;\n+  return 111;\n*** End Patch\n",
+  "output": "Exit code: 0 (applied; x.js updated)"
+}

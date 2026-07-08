@@ -75,6 +75,17 @@ test("appendCoordination creates content with the marker when none exists", () =
   for (const term of ["intent", "holderIntent", "escalate", "resolve"]) {
     assert.ok(r.content.includes(term), `coordination snippet should mention ${term}`);
   }
+  // MCP-optional framing leads: the zero-approval hook path is the product,
+  // the claim tools are the optional layer. (The first external fleet read the
+  // old MCP-first snippet and concluded Quilt was unusable when the MCP server
+  // wasn't approved — while the hooks were protecting every edit.)
+  assert.ok(r.content.includes("quilt commit --mine"), "the CLI commit path is taught");
+  assert.ok(r.content.includes("captured and protected by the quilt hooks"), "leads with the zero-approval path");
+  assert.ok(/NOT in your MCP list[\s\S]*still protected/.test(r.content), "says missing MCP tools still means protected");
+  assert.ok(
+    r.content.indexOf("captured and protected by the quilt hooks") < r.content.indexOf("CLAIM before editing"),
+    "hooks lead, claims are the optional-advanced section",
+  );
 });
 
 test("appendCoordination appends to existing CLAUDE.md exactly once", () => {
@@ -167,7 +178,10 @@ test("planSetup skips files that are already wired", () => {
 test("quilt setup wires a fresh repo and is idempotent", () => {
   const dir = tmpRepo();
   try {
-    const run = () => spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8" });
+    // QUILT_NO_UPDATE_CHECK keeps the test hermetic: setup's staleness nudge
+    // would otherwise touch the network (or its daily cache) once.
+    const run = () =>
+      spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8", env: { ...process.env, QUILT_NO_UPDATE_CHECK: "1" } });
     const first = run();
     assert.equal(first.status, 0, first.stderr);
     assert.ok(existsSync(join(dir, ".quilt")), "Quilt initialized");
@@ -236,4 +250,94 @@ test("planSetup does NOT create AGENTS.md or .cursor config when neither exists"
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// --- versioned snippet refresh (review finding: a presence-only marker check
+// froze already-onboarded repos on whatever snippet they first received) ---
+
+const LEGACY_BLOCK = `<!-- quilt:coordination -->
+## Coordinating with other agents (Quilt)
+
+You share this checkout with other agents. Coordinate through Quilt:
+
+- Before you edit a file, claim what you're about to change. Pass intent.
+- If your claim is denied, read holderIntent, escalate or resolve.
+- When your change is ready, commit_mine with your id.`;
+
+test("appendCoordination REPLACES a legacy (unversioned) block in place, preserving surrounding content", () => {
+  const existing = `# My rules\n\nDo the thing.\n\n${LEGACY_BLOCK}\n\n## My other section\n\nkeep me\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true, "a stale block is a change, not a no-op");
+  assert.ok(r.content.includes(COORDINATION_MARKER), "the current versioned marker landed");
+  assert.ok(!r.content.includes("<!-- quilt:coordination -->\n"), "the legacy marker is gone");
+  assert.ok(!r.content.includes("Coordinate through Quilt:"), "the old body is gone");
+  assert.ok(r.content.startsWith("# My rules\n\nDo the thing.\n"), "content before the block survives");
+  assert.ok(r.content.includes("## My other section\n\nkeep me"), "content after the block survives");
+  assert.equal(r.content.split("<!-- quilt:coordination").length - 1, 1, "exactly one start marker remains");
+  // Idempotent from here: the refreshed content is current.
+  assert.equal(appendCoordination(r.content).changed, false);
+});
+
+test("appendCoordination refreshes a v2+ block via its end marker when the version bumps", () => {
+  // Simulate a hypothetical older versioned block (v1 style with end marker).
+  const oldVersioned = `<!-- quilt:coordination v1 -->\n## Coordinating with other agents (Quilt)\n\nold body\n<!-- /quilt:coordination -->`;
+  const existing = `# rules\n\n${oldVersioned}\n\ntrailing notes\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true);
+  assert.ok(r.content.includes(COORDINATION_MARKER));
+  assert.ok(!r.content.includes("old body"));
+  assert.ok(r.content.includes("trailing notes"), "content after the end marker survives");
+});
+
+test("detect + doctor surface a stale coordination snippet", () => {
+  const dir = tmpRepo();
+  try {
+    writeFileSync(join(dir, "CLAUDE.md"), `${LEGACY_BLOCK}\n`);
+    const d = detect(dir);
+    assert.equal(d.coordinationPresent, false, "a legacy block is not the current one");
+    assert.equal(d.coordinationStale, true);
+    const step = planSetup(dir).find((s) => s.file === "CLAUDE.md");
+    assert.equal(step?.action, "update");
+    assert.match(step!.detail, /refresh/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("legacy block refresh cuts at the known final line, so trailing NON-heading user content survives", () => {
+  // The block was appended at EOF by setup, but users edit files: plain
+  // trailing paragraphs (no ## heading) must not be swallowed by the refresh.
+  const legacy04 = `<!-- quilt:coordination -->
+## Coordinating with other agents (Quilt)
+
+You share this checkout with other agents. Coordinate through Quilt:
+
+- CLAIM before editing when either applies. Always pass a short intent.
+- If denied, read holderIntent, escalate or resolve.
+- Repo-wide proof gates can fail mid-wave. Keep tooling artifacts (test snapshots,
+  scratch output) gitignored — quilt follows git's view of the tree.`;
+  const existing = `# rules\n\n${legacy04}\n\nmy own trailing note, not a heading\n- my own list item\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true);
+  assert.ok(r.content.includes(COORDINATION_MARKER));
+  assert.ok(!r.content.includes("Coordinate through Quilt:"), "old body gone");
+  assert.ok(r.content.includes("my own trailing note, not a heading"), "trailing paragraph survives");
+  assert.ok(r.content.includes("- my own list item"), "trailing list survives");
+  assert.equal(r.content.split("<!-- quilt:coordination").length - 1, 1);
+});
+
+test("legacy block refresh: pre-0.4 body (different final line) also cuts precisely", () => {
+  const legacyPre04 = `<!-- quilt:coordination -->
+## Coordinating with other agents (Quilt)
+
+You share this checkout with other agents. Coordinate through Quilt:
+
+- Before you edit a file, claim what you're about to change. Pass intent.
+- When your change is ready, commit_mine with your id. It commits only your
+  lines and leaves everyone else's work untouched.`;
+  const existing = `${legacyPre04}\n\nkeep this line\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true);
+  assert.ok(r.content.includes("keep this line"), "content after the pre-0.4 tail survives");
+  assert.ok(!r.content.includes("Before you edit a file, claim"), "old body gone");
 });

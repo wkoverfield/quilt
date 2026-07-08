@@ -236,3 +236,38 @@ test("fleet view: adjacent edits in one hunk surface as 'adjacent', not a clash"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("fleet view: a hook-captured edit shows its author BEFORE any reconcile (not 'unattributed')", () => {
+  // The exact first-run failure the fleet view shipped with: four sessions
+  // edit via the capture hooks, nobody has run a reconciling quilt command
+  // yet, and `quilt fleet` said "Unattributed / 0 actors" even though the
+  // ledger knew every author. The read-only view must overlay the ledger.
+  const dir = repo();
+  try {
+    write(dir, "m.js", "function foo() {\n  return 0;\n}\n");
+    commit(dir, "init");
+    q(dir, ["init"]);
+
+    // A real hook round-trip with a session id (no QUILT_ACTOR anywhere):
+    // pre snapshots, the native tool applies the edit, post captures it.
+    const payload = JSON.stringify({
+      tool_name: "Edit",
+      session_id: "fa11ab1e-0000-4abc-8def-000011112222",
+      tool_input: { file_path: join(dir, "m.js"), old_string: "return 0", new_string: "return 42" },
+    });
+    const hook = (cmd: string) =>
+      spawnSync("node", [CLI, cmd], { cwd: dir, encoding: "utf8", input: payload, env: { ...process.env, NO_COLOR: "1" } });
+    assert.equal(hook("hook-pre").status, 0);
+    write(dir, "m.js", "function foo() {\n  return 42;\n}\n"); // the native tool's write
+    assert.equal(hook("hook-post").status, 0);
+
+    // No status/reconcile by anyone. Fleet must still know the author.
+    const v = fleet(dir);
+    const auto = v.actors.find((a: any) => a.id === "claude-fa11ab1e");
+    assert.ok(auto, `the auto-derived session actor appears in the roster (got ${JSON.stringify(v.actors)})`);
+    assert.ok(auto.files.includes("m.js"), "the captured file is attributed to it");
+    assert.ok(!v.unattributed.includes("m.js"), "the captured edit is NOT shown as unattributed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

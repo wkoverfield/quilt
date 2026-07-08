@@ -74,3 +74,41 @@ Files, in dependency order:
 Codex session editing files via `apply_patch` is captured with correct
 per-file authorship in `.quilt/` — including a multi-file patch attributed
 correctly across all its files.
+
+## Spike results (2026-07-08, codex-cli 0.142.5, live)
+
+Captured during the 0.4.4 launch-hardening pass; real payloads live in
+[`codex-payload-samples/`](codex-payload-samples/).
+
+**The patch format is tractable.** Confirmed against live single-file,
+multi-file (Update x2 + Add File), and failed patches: the blob is OpenAI's
+apply_patch envelope, and the capture core never needs to interpret hunks.
+Pre: scan the blob for `*** Update/Add/Delete File:` markers, snapshot each
+named file. Post: check the tool outcome, then diff snapshot vs disk per
+file. A failed patch ("apply_patch verification failed") changes nothing and
+must not be attributed.
+
+**The real blocker is hook trust, not parsing.** Codex persists per-hook
+trust in `~/.codex/config.toml` under
+`[hooks.state."<file>:<event>:<group>:<index>"]` with an opaque
+`trusted_hash`. A hook newly merged into `~/.codex/hooks.json` is silently
+skipped (headless and interactive alike) until the user approves it in an
+interactive Codex session or runs with `--dangerously-bypass-hook-trust`.
+Verified live: pre-existing trusted hooks fired while the freshly added
+logging hook never ran. Consequences:
+
+- `quilt setup` wiring Codex hooks cannot deliver zero-config capture the
+  way it does on Claude Code: the wired hooks do nothing until an
+  interactive approval. That is the exact "silently not working" trap the
+  0.4.4 release removes from the Claude path, so shipping Codex capture
+  without handling it would recreate the bug we just fixed.
+- Setup output and doctor must state the approval step explicitly (mirror
+  of the MCP approval note), and doctor should read `[hooks.state]` to
+  report wired-but-untrusted as its own check.
+- The hook stdin envelope (exact field names) still needs one live capture
+  from a TRUSTED hook; everything else about the parser can be built from
+  the samples.
+
+**Recommendation: 0.4.5 fast-follow, not 0.4.4.** The parser is clean, but
+the trust flow needs its own design round (and one interactive approval to
+capture the envelope). Codex users work over MCP at launch, as today.

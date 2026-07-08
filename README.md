@@ -20,7 +20,7 @@ a `.quilt/` sidecar you can delete without touching your repo.
 
 ```bash
 npm install -g @quilt-dev/cli
-quilt setup     # wire Quilt into your repo (Claude Code, Cursor, or plain git)
+quilt setup     # capture hooks wired, protection live (MCP tools optional, on top)
 ```
 
 ## The problem
@@ -94,12 +94,34 @@ rewrites it, and all state lives locally under `.quilt/`. No account, no daemon.
 ## Quickstart
 
 ```bash
-quilt setup      # wire Quilt into the repo (MCP server, hooks, coordination)
+quilt setup      # wire Quilt into the repo (capture hooks + optional MCP tools)
 quilt doctor     # confirm it's wired and capture is flowing
 ```
 
 That's it. Agents are named automatically: each Claude Code session or MCP
 connection gets its own id, so parallel agents are told apart with no setup.
+
+### 4 terminals, one repo
+
+The whole flow, from a git repo to four agents working at once:
+
+```bash
+cd your-repo
+quilt setup          # once, ~5 seconds
+claude               # terminal 1
+claude               # terminal 2
+claude               # terminal 3
+claude               # terminal 4
+```
+
+Nothing else. No `QUILT_ACTOR`, no per-terminal ceremony, nothing to approve:
+the capture hooks attribute every edit to its session automatically. Watch it
+live with `quilt fleet`, and when a session's work is ready, ask it to run
+`quilt commit --mine -m "..."`. Each commit contains exactly that session's
+lines, even where two sessions touched the same file. (Claude Code will also
+offer to enable the optional quilt MCP server for the project; approving it
+adds the claim/prevention tools, but the hooks protect you either way.)
+
 Set an explicit id when you want one that is stable across sessions:
 
 ```bash

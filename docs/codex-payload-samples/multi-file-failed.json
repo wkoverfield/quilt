@@ -1,0 +1,6 @@
+{
+  "source": "custom_tool_call + custom_tool_call_output from rollout, codex-cli 0.142.5, 2026-07-08",
+  "name": "apply_patch",
+  "input": "*** Begin Patch\n*** Update File: x.js\n@@\n-return 111\n+return 1111\n*** Update File: y.js\n@@\n-return 2\n+return 222\n*** Add File: z.js\n+function three() { return 3; }\n*** End Patch\n",
+  "output": "apply_patch verification failed: Failed to find expected lines in <repo>/x.js:\nreturn 111"
+}

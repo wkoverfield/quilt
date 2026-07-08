@@ -489,3 +489,45 @@ test("--actor flag acts as that identity, and an explicit env var still wins", (
     cleanup(dir);
   }
 });
+
+// --- launch-hardening: run-from-the-wrong-directory guidance ---
+
+test("setup/doctor run one level ABOVE the repo name the child repo instead of half-working", () => {
+  // The first external user's checkout root wasn't a git repo; the app lived in
+  // a subdirectory. Wiring .mcp.json at that level would configure a directory
+  // no agent session reads — the CLI must refuse and point at the right place.
+  const parent = mkdtempSync(join(tmpdir(), "quilt-parent-"));
+  try {
+    const child = join(parent, "group-sell-app");
+    spawnSync("git", ["init", "-q", child]);
+    const env = { ...process.env, NO_COLOR: "1", QUILT_NO_UPDATE_CHECK: "1" };
+    for (const cmd of ["setup", "doctor", "init"]) {
+      const r = spawnSync("node", [CLI, cmd], { cwd: parent, encoding: "utf8", env });
+      assert.notEqual(r.status, 0, `${cmd} must refuse to run above the repo`);
+      assert.match(r.stderr, /group-sell-app\//, `${cmd} names the child repo`);
+      assert.match(r.stderr, /cd group-sell-app/, `${cmd} gives the exact next command`);
+    }
+    assert.equal(existsSync(join(parent, ".mcp.json")), false, "nothing was wired at the non-repo root");
+    assert.equal(existsSync(join(parent, ".quilt")), false);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("setup prints the MCP-approval reality and the hooks-protect-you-anyway note", () => {
+  const dir = makeRepo();
+  try {
+    const r = spawnSync("node", [CLI, "setup"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1", QUILT_NO_UPDATE_CHECK: "1" },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /already protected/, "protection-first: hooks are live before any approval");
+    assert.match(r.stdout, /restarts and approves/, "the restart+approval is a stated non-event, not a silent trap");
+    assert.match(r.stdout, /\/mcp/);
+    assert.match(r.stdout, /quilt commit --mine/, "names the CLI fallback an agent can always use");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
