@@ -264,3 +264,17 @@ test("probeMcpServer fails safe: dead command, exiting server, and silence all r
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("doctor warns when CLAUDE.md carries an older coordination snippet", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    writeFileSync(join(dir, "CLAUDE.md"), "<!-- quilt:coordination -->\n## Coordinating with other agents (Quilt)\n\nold body\n");
+    const r = diagnose(s, {});
+    const c = check(r, "Coordination snippet");
+    assert.equal(c?.status, "warn");
+    assert.match(c!.hint ?? "", /quilt setup/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

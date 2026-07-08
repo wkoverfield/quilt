@@ -45,6 +45,11 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Fixed
 
+- **The coordination snippet now refreshes in place when it changes.** The
+  marker is versioned (`quilt:coordination v2`); a repo onboarded under an
+  older Quilt gets its block replaced on the next `quilt setup` (surrounding
+  CLAUDE.md content preserved), instead of being frozen forever on whatever
+  framing it first received. `quilt doctor` warns when the snippet is stale.
 - **`quilt fleet` no longer shows hook-captured edits as "Unattributed / 0
   actors".** The read-only fleet view now overlays the authorship ledger, so
   an edit whose author the ledger already knows is attributed immediately,

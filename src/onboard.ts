@@ -15,8 +15,20 @@ export const HOOK_MATCHER = "Edit|Write|MultiEdit";
 export const HOOK_PRE_COMMAND = "quilt hook-pre";
 export const HOOK_POST_COMMAND = "quilt hook-post";
 
-/** Marker so the CLAUDE.md snippet is added at most once. */
-export const COORDINATION_MARKER = "<!-- quilt:coordination -->";
+/**
+ * Versioned marker so the CLAUDE.md snippet is added at most once AND can be
+ * refreshed in place when its content changes. The version bump is load-bearing:
+ * a presence-only (unversioned) check meant a repo onboarded under an older
+ * Quilt could never receive a rewritten snippet — `quilt setup` silently
+ * no-opped forever, freezing whatever framing it first shipped with.
+ * Bump the version whenever COORDINATION_BLOCK's content changes.
+ */
+export const COORDINATION_VERSION = 2;
+export const COORDINATION_MARKER = `<!-- quilt:coordination v${COORDINATION_VERSION} -->`;
+/** Closes the block so a future refresh can replace exactly the marked region. */
+export const COORDINATION_END_MARKER = "<!-- /quilt:coordination -->";
+/** Any generation of the start marker: legacy unversioned, or any vN. */
+const COORDINATION_MARKER_ANY = /<!--\s*quilt:coordination(?:\s+v\d+)?\s*-->/;
 
 /** The coordination instructions appended to CLAUDE.md.
  *
@@ -79,7 +91,8 @@ parentheses):
 - Repo-wide proof gates (tsc, tests) can fail mid-wave because of OTHER
   agents' in-flight work. Verify your own hunks' independence, or let the
   orchestrator run proof at wave end. Keep tooling artifacts (test snapshots,
-  scratch output) gitignored: quilt follows git's view of the tree.`;
+  scratch output) gitignored: quilt follows git's view of the tree.
+${COORDINATION_END_MARKER}`;
 
 export interface Detected {
   mcpJsonPath: string;
@@ -98,7 +111,10 @@ export interface Detected {
   /** Signals a Claude Code / Cursor / generic agent setup is in use. */
   orchestrator: string | null;
   quiltWired: boolean;
+  /** the CURRENT version of the coordination snippet is present. */
   coordinationPresent: boolean;
+  /** a coordination snippet from an OLDER Quilt is present (refresh available). */
+  coordinationStale: boolean;
   hooksWired: boolean;
 }
 
@@ -126,8 +142,9 @@ export function detect(root: string): Detected {
           : null;
 
   const quiltWired = hasMcpJson && mcpServersHasQuilt(safeRead(mcpJsonPath));
-  const coordinationPresent =
-    hasClaudeMd && (safeRead(claudeMdPath) ?? "").includes(COORDINATION_MARKER);
+  const claudeMdContent = hasClaudeMd ? (safeRead(claudeMdPath) ?? "") : "";
+  const coordinationPresent = claudeMdContent.includes(COORDINATION_MARKER);
+  const coordinationStale = coordinationIsStale(claudeMdContent);
   const hooksWired = hasSettings && settingsHasQuiltHooks(safeRead(settingsPath));
 
   return {
@@ -144,6 +161,7 @@ export function detect(root: string): Detected {
     orchestrator,
     quiltWired,
     coordinationPresent,
+    coordinationStale,
     hooksWired,
   };
 }
@@ -283,14 +301,43 @@ export function mergeHookSettings(existing: string | null): MergeResult {
 }
 
 /**
- * Append the coordination snippet to CLAUDE.md. No-ops if the marker is already
- * present; otherwise appends with a blank-line separator.
+ * Add or refresh the coordination snippet in CLAUDE.md. No-op when the CURRENT
+ * version's marker is present; a block from an older Quilt (legacy unversioned
+ * marker, or an older vN) is replaced in place, everything around it preserved.
  */
 export function appendCoordination(existing: string | null): MergeResult {
   const base = existing ?? "";
   if (base.includes(COORDINATION_MARKER)) return { content: base, changed: false };
+  const stale = base.match(COORDINATION_MARKER_ANY);
+  if (stale && stale.index !== undefined) {
+    const end = coordinationBlockEnd(base, stale.index);
+    const tail = base.slice(end).replace(/^\n+/, "");
+    const content = base.slice(0, stale.index) + COORDINATION_BLOCK + "\n" + (tail ? "\n" + tail : "");
+    return { content, changed: true };
+  }
   const sep = base === "" ? "" : base.endsWith("\n") ? "\n" : "\n\n";
   return { content: base + sep + COORDINATION_BLOCK + "\n", changed: true };
+}
+
+/** True when the file carries a coordination block from an OLDER Quilt. */
+export function coordinationIsStale(content: string): boolean {
+  return !content.includes(COORDINATION_MARKER) && COORDINATION_MARKER_ANY.test(content);
+}
+
+/**
+ * The end offset of the coordination block starting at `start`. Blocks written
+ * by v2+ carry an explicit end marker; legacy blocks (no end marker) span the
+ * marker line, the block's own `## Coordinating…` heading, and everything up
+ * to the next `## ` heading (user content) or EOF — the block body itself
+ * contains no `## ` headings, only list items.
+ */
+function coordinationBlockEnd(text: string, start: number): number {
+  const endIdx = text.indexOf(COORDINATION_END_MARKER, start);
+  if (endIdx !== -1) return endIdx + COORDINATION_END_MARKER.length;
+  const ownHeading = text.indexOf("\n## ", start);
+  if (ownHeading === -1) return text.length;
+  const next = text.indexOf("\n## ", ownHeading + 4);
+  return next === -1 ? text.length : next + 1; // keep the newline before the user's next heading
 }
 
 export interface SetupStep {
@@ -335,7 +382,11 @@ export function planSetup(root: string): SetupStep[] {
     steps.push({
       file: "CLAUDE.md",
       action: d.hasClaudeMd ? "update" : "create",
-      detail: d.hasClaudeMd ? "append the coordination snippet" : "create with the coordination snippet",
+      detail: d.coordinationStale
+        ? "refresh the coordination snippet to the current version"
+        : d.hasClaudeMd
+          ? "append the coordination snippet"
+          : "create with the coordination snippet",
       content: md.content,
       path: d.claudeMdPath,
     });

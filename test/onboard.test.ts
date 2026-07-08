@@ -251,3 +251,55 @@ test("planSetup does NOT create AGENTS.md or .cursor config when neither exists"
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- versioned snippet refresh (review finding: a presence-only marker check
+// froze already-onboarded repos on whatever snippet they first received) ---
+
+const LEGACY_BLOCK = `<!-- quilt:coordination -->
+## Coordinating with other agents (Quilt)
+
+You share this checkout with other agents. Coordinate through Quilt:
+
+- Before you edit a file, claim what you're about to change. Pass intent.
+- If your claim is denied, read holderIntent, escalate or resolve.
+- When your change is ready, commit_mine with your id.`;
+
+test("appendCoordination REPLACES a legacy (unversioned) block in place, preserving surrounding content", () => {
+  const existing = `# My rules\n\nDo the thing.\n\n${LEGACY_BLOCK}\n\n## My other section\n\nkeep me\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true, "a stale block is a change, not a no-op");
+  assert.ok(r.content.includes(COORDINATION_MARKER), "the current versioned marker landed");
+  assert.ok(!r.content.includes("<!-- quilt:coordination -->\n"), "the legacy marker is gone");
+  assert.ok(!r.content.includes("Coordinate through Quilt:"), "the old body is gone");
+  assert.ok(r.content.startsWith("# My rules\n\nDo the thing.\n"), "content before the block survives");
+  assert.ok(r.content.includes("## My other section\n\nkeep me"), "content after the block survives");
+  assert.equal(r.content.split("<!-- quilt:coordination").length - 1, 1, "exactly one start marker remains");
+  // Idempotent from here: the refreshed content is current.
+  assert.equal(appendCoordination(r.content).changed, false);
+});
+
+test("appendCoordination refreshes a v2+ block via its end marker when the version bumps", () => {
+  // Simulate a hypothetical older versioned block (v1 style with end marker).
+  const oldVersioned = `<!-- quilt:coordination v1 -->\n## Coordinating with other agents (Quilt)\n\nold body\n<!-- /quilt:coordination -->`;
+  const existing = `# rules\n\n${oldVersioned}\n\ntrailing notes\n`;
+  const r = appendCoordination(existing);
+  assert.equal(r.changed, true);
+  assert.ok(r.content.includes(COORDINATION_MARKER));
+  assert.ok(!r.content.includes("old body"));
+  assert.ok(r.content.includes("trailing notes"), "content after the end marker survives");
+});
+
+test("detect + doctor surface a stale coordination snippet", () => {
+  const dir = tmpRepo();
+  try {
+    writeFileSync(join(dir, "CLAUDE.md"), `${LEGACY_BLOCK}\n`);
+    const d = detect(dir);
+    assert.equal(d.coordinationPresent, false, "a legacy block is not the current one");
+    assert.equal(d.coordinationStale, true);
+    const step = planSetup(dir).find((s) => s.file === "CLAUDE.md");
+    assert.equal(step?.action, "update");
+    assert.match(step!.detail, /refresh/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -199,6 +199,18 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
         },
   );
 
+  // A coordination snippet frozen at an older version keeps teaching agents an
+  // outdated protocol (the pre-0.4.4 one framed the optional MCP tools as the
+  // product). Setup refreshes it in place; say so.
+  if (d.coordinationStale) {
+    checks.push({
+      label: "Coordination snippet",
+      status: "warn",
+      detail: "CLAUDE.md carries a snippet from an older Quilt",
+      hint: "run `quilt setup` — it refreshes the snippet in place, keeping the rest of the file",
+    });
+  }
+
   // Identity. Capture no longer depends on QUILT_ACTOR — the hooks fall back to
   // a per-session auto id (claude-xxxxxxxx) and the MCP server to a
   // per-connection one — so unset is informational: it means auto-naming, not
