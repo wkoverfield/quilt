@@ -208,3 +208,55 @@ test("setup wires Codex when ~/.codex exists (QUILT_CODEX_DIR) and prints the tr
     rmSync(codexHome, { recursive: true, force: true });
   }
 });
+
+test("a Claude Write whose CONTENT contains a patch envelope is NOT misrouted to the Codex path", () => {
+  // e.g. an agent writing documentation about apply_patch, or a .patch file.
+  const p = parseCodexHookInput({
+    tool_name: "Write",
+    session_id: "abc",
+    tool_input: {
+      file_path: "docs/patch-format.md",
+      content: "Example:\n*** Begin Patch\n*** Update File: x.js\n*** End Patch\n",
+    },
+  });
+  assert.equal(p, null, "file_path marks a Claude payload; the marker in content is just text");
+});
+
+test("a rename (Move to) never re-attributes unchanged lines — removal at the source, only real changes at the destination", () => {
+  const dir = repo();
+  try {
+    writeFileSync(join(dir, "a.js"), "const one = 1;\nconst two = 2;\nconst three = 3;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+    spawnSync("node", [CLI, "init"], { cwd: dir, encoding: "utf8" });
+
+    const blob = "*** Begin Patch\n*** Update File: a.js\n*** Move to: b.js\n@@\n-const two = 2;\n+const two = 22;\n*** End Patch\n";
+    const payload = JSON.stringify({
+      session_id: "abcd1234-0000-0000-0000-000000000000",
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: { command: blob },
+    });
+    const env = { ...process.env, NO_COLOR: "1" };
+    let r = spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", env, input: payload });
+    assert.equal(r.status, 0, r.stderr);
+    // The tool performs the move + one-line change.
+    rmSync(join(dir, "a.js"));
+    writeFileSync(join(dir, "b.js"), "const one = 1;\nconst two = 22;\nconst three = 3;\n");
+    r = spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", env, input: payload });
+    assert.equal(r.status, 0, r.stderr);
+
+    const events = readFileSync(join(dir, ".quilt", "authorship.log"), "utf8")
+      .trim().split("\n").map((l) => JSON.parse(l));
+    const atOld = events.find((e) => e.path === "a.js");
+    const atNew = events.find((e) => e.path === "b.js");
+    assert.ok(atOld, "the source's removal is recorded");
+    assert.equal(atOld!.added.length, 0, "nothing is ADDED at the old path");
+    assert.equal(atOld!.removed.length, 3, "the mover removed the old path's lines");
+    assert.ok(atNew, "the destination records the in-transit change");
+    assert.deepEqual(atNew!.added, ["const two = 22;"], "ONLY the genuinely changed line is owned at the destination");
+    assert.ok(!atNew!.added.includes("const one = 1;"), "unchanged moved lines are NOT re-attributed to the mover");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

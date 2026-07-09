@@ -180,6 +180,11 @@ export function parseCodexHookInput(raw: unknown): CodexHookInput | null {
   if (typeof raw !== "object" || raw === null) return null;
   const o = raw as Record<string, unknown>;
   const input = (o.tool_input ?? {}) as Record<string, unknown>;
+  // A Claude-shaped payload (tool_input.file_path) is never a Codex patch,
+  // even when its CONTENT happens to contain a patch envelope — an agent
+  // Writing documentation about apply_patch must not be routed here and have
+  // the marker text parsed as real file sections.
+  if (typeof input.file_path === "string") return null;
   let blob: string | null = null;
   for (const v of Object.values(input)) {
     if (typeof v === "string" && v.includes(PATCH_MARKER)) {
@@ -204,14 +209,23 @@ export function codexActorId(sessionId: string): string | null {
   return `codex-${clean.slice(0, 8)}`;
 }
 
+/** A store-relative file entry for the Codex capture core. `moveRel` pairs a
+ * rename's destination with its source so a move is captured as ONE file whose
+ * key changed, not as an unrelated full delete + full add. */
+export interface CodexCaptureFile {
+  rel: string;
+  moveRel?: string;
+}
+
 /**
  * Codex PreToolUse: snapshot each file's pre-patch content so Post can diff.
  * Capture only — no prevention: Codex has its own permission model, and deny
  * parity is a separate, later effort (verify Codex's deny schema first).
  * `files` carry store-relative paths (the caller resolves blob paths against
- * the payload's cwd and each file's own repo).
+ * the payload's cwd and each file's own repo). For a rename, the SOURCE path
+ * is snapshotted; the destination doesn't exist yet.
  */
-export function runCodexHookPre(store: Store, actor: string, files: Array<{ rel: string }>): void {
+export function runCodexHookPre(store: Store, actor: string, files: CodexCaptureFile[]): void {
   for (const f of files) {
     const abs = safeAbs(store.paths.repoRoot, f.rel);
     if (!abs) continue;
@@ -225,14 +239,41 @@ export function runCodexHookPre(store: Store, actor: string, files: Array<{ rel:
  * now and record authorship. A failed patch leaves the disk identical to the
  * snapshot — empty delta, nothing recorded — so tool_response parsing isn't
  * needed for correctness. Consumes the snapshots.
+ *
+ * Renames are the attribution-sensitive case: recording a move as a full
+ * delete at the old path plus a full ADD at the new path would hand the mover
+ * ownership of every line in the file — including other actors' uncommitted
+ * work riding along in the move. Instead a rename records (a) the REMOVAL of
+ * the old path's lines (the mover really did remove that path), and (b) at
+ * the new path, only the lines the mover genuinely CHANGED during the move
+ * (old content diffed against new content under the new key). Unchanged moved
+ * lines stay unowned in the ledger and fall to the normal inference floor —
+ * no ledger answer beats a wrong ledger answer.
  */
-export function runCodexHookPost(store: Store, actor: string, files: Array<{ rel: string }>): void {
+export function runCodexHookPost(store: Store, actor: string, files: CodexCaptureFile[]): void {
   for (const f of files) {
     const snap = snapshotPath(store, actor, f.rel);
     if (!existsSync(snap)) continue;
     const before = readFileSync(snap, "utf8");
     const abs = safeAbs(store.paths.repoRoot, f.rel);
     if (!abs) {
+      rmSync(snap, { force: true });
+      continue;
+    }
+    const oldGone = !existsSync(abs);
+    const destAbs = f.moveRel ? safeAbs(store.paths.repoRoot, f.moveRel) : null;
+    if (f.moveRel && destAbs && oldGone && existsSync(destAbs)) {
+      // The rename actually happened: removal at the source...
+      if (before !== "") {
+        recordAuthorship(store, { actor, path: f.rel, oldText: before, newText: "", anchor: null });
+      }
+      // ...and at the destination, only what genuinely changed in transit.
+      const moved = readFileSync(destAbs, "utf8");
+      if (moved !== before) {
+        recordAuthorship(store, { actor, path: f.moveRel, oldText: before, newText: moved, anchor: null });
+        refreshClaims(store, actor, f.moveRel, Date.now());
+      }
+      refreshClaims(store, actor, f.rel, Date.now());
       rmSync(snap, { force: true });
       continue;
     }

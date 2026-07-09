@@ -1498,20 +1498,33 @@ function runCodexHook(kind: "pre" | "post", codex: CodexHookInput): void {
   const base = codex.cwd ?? process.cwd();
   const id = process.env.QUILT_ACTOR || (codex.sessionId ? codexActorId(codex.sessionId) : null);
   if (!id) return;
-  const groups = new Map<string, { store: Store; files: Array<{ rel: string }> }>();
-  const addFile = (p: string) => {
+  const groups = new Map<string, { store: Store; files: Array<{ rel: string; moveRel?: string }> }>();
+  const resolveIn = (p: string): { store: Store; rel: string } | null => {
     const abs = resolve(base, p);
     const store = hookStoreFor(abs);
-    if (!store) return;
+    if (!store) return null;
     const rel = repoRelative(store.paths.repoRoot, abs);
-    if (!rel) return;
+    return rel ? { store, rel } : null;
+  };
+  const addFile = (entry: { rel: string; moveRel?: string }, store: Store) => {
     let g = groups.get(store.paths.repoRoot);
     if (!g) groups.set(store.paths.repoRoot, (g = { store, files: [] }));
-    if (!g.files.some((f) => f.rel === rel)) g.files.push({ rel });
+    if (!g.files.some((f) => f.rel === entry.rel)) g.files.push(entry);
   };
   for (const f of codex.files) {
-    addFile(f.path);
-    if (f.movePath) addFile(f.movePath);
+    const src = resolveIn(f.path);
+    const dest = f.movePath ? resolveIn(f.movePath) : null;
+    // A rename is paired only when source and destination land in the SAME
+    // repo — the capture core then records it as one file whose key changed
+    // (removal at the source, only genuine changes at the destination),
+    // instead of a full delete + full add that would hand the mover every
+    // line in the file. A cross-repo move degrades to independent entries.
+    if (src && dest && src.store.paths.repoRoot === dest.store.paths.repoRoot) {
+      addFile({ rel: src.rel, moveRel: dest.rel }, src.store);
+      continue;
+    }
+    if (src) addFile({ rel: src.rel }, src.store);
+    if (dest) addFile({ rel: dest.rel }, dest.store);
   }
   for (const g of groups.values()) {
     if (!g.store.findActor(id)) {
