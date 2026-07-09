@@ -6,6 +6,8 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-07-09
+
 ### Added
 
 - **Native capture for OpenAI Codex.** `quilt setup` now wires `apply_patch`

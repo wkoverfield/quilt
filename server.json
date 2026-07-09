@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.wkoverfield/quilt",
   "description": "Track which AI agent wrote which lines in a shared Git checkout; each commits only its own lines.",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "repository": {
     "url": "https://github.com/wkoverfield/quilt",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@quilt-dev/cli",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "transport": {
         "type": "stdio"
       },
