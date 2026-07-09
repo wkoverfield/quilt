@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -492,23 +492,112 @@ test("--actor flag acts as that identity, and an explicit env var still wins", (
 
 // --- launch-hardening: run-from-the-wrong-directory guidance ---
 
-test("setup/doctor run one level ABOVE the repo name the child repo instead of half-working", () => {
-  // The first external user's checkout root wasn't a git repo; the app lived in
-  // a subdirectory. Wiring .mcp.json at that level would configure a directory
-  // no agent session reads — the CLI must refuse and point at the right place.
+test("doctor/init one level ABOVE the repo name the child repo and the workspace option", () => {
+  // Repo-scoped commands refuse and point at the right place; setup handles
+  // the workspace shape itself (tested below).
   const parent = mkdtempSync(join(tmpdir(), "quilt-parent-"));
   try {
     const child = join(parent, "group-sell-app");
     spawnSync("git", ["init", "-q", child]);
     const env = { ...process.env, NO_COLOR: "1", QUILT_NO_UPDATE_CHECK: "1" };
-    for (const cmd of ["setup", "doctor", "init"]) {
+    for (const cmd of ["doctor", "init"]) {
       const r = spawnSync("node", [CLI, cmd], { cwd: parent, encoding: "utf8", env });
       assert.notEqual(r.status, 0, `${cmd} must refuse to run above the repo`);
       assert.match(r.stderr, /group-sell-app\//, `${cmd} names the child repo`);
       assert.match(r.stderr, /cd group-sell-app/, `${cmd} gives the exact next command`);
+      assert.match(r.stderr, /quilt setup/, `${cmd} mentions the workspace path`);
     }
-    assert.equal(existsSync(join(parent, ".mcp.json")), false, "nothing was wired at the non-repo root");
     assert.equal(existsSync(join(parent, ".quilt")), false);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup from a workspace root wires the root (hooks+snippet) and every child repo", () => {
+  // The first external user starts sessions in a directory ABOVE his repos.
+  // Hooks and instructions load from where the session starts, so setup must
+  // wire that root and give each child the full per-repo wiring.
+  const parent = mkdtempSync(join(tmpdir(), "quilt-ws-"));
+  try {
+    for (const name of ["group-sell-app", "groupsellweb"]) {
+      spawnSync("git", ["init", "-q", join(parent, name)]);
+    }
+    const env = { ...process.env, NO_COLOR: "1", QUILT_NO_UPDATE_CHECK: "1" };
+    const r = spawnSync("node", [CLI, "setup"], { cwd: parent, encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /workspace/);
+    // Root: hooks + snippet, but NO .mcp.json (the MCP server is repo-bound).
+    assert.ok(existsSync(join(parent, ".claude", "settings.json")), "hooks at the workspace root");
+    assert.ok(existsSync(join(parent, "CLAUDE.md")), "snippet at the workspace root");
+    assert.equal(existsSync(join(parent, ".mcp.json")), false, "no repo-bound MCP entry at the root");
+    assert.equal(existsSync(join(parent, ".quilt")), false, "no store outside a repo");
+    // Children: full wiring each.
+    for (const name of ["group-sell-app", "groupsellweb"]) {
+      assert.ok(existsSync(join(parent, name, ".quilt")), `${name} initialized`);
+      assert.ok(existsSync(join(parent, name, ".mcp.json")), `${name} MCP wired`);
+      assert.ok(existsSync(join(parent, name, ".claude", "settings.json")), `${name} hooks wired`);
+    }
+    // Idempotent: a re-run changes nothing and stays green.
+    const again = spawnSync("node", [CLI, "setup"], { cwd: parent, encoding: "utf8", env });
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /already present/);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("hooks capture into the repo the FILE lives in, not the hook's cwd", () => {
+  // A session started at the workspace root runs hooks with cwd there (not a
+  // repo). Resolution must come from the payload's file path — cwd-based
+  // resolution silently no-opped and the edit landed uncaptured.
+  const parent = mkdtempSync(join(tmpdir(), "quilt-wshook-"));
+  try {
+    const child = join(parent, "app");
+    spawnSync("git", ["init", "-q", child]);
+    spawnSync("node", [CLI, "init"], { cwd: child, encoding: "utf8" });
+    writeFileSync(join(child, "m.js"), "function f() {\n  return 1;\n}\n");
+    const env = { ...process.env, NO_COLOR: "1" };
+    const payload = (tool: string, input: Record<string, unknown>) =>
+      JSON.stringify({ tool_name: tool, session_id: "beefcafe-0000-4abc-8def-000011112222", tool_input: input });
+
+    // Edit round-trip: pre (snapshot) → the tool's write → post (capture).
+    let r = spawnSync("node", [CLI, "hook-pre"], {
+      cwd: parent, encoding: "utf8", env,
+      input: payload("Edit", { file_path: join(child, "m.js"), old_string: "return 1", new_string: "return 9" }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    writeFileSync(join(child, "m.js"), "function f() {\n  return 9;\n}\n");
+    r = spawnSync("node", [CLI, "hook-post"], {
+      cwd: parent, encoding: "utf8", env,
+      input: payload("Edit", { file_path: join(child, "m.js"), old_string: "return 1", new_string: "return 9" }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+
+    // Write creating a file in a NOT-YET-EXISTING subdirectory of the repo.
+    const newFile = join(child, "src", "util", "fees.js");
+    r = spawnSync("node", [CLI, "hook-pre"], {
+      cwd: parent, encoding: "utf8", env, input: payload("Write", { file_path: newFile, content: "x\n" }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+    mkdirSync(join(child, "src", "util"), { recursive: true });
+    writeFileSync(newFile, "x\n");
+    r = spawnSync("node", [CLI, "hook-post"], {
+      cwd: parent, encoding: "utf8", env, input: payload("Write", { file_path: newFile, content: "x\n" }),
+    });
+    assert.equal(r.status, 0, r.stderr);
+
+    const events = readFileSync(join(child, ".quilt", "authorship.log"), "utf8")
+      .trim().split("\n").map((l) => JSON.parse(l));
+    const paths = events.map((e) => e.path).sort();
+    assert.deepEqual(paths, ["m.js", "src/util/fees.js"], "both captures landed in the CHILD repo's ledger");
+    assert.ok(events.every((e) => e.actor === "claude-beefcafe"), "attributed to the session auto-id");
+
+    // A file outside any repo: fail-open no-op, exit 0, nothing captured anywhere.
+    const stray = join(parent, "notes.md");
+    r = spawnSync("node", [CLI, "hook-post"], {
+      cwd: parent, encoding: "utf8", env, input: payload("Write", { file_path: stray, content: "hi\n" }),
+    });
+    assert.equal(r.status, 0, "outside-repo hook must stay a silent no-op");
   } finally {
     rmSync(parent, { recursive: true, force: true });
   }

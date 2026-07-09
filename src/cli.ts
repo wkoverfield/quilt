@@ -23,7 +23,7 @@ import { runMcpServer } from "./mcp.js";
 import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
 import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
-import { detect, planSetup, applySetup, type SetupStep } from "./onboard.js";
+import { detect, planSetup, applySetup, mergeHookSettings, appendCoordination, type SetupStep } from "./onboard.js";
 import { recordAuthorship, capturedBySelf } from "./authorship.js";
 import { repoRelative } from "./paths.js";
 import { VERSION } from "./version.js";
@@ -46,13 +46,13 @@ function fail(msg: string): never {
 /** Immediate child directories of `cwd` that are git repos — the "you're one
  * level ABOVE the repo" case (a checkout root whose app lives in a subfolder).
  * Capped at 3: enough to name the right place without scanning forever. */
-function childGitRepos(cwd: string): string[] {
+function childGitRepos(cwd: string, limit = 3): string[] {
   const out: string[] = [];
   try {
     for (const e of readdirSync(cwd, { withFileTypes: true })) {
       if (!e.isDirectory() || e.name.startsWith(".")) continue;
       if (existsSync(join(cwd, e.name, ".git"))) out.push(e.name);
-      if (out.length >= 3) break;
+      if (out.length >= limit) break;
     }
   } catch {
     /* unreadable dir — fall through to the generic error */
@@ -63,16 +63,17 @@ function childGitRepos(cwd: string): string[] {
 function findRepo(): string {
   const root = repoRoot(process.cwd());
   if (!root) {
-    // Setup run one level above the repo would wire .mcp.json/.claude/ at a
-    // directory no agent session ever reads — never proceed here, and when a
-    // child IS a repo, name it instead of leaving the user to guess.
+    // When a child IS a repo, name it instead of leaving the user to guess.
+    // (`quilt setup` handles this shape itself — it wires the whole workspace —
+    // so this guidance is for the repo-scoped commands: doctor, init, status…)
     const children = childGitRepos(process.cwd());
     if (children.length > 0) {
       fail(
         "not inside a git repository, but " +
           children.map((c) => `${c}/`).join(", ") +
-          ` ${children.length === 1 ? "is one" : "are"}. Quilt runs inside the repo:\n` +
-          `  cd ${children[0]} && quilt setup`,
+          ` ${children.length === 1 ? "is one" : "are"}. Quilt commands run inside a repo:\n` +
+          `  cd ${children[0]} && quilt ${process.argv[2] ?? "doctor"}\n` +
+          "  (or run `quilt setup` HERE to wire this directory as a workspace)",
       );
     }
     fail("not inside a git repository. Run this from a git working tree.");
@@ -184,6 +185,147 @@ function printSetupStep(step: SetupStep, dryRun: boolean): void {
   }
   const verb = dryRun ? pc.cyan("  would ") : pc.green("  ✓ ");
   process.stdout.write(verb + `${step.action} ${step.file} — ${step.detail}\n`);
+}
+
+/**
+ * Apply setup steps and attribute Quilt's own writes to `quilt-setup`, so the
+ * first `quilt status` a user ever sees doesn't flag Quilt's own files as
+ * suspicious unattributed changes. Attribution is skipped when `root` has no
+ * initialized store (e.g. a workspace root outside any repo — those files are
+ * invisible to git and need no attribution). Returns the steps written.
+ */
+function applySetupAttributed(root: string, steps: SetupStep[]): SetupStep[] {
+  const prior = new Map<string, string | null>();
+  for (const s of steps) {
+    if (s.action === "skip" || s.content === undefined) continue;
+    prior.set(s.file, existsSync(s.path) ? readFileSync(s.path, "utf8") : null);
+  }
+  const written = applySetup(steps);
+  if (written.length > 0) {
+    const store = new Store(root);
+    if (store.initialized) {
+      if (!store.findActor("quilt-setup")) {
+        store.upsertActor({ id: "quilt-setup", type: "bot", displayName: "quilt-setup", createdAt: nowIso() });
+      }
+      for (const s of written) {
+        const before = prior.get(s.file) ?? null;
+        recordAuthorship(store, {
+          actor: "quilt-setup",
+          path: s.file,
+          oldText: before ?? "",
+          newText: s.content!,
+          whole: before === null,
+          intent: "quilt setup wiring",
+        });
+      }
+    }
+  }
+  return written;
+}
+
+/** The workspace-root wiring plan: capture hooks + coordination snippet at the
+ * directory sessions START in. No .mcp.json here — the MCP server is
+ * repo-bound and is wired inside each child repo instead. */
+function planWorkspaceRoot(wsRoot: string): SetupStep[] {
+  const steps: SetupStep[] = [];
+  const settingsPath = join(wsRoot, ".claude", "settings.json");
+  const settingsExisting = existsSync(settingsPath) ? readFileSync(settingsPath, "utf8") : null;
+  const hooks = mergeHookSettings(settingsExisting);
+  if (hooks.error) {
+    steps.push({ file: ".claude/settings.json", action: "skip", detail: `left untouched (${hooks.error}) — add the quilt hooks by hand`, path: settingsPath });
+  } else if (!hooks.changed) {
+    steps.push({ file: ".claude/settings.json", action: "skip", detail: "capture hooks already present", path: settingsPath });
+  } else {
+    steps.push({
+      file: ".claude/settings.json",
+      action: settingsExisting !== null ? "update" : "create",
+      detail: "add the Edit/Write capture hooks (loads for sessions started here)",
+      content: hooks.content,
+      path: settingsPath,
+    });
+  }
+  const mdPath = join(wsRoot, "CLAUDE.md");
+  const mdExisting = existsSync(mdPath) ? readFileSync(mdPath, "utf8") : null;
+  const md = appendCoordination(mdExisting);
+  if (!md.changed) {
+    steps.push({ file: "CLAUDE.md", action: "skip", detail: "coordination snippet already present", path: mdPath });
+  } else {
+    steps.push({
+      file: "CLAUDE.md",
+      action: mdExisting !== null ? "update" : "create",
+      detail: mdExisting !== null ? "add the coordination snippet" : "create with the coordination snippet",
+      content: md.content,
+      path: mdPath,
+    });
+  }
+  return steps;
+}
+
+/**
+ * `quilt setup` from a directory that isn't a repo but CONTAINS repos: treat it
+ * as a workspace. Sessions started here load hooks/instructions from HERE, and
+ * the hooks attribute each edit to the repo its file lives in — so the root
+ * gets hooks + snippet, and every child repo gets the full per-repo wiring.
+ */
+async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolean): Promise<void> {
+  process.stdout.write(
+    pc.dim(`Not a git repo, but ${children.length} ${children.length === 1 ? "repo lives" : "repos live"} inside — wiring this directory as a workspace.\n`) +
+      pc.dim("Sessions started here are captured into whichever repo each edit belongs to.\n\n"),
+  );
+
+  process.stdout.write(pc.bold("workspace root") + "\n");
+  const rootSteps = planWorkspaceRoot(wsRoot);
+  if (!dryRun) applySetupAttributed(wsRoot, rootSteps);
+  for (const s of rootSteps) printSetupStep(s, dryRun);
+
+  for (const child of children) {
+    const childRoot = join(wsRoot, child);
+    process.stdout.write("\n" + pc.bold(child + "/") + "\n");
+    const initNeeded = !new Store(childRoot).initialized;
+    if (dryRun) {
+      if (initNeeded) process.stdout.write(pc.cyan("  would ") + "initialize Quilt (.quilt/)\n");
+      for (const s of planSetup(childRoot)) printSetupStep(s, true);
+      continue;
+    }
+    if (initNeeded) {
+      doInit(childRoot);
+      process.stdout.write(pc.green("  ✓ ") + "initialized Quilt (.quilt/)\n");
+    }
+    const childSteps = planSetup(childRoot);
+    applySetupAttributed(childRoot, childSteps);
+    for (const s of childSteps) printSetupStep(s, false);
+  }
+
+  if (dryRun) {
+    process.stdout.write("\n" + pc.dim("Run `quilt setup` to apply.\n"));
+    return;
+  }
+
+  process.stdout.write(
+    "\n" +
+      pc.green("✓ ") +
+      "Workspace wired. Start sessions here (or in any repo) — edits are captured\n" +
+      "  and protected by the hooks automatically, per repo.\n" +
+      pc.dim("  Run quilt commands (status, fleet, commit --mine) inside a repo.\n") +
+      pc.dim("  Note: the optional MCP claim tools load per repo, so sessions started at\n") +
+      pc.dim("  the workspace root won't have them — the hooks and CLI carry everything.\n"),
+  );
+
+  const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["quilt"], { stdio: "ignore" });
+  if (probe.status !== 0) {
+    process.stdout.write(
+      "\n" + pc.yellow("⚠ ") + "`quilt` is not on your PATH — the hooks this setup wired invoke plain\n" +
+        "  `quilt` and will silently do nothing until it resolves.\n" +
+        pc.dim("  Install globally: npm install -g @quilt-dev/cli\n"),
+    );
+  }
+  const latest = await latestVersionOrNull();
+  if (latest && versionStanding(VERSION, latest) !== "current") {
+    process.stdout.write(
+      "\n" + pc.yellow("⚠ ") + `quilt ${VERSION} is behind the latest release (${latest}).\n` +
+        pc.dim(`  Update: quilt update   (or: ${NPM_UPDATE_COMMAND})\n`),
+    );
+  }
 }
 
 /** Print active advisory claims below a status view. When `forActor` is set,
@@ -322,9 +464,20 @@ program
   .description("Wire Quilt into this repo's agent orchestrator (.mcp.json + CLAUDE.md + capture hooks)")
   .option("--dry-run", "show what would change without writing")
   .action(async (opts) => {
+    const dryRun = Boolean(opts.dryRun);
+    // Workspace shape: not a repo, but repos inside. Sessions start HERE (this
+    // is where their hooks and instructions load from), so wire here + each
+    // child, instead of refusing and sending the user one level down.
+    const cwd = process.cwd();
+    if (!repoRoot(cwd)) {
+      const children = childGitRepos(cwd, 50);
+      if (children.length > 0) {
+        await workspaceSetup(cwd, children, dryRun);
+        return;
+      }
+    }
     const root = findRepo();
     const store = new Store(root);
-    const dryRun = Boolean(opts.dryRun);
 
     const initNeeded = !store.initialized;
     if (initNeeded && !dryRun) doInit(root);
@@ -352,36 +505,9 @@ program
       return;
     }
 
-    // Snapshot what each file held BEFORE the write, so the setup's own changes
-    // can be attributed to `quilt-setup` — otherwise the first `quilt status` a
-    // user ever sees flags Quilt's own files as suspicious unattributed changes.
-    const prior = new Map<string, string | null>();
-    for (const s of steps) {
-      if (s.action === "skip" || s.content === undefined) continue;
-      prior.set(s.file, existsSync(s.path) ? readFileSync(s.path, "utf8") : null);
-    }
-
-    const written = applySetup(steps);
+    const written = applySetupAttributed(root, steps);
     if (initNeeded) process.stdout.write(pc.green("✓ ") + "initialized Quilt (.quilt/)\n");
     for (const s of steps) printSetupStep(s, false);
-
-    if (written.length > 0) {
-      const store2 = new Store(root); // doInit may have created the store after `store` was built
-      if (!store2.findActor("quilt-setup")) {
-        store2.upsertActor({ id: "quilt-setup", type: "bot", displayName: "quilt-setup", createdAt: nowIso() });
-      }
-      for (const s of written) {
-        const before = prior.get(s.file) ?? null;
-        recordAuthorship(store2, {
-          actor: "quilt-setup",
-          path: s.file,
-          oldText: before ?? "",
-          newText: s.content!,
-          whole: before === null,
-          intent: "quilt setup wiring",
-        });
-      }
-    }
 
     if (written.length === 0 && !initNeeded) {
       process.stdout.write("\n" + pc.green("✓ ") + "Already wired up. Your fleet is ready.\n");
@@ -1300,11 +1426,31 @@ program
     await runMcpServer(store);
   });
 
-// A Quilt-initialized store for the current repo, or null when there's no repo
-// or Quilt isn't set up. The hook commands stay fail-open: any problem → no-op.
-function hookStore(): Store | null {
+/** Deepest EXISTING ancestor of a path (a Write may create new directories). */
+function nearestExistingDir(abs: string): string {
+  let dir = abs;
+  while (!existsSync(dir)) {
+    const parent = dirname(dir);
+    if (parent === dir) return dir;
+    dir = parent;
+  }
+  return dir;
+}
+
+// The Quilt store governing a hook payload's FILE, or null when the file isn't
+// in an initialized repo. Resolved from the file path, NOT process.cwd():
+// sessions routinely start in a workspace root ABOVE the repo(s) — the first
+// external user's exact layout — and Claude Code runs hooks with cwd at that
+// root, where cwd-based resolution finds no repo and capture silently no-ops
+// while the edit lands in a child repo. The file knows where it lives; cwd
+// only knows where the session started. Falls back to cwd when the payload
+// carries no path. Fail-open as always: any problem → no-op.
+function hookStoreFor(filePath: string | null): Store | null {
   try {
-    const root = repoRoot(process.cwd());
+    const base = filePath
+      ? nearestExistingDir(dirname(resolve(process.cwd(), filePath)))
+      : process.cwd();
+    const root = repoRoot(base);
     if (!root) return null;
     const store = new Store(root);
     return store.initialized ? store : null;
@@ -1319,8 +1465,8 @@ program
   .action(async () => {
     // Fail-open: a hook must never block or crash an agent's edit on our account.
     try {
-      const store = hookStore();
-      const input = store && parseHookInput(JSON.parse(await readStdin()));
+      const input = parseHookInput(JSON.parse(await readStdin()));
+      const store = input && hookStoreFor(input.path);
       const actor = store && input && hookActor(store, input);
       if (store && input && actor) {
         const decision = runHookPre(store, actor.id, input, actor.auto);
@@ -1350,8 +1496,8 @@ program
   .description("PostToolUse hook: capture authorship of a native Edit/Write/MultiEdit (reads JSON on stdin)")
   .action(async () => {
     try {
-      const store = hookStore();
-      const input = store && parseHookInput(JSON.parse(await readStdin()));
+      const input = parseHookInput(JSON.parse(await readStdin()));
+      const store = input && hookStoreFor(input.path);
       const actor = store && input && hookActor(store, input);
       if (store && input && actor) runHookPost(store, actor.id, input, actor.auto);
     } catch {
