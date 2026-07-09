@@ -119,6 +119,12 @@ export interface Claim {
   acquiredAt: string;
   /** epoch ms; the claim is ignored once now > expiresAt. */
   expiresAt: number;
+  /** epoch ms of the holder's last sign of life on this claim: set at grant
+   * and on every renewal (any quilt command, captured edit, or re-claim).
+   * The contention-time liveness signal — a claim idle past RECLAIM_IDLE_MS
+   * with no work product behind it yields to a live claimant. Absent on
+   * pre-0.4.5 claims (falls back to acquiredAt). */
+  renewedAt?: number;
   /** the same instant as expiresAt, human-readable (acquiredAt is ISO too). */
   expiresAtIso?: string;
   /**

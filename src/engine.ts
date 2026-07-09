@@ -13,7 +13,7 @@ import {
 } from "./diff.js";
 import { parseSymbols, ownKey, keyText, symbolLocator, opKeyer } from "./symbols.js";
 import { foldedAuthorship, foldedRemovals, readAuthorship } from "./authorship.js";
-import { CLAIM_TTL_MS, promoteWaiters } from "./claims.js";
+import { CLAIM_TTL_MS, promoteWaiters, reapDeadBlockingWaitersLocked } from "./claims.js";
 import type { Store } from "./state.js";
 import type { OwnershipFile } from "./types.js";
 
@@ -498,10 +498,15 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       if (c.actor !== activeActorId) continue;
       c.expiresAt = now + CLAIM_TTL_MS;
       c.expiresAtIso = new Date(c.expiresAt).toISOString();
+      c.renewedAt = now;
       claimsDirty = true;
     }
   }
   claimsFile.claims = kept;
+  // Dead holders can't wedge the queue for a full TTL: any actor's reconcile
+  // (every quilt command runs one) reaps presumed-dead claims that are
+  // blocking live waiters, then the promotion below hands the target over.
+  if (reapDeadBlockingWaitersLocked(store, claimsFile, now).length > 0) claimsDirty = true;
   // A lapsed lease (a dead or idle holder) frees its target — promote the
   // earliest queued waiter so the async claim lands even when nobody explicitly
   // released. No-op when the queue is empty.

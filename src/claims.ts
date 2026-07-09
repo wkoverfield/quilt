@@ -17,6 +17,17 @@ export const BLOCK_TTL_MS = 90 * 1000;
  * than a claim — a waiter is often off doing other work — but bounded so an
  * agent that never returns can't wedge the queue behind it. */
 export const WAITER_TTL_MS = 60 * 60 * 1000;
+/**
+ * Contention-time liveness: a holder that has shown NO sign of life for this
+ * long (no claim renewal — every quilt command, captured edit, and re-claim
+ * renews) is presumed dead WHEN SOMEONE ELSE WANTS ITS TARGET and it has no
+ * uncommitted work there to protect. An orphaned runner (process died between
+ * claiming and editing) held a 30-minute lease that stranded a live builder
+ * for the whole run, silently mis-attributed the builder's edits via claim
+ * adoption, and needed a human to untangle — this is the automatic escape.
+ * Uncontended claims are never reaped early: the full TTL still applies.
+ */
+export const RECLAIM_IDLE_MS = 5 * 60 * 1000;
 
 export interface ClaimTarget {
   path: string;
@@ -45,10 +56,151 @@ export interface ClaimResult {
    * auto-grant when the target frees. `queuePosition` is 1-based (1 = next). */
   queued?: boolean;
   queuePosition?: number;
+  /** when granted by RECLAIMING a presumed-dead holder's reservation: who it
+   * was taken from, so the grant explains itself in CLI/MCP output. */
+  reclaimedFrom?: string;
 }
 
 function active(claims: Claim[], now: number): Claim[] {
   return claims.filter((c) => c.expiresAt > now);
+}
+
+/** Epoch ms of the holder's last sign of life on this claim. Old claims (pre-
+ * renewedAt) fall back to their acquisition time. */
+export function lastRenewedAt(c: Claim): number {
+  if (typeof c.renewedAt === "number") return c.renewedAt;
+  const acquired = Date.parse(c.acquiredAt);
+  return Number.isFinite(acquired) ? acquired : c.expiresAt - CLAIM_TTL_MS;
+}
+
+/** A claim whose holder looks GONE: its session was explicitly ended, or it has
+ * gone RECLAIM_IDLE_MS with no renewal (no quilt command, no captured edit, no
+ * re-claim — all of which renew). Staleness alone; work-product is judged
+ * separately, because the two answer different questions ("is anyone there?"
+ * vs "is there anything to protect?"). */
+export function claimLooksAbandoned(store: Store, c: Claim, now: number): boolean {
+  if (c.session && store.readSession(c.session)?.status === "ended") return true;
+  return now - lastRenewedAt(c) > RECLAIM_IDLE_MS;
+}
+
+/** Does `actor` have ATTRIBUTED UNCOMMITTED lines under this claim's target?
+ * Read from ownership.json (pruned to the live working diff on reconcile) —
+ * the "anything to protect?" guard on reclamation. Envelope: an edit captured
+ * but never reconciled may not appear here yet; reclaiming then only drops the
+ * reservation — the ledger still attributes those lines to their author, and
+ * clobber detection still preserves them if overwritten. */
+function actorHasWorkIn(store: Store, actor: string, c: Claim): boolean {
+  const files = store.readOwnership().files;
+  const paths = c.dir ? Object.keys(files).filter((p) => underDir(c.path, p)) : [c.path];
+  for (const p of paths) {
+    const f = files[p];
+    if (!f) continue;
+    for (const owner of Object.values(f.added)) if (owner === actor) return true;
+    for (const owner of Object.values(f.removed)) if (owner === actor) return true;
+  }
+  return false;
+}
+
+/** The reclaim predicate: abandoned AND nothing of theirs to protect there. */
+function presumedDead(store: Store, c: Claim, now: number): boolean {
+  return claimLooksAbandoned(store, c, now) && !actorHasWorkIn(store, c.actor, c);
+}
+
+/** Drop presumed-dead claims by OTHER actors that overlap `target`, recording
+ * each reclaim in the ledger. Mutates `file`; caller holds the store lock and
+ * writes the file. Returns the reclaimed claims. */
+function reapDeadOverlappingLocked(
+  store: Store,
+  file: ClaimsFile,
+  target: ClaimTarget,
+  actorId: string,
+  now: number,
+): Claim[] {
+  const dead: Claim[] = [];
+  file.claims = file.claims.filter((c) => {
+    if (c.actor === actorId || c.expiresAt <= now || !overlaps(target, c)) return true;
+    if (!presumedDead(store, c, now)) return true;
+    dead.push(c);
+    return false;
+  });
+  for (const c of dead) recordReclaim(store, c, actorId, now);
+  return dead;
+}
+
+/** Drop presumed-dead claims that are blocking live QUEUED waiters, so a dead
+ * holder can't wedge the queue for a full TTL. Mutates `file`; caller holds
+ * the lock, writes the file, and should promote waiters afterwards. */
+export function reapDeadBlockingWaitersLocked(store: Store, file: ClaimsFile, now: number): Claim[] {
+  const waiters = (file.waiters ?? []).filter((w) => w.expiresAt > now);
+  if (waiters.length === 0) return [];
+  const dead: Claim[] = [];
+  file.claims = file.claims.filter((c) => {
+    if (c.expiresAt <= now) return true;
+    const contested = waiters.some(
+      (w) => w.actor !== c.actor && overlaps({ path: w.path, symbol: w.symbol, dir: w.dir }, c),
+    );
+    if (!contested || !presumedDead(store, c, now)) return true;
+    dead.push(c);
+    return false;
+  });
+  for (const c of dead) recordReclaim(store, c, "queue", now);
+  return dead;
+}
+
+/**
+ * Contention-time reclaim at the EDIT boundary: drop presumed-dead claims by
+ * other actors that would collide with an edit to `rawPath` touching
+ * `symbols`. Takes its own lock (callers are the prevention checks, outside
+ * any lock); scans unlocked first so the common no-candidate case costs one
+ * read. This is what turns "a dead holder silently absorbs a live actor's
+ * work via adoption, discovered at commit time" into "the dead reservation is
+ * released on the spot and the edit lands under its real author".
+ */
+export function reclaimDeadForEdit(
+  store: Store,
+  actorId: string,
+  rawPath: string,
+  symbols: string[],
+  now: number,
+): Claim[] {
+  const parsed = parseTarget(rawPath).path;
+  const path = repoRelative(store.paths.repoRoot, parsed) ?? parsed;
+  const collides = (c: Claim) =>
+    c.actor !== actorId &&
+    c.expiresAt > now &&
+    claimCoversPath(c, path) &&
+    (c.dir || c.symbol === undefined || symbols.includes(c.symbol));
+  const candidates = store.readClaims().claims.filter((c) => collides(c) && presumedDead(store, c, now));
+  if (candidates.length === 0) return [];
+  return store.withLock(() => {
+    const file = store.readClaims();
+    const dead: Claim[] = [];
+    file.claims = file.claims.filter((c) => {
+      if (!collides(c) || !presumedDead(store, c, now)) return true;
+      dead.push(c);
+      return false;
+    });
+    if (dead.length > 0) {
+      for (const c of dead) recordReclaim(store, c, actorId, now);
+      promoteWaiters(file, now);
+      store.writeClaims(file);
+    }
+    return dead;
+  });
+}
+
+/** One ledger record per reclaim, so the audit trail explains where a dead
+ * actor's reservation went and why. Caller may hold the store lock (appendLedger
+ * is a plain append, not lock-guarded). */
+function recordReclaim(store: Store, c: Claim, byActor: string, now: number): void {
+  store.appendLedger({
+    ts: new Date(now).toISOString(),
+    type: "claim.reclaimed",
+    target: claimLabel(c),
+    fromActor: c.actor,
+    byActor,
+    idleMs: Math.max(0, now - lastRenewedAt(c)),
+  });
 }
 
 /** Normalize a claim path so `./foo` and `foo` don't become separate claims. */
@@ -140,6 +292,9 @@ export function acquireClaims(
     file.claims = active(file.claims, now);
     file.blocks = (file.blocks ?? []).filter((b) => b.expiresAt > now);
     file.waiters = (file.waiters ?? []).filter((w) => w.expiresAt > now);
+    // Dead holders can't wedge the queue: reap them before promotion, so a
+    // waiter blocked only by an abandoned reservation is granted now.
+    reapDeadBlockingWaitersLocked(store, file, now);
     // The queue outranks a walk-up. Acquiring is also the moment expired leases
     // get pruned, so without this a direct claimant would win a just-freed
     // target ahead of every waiter that was told "you're next" — promote the
@@ -203,6 +358,11 @@ export function acquireClaims(
         }
       }
 
+      // Contention-time reclaim: a conflicting holder that looks gone (idle
+      // past RECLAIM_IDLE_MS or an ended session) with no uncommitted work in
+      // the target yields to a live claimant, instead of stranding it for the
+      // rest of a 30-minute lease it will never use.
+      const reclaimed = reapDeadOverlappingLocked(store, file, target, actorId, now);
       const conflict = file.claims.find(
         (c) => c.actor !== actorId && overlaps(target, c),
       );
@@ -278,6 +438,7 @@ export function acquireClaims(
       if (own) {
         own.expiresAt = now + CLAIM_TTL_MS;
         own.expiresAtIso = new Date(own.expiresAt).toISOString();
+        own.renewedAt = now;
         own.session = sessionId;
         if (cleanIntent !== undefined) own.intent = cleanIntent;
       } else {
@@ -290,10 +451,15 @@ export function acquireClaims(
           acquiredAt: new Date(now).toISOString(),
           expiresAt: now + CLAIM_TTL_MS,
           expiresAtIso: new Date(now + CLAIM_TTL_MS).toISOString(),
+          renewedAt: now,
           intent: cleanIntent,
         });
       }
-      results.push({ ...target, granted: true });
+      results.push({
+        ...target,
+        granted: true,
+        ...(reclaimed.length > 0 ? { reclaimedFrom: reclaimed.map((c) => c.actor).join(", ") } : {}),
+      });
     }
     store.writeClaims(file);
     return results;
@@ -354,6 +520,7 @@ export function promoteWaiters(file: ClaimsFile, now: number, sessionFallback: s
       acquiredAt: new Date(now).toISOString(),
       expiresAt: grantExpiry,
       expiresAtIso: new Date(grantExpiry).toISOString(),
+      renewedAt: now,
       intent: w.intent,
       viaQueue: true,
     };
@@ -664,12 +831,23 @@ export function claimHolders(
   rawPath: string,
   symbols: string[],
   now: number,
+  opts: {
+    /** Only count holders showing signs of LIFE (renewed within
+     * RECLAIM_IDLE_MS, session not ended). The adoption path uses this:
+     * adoption exists to bind an agent's own MCP claim to its own native
+     * edits moments later — a claim nobody has touched in that long is not
+     * that pattern, it's a dead holder, and adopting to it is silent
+     * misattribution (discovered only at commit time, as "you don't own any
+     * committable changes"). */
+    liveOnly?: boolean;
+  } = {},
 ): Set<string> {
   const parsed = parseTarget(rawPath).path;
   const path = repoRelative(store.paths.repoRoot, parsed) ?? parsed;
   const holders = new Set<string>();
   for (const c of listClaims(store, now)) {
     if (c.actor === actorId || !claimCoversPath(c, path)) continue;
+    if (opts.liveOnly && claimLooksAbandoned(store, c, now)) continue;
     if (c.dir || c.symbol === undefined || symbols.includes(c.symbol)) holders.add(c.actor);
   }
   return holders;
@@ -691,6 +869,7 @@ export function refreshClaims(store: Store, actorId: string, rawPath: string, no
       if (c.actor === actorId && claimCoversPath(c, path) && c.expiresAt > now) {
         c.expiresAt = now + CLAIM_TTL_MS;
         c.expiresAtIso = new Date(c.expiresAt).toISOString();
+        c.renewedAt = now;
         changed = true;
       }
     }

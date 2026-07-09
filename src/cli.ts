@@ -1202,7 +1202,12 @@ program
       for (const r of results) {
         const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
-          process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
+          process.stdout.write(
+            pc.green("  ✓ claimed ") + target +
+              (r.reclaimedFrom
+                ? pc.dim(`  (reclaimed from ${r.reclaimedFrom} — no sign of life, no work in flight)`)
+                : "") + "\n",
+          );
         } else if (r.queued) {
           // Async: registered, not blocked. The agent moves on and the grant
           // lands at its next quilt call.

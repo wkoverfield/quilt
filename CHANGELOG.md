@@ -8,6 +8,22 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **Dead actors can no longer strand live work.** A claim whose holder shows
+  no sign of life (no quilt command, captured edit, or re-claim for 5
+  minutes, or an explicitly ended session) and has no uncommitted work in
+  its target is reclaimed automatically at every contention point: claim
+  time (the grant reports `reclaimedFrom`), edit time, and any actor's
+  reconcile when a queue is wedged behind it. Each reclaim is recorded in
+  the ledger. Uncontended claims still live their full TTL, and a quiet
+  holder with real uncommitted work is never auto-reclaimed.
+- **Silent misattribution via claim adoption is gone.** An edit arriving
+  under an auto-derived id inside a claim now adopts the holder's identity
+  only when that holder is demonstrably alive. Previously an orphaned
+  actor's claim silently absorbed a live agent's work, and the live agent
+  discovered it only at commit time ("you don't own any committable
+  changes"). Now the dead reservation is reclaimed and the edit lands under
+  its real author, or, when the quiet holder has uncommitted work to
+  protect, the edit is denied loudly with the holder named.
 - **Workspace mode.** Sessions often start in a directory ABOVE the repo(s):
   a workspace root holding several checkouts. Two changes make that shape
   first-class. The capture hooks now resolve the repo from the FILE being

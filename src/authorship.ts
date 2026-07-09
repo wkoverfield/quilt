@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
 import { parseSymbols, ownKey, symbolLocator } from "./symbols.js";
-import { claimHeldByOther, claimHolders, refreshClaims } from "./claims.js";
+import { claimHeldByOther, claimHolders, reclaimDeadForEdit, refreshClaims } from "./claims.js";
 import { repoRelative } from "./paths.js";
 import type { Store } from "./state.js";
 
@@ -113,7 +113,13 @@ export function adoptClaimHolder(
   path: string,
   symbols: string[],
 ): string {
-  const holders = claimHolders(store, actor, path, symbols, Date.now());
+  // liveOnly: adoption binds an agent's own fresh claim to its own edits
+  // moments later. A holder that has shown no life in RECLAIM_IDLE_MS is a
+  // different situation entirely — an orphaned actor — and adopting to it
+  // silently re-authors a live agent's work (the misattribution is discovered
+  // only at commit time). A dead holder's claim is instead reclaimed (or, if
+  // it has uncommitted work to protect, the edit is denied loudly).
+  const holders = claimHolders(store, actor, path, symbols, Date.now(), { liveOnly: true });
   if (holders.size !== 1) return actor;
   return [...holders][0]!;
 }
@@ -140,9 +146,13 @@ export function checkHeldEdit(
   oldString: string,
 ): EditDenied | null {
   if (before.indexOf(oldString) === -1) return null;
-  return heldDenial(
-    claimHeldByOther(store, actor, path, touchedByEdit(path, before, oldString), Date.now()),
-  );
+  const touched = touchedByEdit(path, before, oldString);
+  // Contention-time reclaim: a presumed-dead holder with nothing to protect
+  // yields HERE, at the edit boundary, so the write proceeds under its real
+  // author. A dead holder WITH uncommitted work keeps its claim and the edit
+  // is denied loudly below — protection over convenience, but never silence.
+  reclaimDeadForEdit(store, actor, path, touched, Date.now());
+  return heldDenial(claimHeldByOther(store, actor, path, touched, Date.now()));
 }
 
 /**
@@ -158,9 +168,9 @@ export function checkHeldWrite(
   content: string,
   existing: string | null,
 ): EditDenied | null {
-  return heldDenial(
-    claimHeldByOther(store, actor, path, touchedByWrite(path, content, existing), Date.now()),
-  );
+  const touched = touchedByWrite(path, content, existing);
+  reclaimDeadForEdit(store, actor, path, touched, Date.now()); // see checkHeldEdit
+  return heldDenial(claimHeldByOther(store, actor, path, touched, Date.now()));
 }
 
 function splitLines(s: string): string[] {
