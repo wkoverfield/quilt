@@ -251,3 +251,25 @@ test("captured edits are proof of life: refreshClaims stamps renewedAt so an act
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a quiet holder's claim over UNCAPTURED work (bash/codegen writes, dirty tree) is never reclaimed", () => {
+  // The claim-first codegen workflow: nothing captures raw script writes, so
+  // neither the ledger nor ownership.json knows about them. The working-tree
+  // dirt itself must block reclamation, or an idle holder's generated output
+  // would lose its only protection with no clobber backstop.
+  const dir = repo();
+  try {
+    seed(dir, "keep.ts", "export const k = 1;\n");
+    const s = new Store(dir);
+    plantStaleClaim(s, "codegen-bot", "gen/", RECLAIM_IDLE_MS + 60_000);
+    // Raw uncaptured writes under the claimed directory (no quilt involved).
+    execFileSync("mkdir", ["-p", join(dir, "gen")]);
+    writeFileSync(join(dir, "gen", "out.ts"), "export const generated = true;\n");
+
+    const [r] = acquireClaims(s, "rival", null, ["gen/"], Date.now());
+    assert.equal(r!.granted, false, "a dirty target is never reclaimed, however quiet the holder");
+    assert.equal(r!.holder, "codegen-bot");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

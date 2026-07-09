@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Store } from "./state.js";
 import type { Claim, Block, Waiter, ClaimsFile } from "./types.js";
 import { repoRelative } from "./paths.js";
+import { changedPaths } from "./git.js";
 import { canParse, closestName, parseSymbols } from "./symbols.js";
 
 /** How long a claim is held before it auto-expires. 30 minutes: the dogfood
@@ -85,10 +86,10 @@ export function claimLooksAbandoned(store: Store, c: Claim, now: number): boolea
 
 /** Does `actor` have ATTRIBUTED UNCOMMITTED lines under this claim's target?
  * Read from ownership.json (pruned to the live working diff on reconcile) —
- * the "anything to protect?" guard on reclamation. Envelope: an edit captured
- * but never reconciled may not appear here yet; reclaiming then only drops the
- * reservation — the ledger still attributes those lines to their author, and
- * clobber detection still preserves them if overwritten. */
+ * one half of the "anything to protect?" guard on reclamation. This only sees
+ * CAPTURED or RECONCILED work; uncaptured bash/codegen writes under a claim
+ * are invisible here, which is why targetDirtyInTree below independently
+ * blocks reclaiming any claim whose target has working-tree changes at all. */
 function actorHasWorkIn(store: Store, actor: string, c: Claim): boolean {
   const files = store.readOwnership().files;
   const paths = c.dir ? Object.keys(files).filter((p) => underDir(c.path, p)) : [c.path];
@@ -101,9 +102,31 @@ function actorHasWorkIn(store: Store, actor: string, c: Claim): boolean {
   return false;
 }
 
-/** The reclaim predicate: abandoned AND nothing of theirs to protect there. */
+/** Does the claim's target have ANY uncommitted changes in the working tree?
+ * The other half of the guard, and the one that covers the claim-first
+ * bash/codegen workflow: those writes are captured by nothing (no ledger, no
+ * ownership until someone reconciles), so attribution-level checks can't see
+ * them. A dirty target means someone's work is sitting there — possibly the
+ * quiet holder's — and reclaiming would strip its only protection with no
+ * clobber-preservation backstop. Dirty targets wait out the normal TTL.
+ * Unreadable git state counts as dirty: never reclaim blind. */
+function targetDirtyInTree(store: Store, c: Claim): boolean {
+  try {
+    return changedPaths(store.paths.repoRoot).some((p) => claimCoversPath(c, p));
+  } catch {
+    return true;
+  }
+}
+
+/** The reclaim predicate: the holder looks gone AND there is provably nothing
+ * to protect — no attributed lines of theirs, and a clean working tree under
+ * the target. */
 function presumedDead(store: Store, c: Claim, now: number): boolean {
-  return claimLooksAbandoned(store, c, now) && !actorHasWorkIn(store, c.actor, c);
+  return (
+    claimLooksAbandoned(store, c, now) &&
+    !actorHasWorkIn(store, c.actor, c) &&
+    !targetDirtyInTree(store, c)
+  );
 }
 
 /** Drop presumed-dead claims by OTHER actors that overlap `target`, recording
