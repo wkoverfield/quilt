@@ -35,16 +35,18 @@ Quilt captures who wrote which lines through either path, and you can use both:
   instructions to follow, and Quilt records the author of each change and denies
   a write into code another agent is mid-change on. Identity is automatic: each
   session gets its own id (see below). This is the seamless path.
+- **Hooks on Codex too.** When Codex CLI is installed, `quilt setup` also
+  wires `apply_patch` capture hooks into the user-global `~/.codex/hooks.json`
+  (additive; your other Codex hooks are untouched). A Codex session's patches
+  are then captured per file under a `codex-<session>` id, multi-file patches
+  included. One Codex reality to know: Codex skips newly added hooks until
+  you approve them once in an interactive session (it prompts); until then
+  Codex edits are not captured, and `quilt doctor` says so. Capture only for
+  now: prevention (claim denial) on Codex is a later effort.
 - **MCP (explicit).** The `quilt_edit` / `quilt_write` tools, and the
   `claim` → `commit_mine` loop below, work anywhere an agent can reach an MCP
-  server, Codex, Cursor, Aider, your own harness, including runtimes that have
-  no hook system. Reach for this when hooks aren't available.
-
-  > **Note (2026-07-05):** Codex is currently hooks-*less* only in this doc, not
-  > in reality: Codex CLI has a hook system (`~/.codex/hooks.json`) and could get
-  > the same seamless native capture Claude Code has. Native Codex hook support is
-  > a tracked backlog item: see [`codex-hooks-support.md`](codex-hooks-support.md).
-  > Until it lands, the MCP path above is how Codex participates.
+  server, Codex, Cursor, Aider, your own harness, including runtimes that
+  have no hook system. Reach for this when hooks aren't available.
 
 ### How agents get their ids
 
@@ -132,7 +134,16 @@ The dogfood fleets earned these rules the hard way:
 4. **`commit_mine` auto-releases** the committed files' claims. The loop is
    claim → edit → commit_mine; a trailing `release` is only for abandoning
    work (its response now says this instead of a bare `released: 0`).
-5. **Claims renew while you're active; a denial is a queue, not a wall.** Any
+5. **Dead holders yield; live holders are protected.** A claim whose holder
+   shows no sign of life (no quilt command, captured edit, or re-claim for 5
+   minutes, or an explicitly ended session) and has no uncommitted work in
+   the target is RECLAIMED automatically the moment someone else wants it:
+   at claim time (the grant says "reclaimed from X"), at edit time (the edit
+   lands under its real author instead of being adopted by a ghost), and by
+   any actor's reconcile when a queue is wedged behind it. A quiet holder
+   WITH uncommitted work is never auto-reclaimed: the edit is denied loudly
+   with the holder named. No human in the loop for the dead-actor case.
+6. **Claims renew while you're active; a denial is a queue, not a wall.** Any
    quilt call refreshes your claims, so they can't silently lapse mid-task. A
    denial tells you who holds the code, what they said they're doing, and when
    their lease lapses. Two ways to handle it without polling: `queue` (CLI
@@ -141,7 +152,7 @@ The dogfood fleets earned these rules the hard way:
    `get_status` as `grantedWhileWaiting`; or `wait` (CLI `--wait`) blocks until
    it frees. Prefer `queue` when you have other work: a blocked call is a
    blocked agent.
-6. **Shared-tree proof discipline.** Repo-wide gates (tsc, tests) can fail
+7. **Shared-tree proof discipline.** Repo-wide gates (tsc, tests) can fail
    mid-wave because of OTHER actors' in-flight work — that's the price of
    same-checkout visibility (which also means codegen and cross-layer types
    flow to everyone with zero sync protocol). Verify your own hunks, or run

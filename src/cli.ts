@@ -22,7 +22,7 @@ import { recordOutcome } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
 import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
-import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId } from "./hooks.js";
+import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, parseCodexHookInput, codexActorId, runCodexHookPre, runCodexHookPost, type CodexHookInput } from "./hooks.js";
 import { detect, planSetup, applySetup, mergeHookSettings, appendCoordination, type SetupStep } from "./onboard.js";
 import { recordAuthorship, capturedBySelf } from "./authorship.js";
 import { repoRelative } from "./paths.js";
@@ -207,7 +207,11 @@ function applySetupAttributed(root: string, steps: SetupStep[]): SetupStep[] {
       if (!store.findActor("quilt-setup")) {
         store.upsertActor({ id: "quilt-setup", type: "bot", displayName: "quilt-setup", createdAt: nowIso() });
       }
+      const rootPrefix = resolve(root) + sep;
       for (const s of written) {
+        // User-global files (Codex's ~/.codex/hooks.json) live outside git's
+        // view of this repo — nothing to attribute.
+        if (!resolve(s.path).startsWith(rootPrefix)) continue;
         const before = prior.get(s.file) ?? null;
         recordAuthorship(store, {
           actor: "quilt-setup",
@@ -221,6 +225,20 @@ function applySetupAttributed(root: string, steps: SetupStep[]): SetupStep[] {
     }
   }
   return written;
+}
+
+/** Printed when setup just WROTE the Codex hooks: Codex skips new hooks until
+ * a one-time interactive approval, and silence here would recreate the exact
+ * wired-but-not-working trap this release removes elsewhere. */
+function printCodexTrustNote(steps: SetupStep[]): void {
+  if (!steps.some((s) => s.file.includes(".codex") && s.action !== "skip")) return;
+  process.stdout.write(
+    "\n" +
+      pc.yellow("⚠ ") +
+      "Codex trust: Codex skips newly added hooks until you approve them once in an\n" +
+      "  interactive Codex session (it will prompt on your next `codex`). Until then\n" +
+      "  Codex edits are not captured. Claude Code capture works immediately.\n",
+  );
 }
 
 /** The workspace-root wiring plan: capture hooks + coordination snippet at the
@@ -277,6 +295,7 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
   const rootSteps = planWorkspaceRoot(wsRoot);
   if (!dryRun) applySetupAttributed(wsRoot, rootSteps);
   for (const s of rootSteps) printSetupStep(s, dryRun);
+  const written: SetupStep[] = [];
 
   for (const child of children) {
     const childRoot = join(wsRoot, child);
@@ -294,6 +313,7 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
     const childSteps = planSetup(childRoot);
     applySetupAttributed(childRoot, childSteps);
     for (const s of childSteps) printSetupStep(s, false);
+    written.push(...childSteps);
   }
 
   if (dryRun) {
@@ -310,6 +330,8 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
       pc.dim("  Note: the optional MCP claim tools load per repo, so sessions started at\n") +
       pc.dim("  the workspace root won't have them — the hooks and CLI carry everything.\n"),
   );
+
+  printCodexTrustNote(written);
 
   const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["quilt"], { stdio: "ignore" });
   if (probe.status !== 0) {
@@ -543,6 +565,8 @@ program
     // PATH (local/npx install), hooks and the MCP server would fail silently
     // (hooks fail open by design). Say so now instead of leaving `quilt doctor`
     // to notice zero captures later.
+    printCodexTrustNote(steps);
+
     const probe = spawnSync(process.platform === "win32" ? "where" : "which", ["quilt"], { stdio: "ignore" });
     if (probe.status !== 0) {
       process.stdout.write(
@@ -1202,7 +1226,12 @@ program
       for (const r of results) {
         const target = r.dir ? r.path + "/" : r.symbol ? `${r.path}#${r.symbol}` : r.path;
         if (r.granted) {
-          process.stdout.write(pc.green("  ✓ claimed ") + target + "\n");
+          process.stdout.write(
+            pc.green("  ✓ claimed ") + target +
+              (r.reclaimedFrom
+                ? pc.dim(`  (reclaimed from ${r.reclaimedFrom} — no sign of life, no work in flight)`)
+                : "") + "\n",
+          );
         } else if (r.queued) {
           // Async: registered, not blocked. The agent moves on and the grant
           // lands at its next quilt call.
@@ -1459,13 +1488,66 @@ function hookStoreFor(filePath: string | null): Store | null {
   }
 }
 
+/**
+ * Route a Codex apply_patch payload through the per-file capture core: resolve
+ * each file against the payload's cwd, group by the repo it lives in (a
+ * workspace patch can span repos), and snapshot/diff per group. Capture only —
+ * Codex prevention parity is a separate, later effort.
+ */
+function runCodexHook(kind: "pre" | "post", codex: CodexHookInput): void {
+  const base = codex.cwd ?? process.cwd();
+  const id = process.env.QUILT_ACTOR || (codex.sessionId ? codexActorId(codex.sessionId) : null);
+  if (!id) return;
+  const groups = new Map<string, { store: Store; files: Array<{ rel: string; moveRel?: string }> }>();
+  const resolveIn = (p: string): { store: Store; rel: string } | null => {
+    const abs = resolve(base, p);
+    const store = hookStoreFor(abs);
+    if (!store) return null;
+    const rel = repoRelative(store.paths.repoRoot, abs);
+    return rel ? { store, rel } : null;
+  };
+  const addFile = (entry: { rel: string; moveRel?: string }, store: Store) => {
+    let g = groups.get(store.paths.repoRoot);
+    if (!g) groups.set(store.paths.repoRoot, (g = { store, files: [] }));
+    if (!g.files.some((f) => f.rel === entry.rel)) g.files.push(entry);
+  };
+  for (const f of codex.files) {
+    const src = resolveIn(f.path);
+    const dest = f.movePath ? resolveIn(f.movePath) : null;
+    // A rename is paired only when source and destination land in the SAME
+    // repo — the capture core then records it as one file whose key changed
+    // (removal at the source, only genuine changes at the destination),
+    // instead of a full delete + full add that would hand the mover every
+    // line in the file. A cross-repo move degrades to independent entries.
+    if (src && dest && src.store.paths.repoRoot === dest.store.paths.repoRoot) {
+      addFile({ rel: src.rel, moveRel: dest.rel }, src.store);
+      continue;
+    }
+    if (src) addFile({ rel: src.rel }, src.store);
+    if (dest) addFile({ rel: dest.rel }, dest.store);
+  }
+  for (const g of groups.values()) {
+    if (!g.store.findActor(id)) {
+      g.store.upsertActor({ id, type: "agent", displayName: id, createdAt: nowIso() });
+    }
+    if (kind === "pre") runCodexHookPre(g.store, id, g.files);
+    else runCodexHookPost(g.store, id, g.files);
+  }
+}
+
 program
   .command("hook-pre")
-  .description("PreToolUse hook: snapshot + prevention for native Edit/Write/MultiEdit (reads JSON on stdin)")
+  .description("PreToolUse hook: snapshot + prevention for native edits — Claude Code Edit/Write/MultiEdit and Codex apply_patch (reads JSON on stdin)")
   .action(async () => {
     // Fail-open: a hook must never block or crash an agent's edit on our account.
     try {
-      const input = parseHookInput(JSON.parse(await readStdin()));
+      const raw = JSON.parse(await readStdin());
+      const codex = parseCodexHookInput(raw);
+      if (codex) {
+        runCodexHook("pre", codex);
+        process.exit(0);
+      }
+      const input = parseHookInput(raw);
       const store = input && hookStoreFor(input.path);
       const actor = store && input && hookActor(store, input);
       if (store && input && actor) {
@@ -1493,10 +1575,16 @@ program
 
 program
   .command("hook-post")
-  .description("PostToolUse hook: capture authorship of a native Edit/Write/MultiEdit (reads JSON on stdin)")
+  .description("PostToolUse hook: capture authorship of a native edit — Claude Code Edit/Write/MultiEdit and Codex apply_patch (reads JSON on stdin)")
   .action(async () => {
     try {
-      const input = parseHookInput(JSON.parse(await readStdin()));
+      const raw = JSON.parse(await readStdin());
+      const codex = parseCodexHookInput(raw);
+      if (codex) {
+        runCodexHook("post", codex);
+        process.exit(0);
+      }
+      const input = parseHookInput(raw);
       const store = input && hookStoreFor(input.path);
       const actor = store && input && hookActor(store, input);
       if (store && input && actor) runHookPost(store, actor.id, input, actor.auto);

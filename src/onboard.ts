@@ -5,6 +5,7 @@
 // and merged, never clobbered. If a file can't be safely merged (e.g. malformed
 // JSON), we leave it alone and tell the user what to add by hand.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 /** The MCP server entry every agent in the fleet shares. */
@@ -14,6 +15,17 @@ export const QUILT_SERVER = { command: "quilt", args: ["mcp"] } as const;
 export const HOOK_MATCHER = "Edit|Write|MultiEdit";
 export const HOOK_PRE_COMMAND = "quilt hook-pre";
 export const HOOK_POST_COMMAND = "quilt hook-post";
+/** Codex CLI's edit tool — one matcher, since every Codex edit is a patch. */
+export const CODEX_HOOK_MATCHER = "apply_patch";
+
+/** Codex's config directory (global — Codex hooks are per-user, not per-repo).
+ * Overridable for tests so they never touch a real ~/.codex. */
+export function codexDir(): string {
+  return process.env.QUILT_CODEX_DIR || join(homedir(), ".codex");
+}
+export function codexHooksPath(): string {
+  return join(codexDir(), "hooks.json");
+}
 
 /**
  * Versioned marker so the CLAUDE.md snippet is added at most once AND can be
@@ -116,6 +128,10 @@ export interface Detected {
   /** a coordination snippet from an OLDER Quilt is present (refresh available). */
   coordinationStale: boolean;
   hooksWired: boolean;
+  /** Codex CLI is installed on this machine (user-global ~/.codex exists). */
+  codexPresent: boolean;
+  /** the quilt apply_patch hooks are in ~/.codex/hooks.json. */
+  codexWired: boolean;
 }
 
 /** Inspect a repo root for orchestrator config and whether Quilt is wired in. */
@@ -146,6 +162,8 @@ export function detect(root: string): Detected {
   const coordinationPresent = claudeMdContent.includes(COORDINATION_MARKER);
   const coordinationStale = coordinationIsStale(claudeMdContent);
   const hooksWired = hasSettings && settingsHasQuiltHooks(safeRead(settingsPath));
+  const codexPresent = existsSync(codexDir());
+  const codexWired = codexPresent && codexHooksWiredIn(safeRead(codexHooksPath()));
 
   return {
     mcpJsonPath,
@@ -163,6 +181,8 @@ export function detect(root: string): Detected {
     coordinationPresent,
     coordinationStale,
     hooksWired,
+    codexPresent,
+    codexWired,
   };
 }
 
@@ -212,11 +232,29 @@ function settingsHasQuiltHooks(content: string | null): boolean {
   }
 }
 
+/** Is the Codex hooks file already carrying both quilt capture hooks? */
+function codexHooksWiredIn(content: string | null): boolean {
+  if (!content) return false;
+  try {
+    const parsed = JSON.parse(content);
+    const hooks = isPlainObject(parsed) ? parsed.hooks : undefined;
+    if (!isPlainObject(hooks)) return false;
+    return hookGroupHas(hooks.PreToolUse, HOOK_PRE_COMMAND) && hookGroupHas(hooks.PostToolUse, HOOK_POST_COMMAND);
+  } catch {
+    return false;
+  }
+}
+
 /** Ensure a hook event array holds a group running `command`; returns true if it added one. */
-function ensureHookGroup(hooks: Record<string, unknown>, event: string, command: string): boolean {
+function ensureHookGroup(
+  hooks: Record<string, unknown>,
+  event: string,
+  command: string,
+  matcher: string = HOOK_MATCHER,
+): boolean {
   if (hookGroupHas(hooks[event], command)) return false;
   const arr = Array.isArray(hooks[event]) ? (hooks[event] as unknown[]) : [];
-  arr.push({ matcher: HOOK_MATCHER, hooks: [{ type: "command", command }] });
+  arr.push({ matcher, hooks: [{ type: "command", command }] });
   hooks[event] = arr;
   return true;
 }
@@ -298,6 +336,78 @@ export function mergeHookSettings(existing: string | null): MergeResult {
   if (!changed) return { content: existing ?? "", changed: false };
   obj.hooks = hooksObj;
   return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };
+}
+
+/**
+ * Add the Quilt capture hooks to Codex's GLOBAL `~/.codex/hooks.json`
+ * (matcher `apply_patch` on PreToolUse/PostToolUse). This file is shared with
+ * whatever other hooks the user runs, so the merge is strictly additive and
+ * refuses anything it can't merge safely — identical discipline to
+ * mergeHookSettings, different matcher and file.
+ *
+ * Codex trust caveat (the honest part): Codex persists per-hook trust in
+ * `~/.codex/config.toml` and SILENTLY SKIPS a newly added hook until the user
+ * approves it in an interactive Codex session. Setup output and doctor both
+ * say so — wired-but-unapproved must never read as working.
+ */
+export function mergeCodexHooks(existing: string | null): MergeResult {
+  let parsed: unknown = {};
+  if (existing !== null && existing.trim() !== "") {
+    try {
+      parsed = JSON.parse(existing);
+    } catch {
+      return { content: existing, changed: false, error: "not valid JSON" };
+    }
+    if (!isPlainObject(parsed)) {
+      return { content: existing, changed: false, error: "not a JSON object" };
+    }
+  }
+  const obj = parsed as Record<string, unknown>;
+  const hooks = obj.hooks;
+  if (hooks !== undefined && !isPlainObject(hooks)) {
+    return { content: existing ?? "", changed: false, error: "hooks is not an object" };
+  }
+  const hooksObj = (hooks as Record<string, unknown> | undefined) ?? {};
+  for (const event of ["PreToolUse", "PostToolUse"]) {
+    if (hooksObj[event] !== undefined && !Array.isArray(hooksObj[event])) {
+      return { content: existing ?? "", changed: false, error: `hooks.${event} is not an array` };
+    }
+  }
+  let changed = ensureHookGroup(hooksObj, "PreToolUse", HOOK_PRE_COMMAND, CODEX_HOOK_MATCHER);
+  changed = ensureHookGroup(hooksObj, "PostToolUse", HOOK_POST_COMMAND, CODEX_HOOK_MATCHER) || changed;
+  if (!changed) return { content: existing ?? "", changed: false };
+  obj.hooks = hooksObj;
+  return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };
+}
+
+/** Codex hook-trust state, read from `~/.codex/config.toml`: Codex records a
+ * `[hooks.state."<file>:<event>:<group>:<hook>"]` entry per approved hook.
+ * We locate our group's index in hooks.json and check for its entry. Returns
+ * null when the wiring itself is absent (nothing to be trusted yet). */
+export function codexHooksTrusted(): boolean | null {
+  const hooksRaw = safeRead(codexHooksPath());
+  if (!hooksRaw) return null;
+  let parsed: { hooks?: Record<string, unknown> };
+  try {
+    parsed = JSON.parse(hooksRaw);
+  } catch {
+    return null;
+  }
+  const configRaw = safeRead(join(codexDir(), "config.toml")) ?? "";
+  const eventKey: Record<string, string> = { PreToolUse: "pre_tool_use", PostToolUse: "post_tool_use" };
+  for (const [event, key] of Object.entries(eventKey)) {
+    const list = parsed.hooks?.[event];
+    if (!Array.isArray(list)) return null;
+    const idx = list.findIndex(
+      (g) =>
+        isPlainObject(g) &&
+        Array.isArray(g.hooks) &&
+        g.hooks.some((h) => isPlainObject(h) && (h.command === HOOK_PRE_COMMAND || h.command === HOOK_POST_COMMAND)),
+    );
+    if (idx === -1) return null; // not wired
+    if (!configRaw.includes(`hooks.json:${key}:${idx}:`)) return false;
+  }
+  return true;
 }
 
 /**
@@ -474,6 +584,32 @@ export function planSetup(root: string): SetupStep[] {
         detail: "append the coordination snippet",
         content: agents.content,
         path: d.agentsMdPath,
+      });
+    }
+  }
+
+  // Codex CLI: hooks live in the USER-GLOBAL ~/.codex/hooks.json, so this step
+  // rides along whenever Codex is installed. Strictly additive merge — the file
+  // is shared with the user's other Codex hooks and must never be stomped.
+  if (d.codexPresent) {
+    const codexExisting = safeRead(codexHooksPath());
+    const codex = mergeCodexHooks(codexExisting);
+    if (codex.error) {
+      steps.push({
+        file: "~/.codex/hooks.json",
+        action: "skip",
+        detail: `left untouched (${codex.error}) — add the quilt hooks by hand`,
+        path: codexHooksPath(),
+      });
+    } else if (!codex.changed) {
+      steps.push({ file: "~/.codex/hooks.json", action: "skip", detail: "capture hooks already present", path: codexHooksPath() });
+    } else {
+      steps.push({
+        file: "~/.codex/hooks.json",
+        action: codexExisting !== null ? "update" : "create",
+        detail: "add the apply_patch capture hooks (Codex, user-global)",
+        content: codex.content,
+        path: codexHooksPath(),
       });
     }
   }

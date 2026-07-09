@@ -7,7 +7,7 @@
 // many edits have actually been captured. "0 edits recorded despite uncommitted
 // changes" is the tell that capture isn't flowing.
 import { spawn } from "node:child_process";
-import { detect } from "./onboard.js";
+import { detect, codexHooksTrusted } from "./onboard.js";
 import { readAuthorship, readCheckpoint } from "./authorship.js";
 import { watcherRunning } from "./watch.js";
 import { changedPaths, gitVersionString } from "./git.js";
@@ -198,6 +198,33 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
           hint: "run `quilt setup` — without them, native edits aren't captured",
         },
   );
+
+  // Codex: the wiring lives user-globally and Codex SILENTLY SKIPS a newly
+  // added hook until the user approves it once in an interactive session —
+  // wired-but-unapproved must never read as working (that silence is the
+  // exact failure class doctor exists to surface).
+  if (d.codexPresent) {
+    if (!d.codexWired) {
+      checks.push({
+        label: "Codex hooks",
+        status: "info",
+        detail: "Codex CLI detected; capture hooks not wired",
+        hint: "run `quilt setup` — it adds the apply_patch hooks to ~/.codex/hooks.json",
+      });
+    } else {
+      const trusted = codexHooksTrusted();
+      checks.push(
+        trusted === true
+          ? { label: "Codex hooks", status: "ok", detail: "apply_patch hooks wired and approved" }
+          : {
+              label: "Codex hooks",
+              status: "warn",
+              detail: "wired, but Codex has not approved them yet — it skips them silently until then",
+              hint: "open any interactive Codex session; it will prompt to trust the new hooks once",
+            },
+      );
+    }
+  }
 
   // A coordination snippet frozen at an older version keeps teaching agents an
   // outdated protocol (the pre-0.4.4 one framed the optional MCP tools as the
