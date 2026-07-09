@@ -97,6 +97,12 @@ the holder's intent, at the coordination point. Give agents explicit ids
 (`QUILT_ACTOR`, per-call `actor`) when you want strict denial semantics
 between them.
 
+Hooks resolve the repo from the FILE being edited, not from where the session
+started, so a session opened in a workspace directory above several repos
+captures each edit into the right repo. Run `quilt setup` at that workspace
+root once: it wires the root (where sessions load hooks from) and every repo
+inside.
+
 The hooks also need Quilt initialized in the repo (`quilt setup` does this, or run
 `quilt init` once). If the store isn't initialized, the hooks no-op silently
 rather than error, so if native edits aren't being captured, check that

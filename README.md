@@ -114,6 +114,10 @@ claude               # terminal 3
 claude               # terminal 4
 ```
 
+Start sessions from a directory that holds several repos? Run `quilt setup`
+there instead: it wires the workspace root and every repo inside, and each
+edit is captured into the repo its file belongs to.
+
 Nothing else. No `QUILT_ACTOR`, no per-terminal ceremony, nothing to approve:
 the capture hooks attribute every edit to its session automatically. Watch it
 live with `quilt fleet`, and when a session's work is ready, ask it to run

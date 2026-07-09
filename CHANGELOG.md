@@ -6,6 +6,20 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Workspace mode.** Sessions often start in a directory ABOVE the repo(s):
+  a workspace root holding several checkouts. Two changes make that shape
+  first-class. The capture hooks now resolve the repo from the FILE being
+  edited instead of the hook's working directory, so a session started
+  anywhere captures each edit into the repo it belongs to (previously the
+  hook found no repo at the session root and silently captured nothing).
+  And `quilt setup`, run from a non-repo directory that contains repos,
+  wires the whole workspace: capture hooks and the coordination snippet at
+  the root (where sessions load them from), full per-repo wiring in every
+  child. Repo-scoped commands run from such a directory now also mention
+  the workspace option alongside the cd guidance.
+
 ## [0.4.4] - 2026-07-08
 
 ### Added
