@@ -115,6 +115,177 @@ export function sessionActorId(sessionId: string): string | null {
   return `claude-${clean.slice(0, 8)}`;
 }
 
+// ---------------------------------------------------------------------------
+// Codex: native capture for OpenAI Codex CLI's apply_patch tool.
+//
+// Codex's tool boundary differs from Claude Code's in two structural ways: the
+// edit payload is ONE raw apply_patch envelope (not per-file old/new strings),
+// and one call can touch MANY files. So the Codex path parses the FILE LIST
+// out of the envelope and runs the same snapshot-on-Pre / diff-on-Post capture
+// core per file. Hunks are never interpreted: Post diffs the Pre snapshot
+// against the file on disk, which also makes a FAILED patch (apply_patch
+// verification rejects and touches nothing) a natural no-op — empty delta,
+// nothing recorded. Envelope trade-off vs the Claude path: Post reads the
+// written file from disk rather than replaying the payload in memory, so a
+// sibling's concurrent write to the same file between Pre and Post could ride
+// into this actor's delta. Ground-truth payload samples live in
+// docs/codex-payload-samples/.
+// ---------------------------------------------------------------------------
+
+/** One file's change parsed out of an apply_patch envelope. */
+export interface CodexPatchFile {
+  path: string;
+  kind: "update" | "add" | "delete";
+  /** for a rename: `*** Move to:` following an Update section. */
+  movePath?: string;
+}
+
+/** A normalized Codex hook payload. */
+export interface CodexHookInput {
+  files: CodexPatchFile[];
+  sessionId: string | null;
+  /** the Codex session's working directory — blob paths are relative to it. */
+  cwd: string | null;
+}
+
+const PATCH_MARKER = "*** Begin Patch";
+
+/** Extract the file sections from an apply_patch blob. Line-anchored scan of
+ * the `*** Update/Add/Delete File:` markers; hunk bodies are skipped. */
+export function parseApplyPatchFiles(blob: string): CodexPatchFile[] {
+  const files: CodexPatchFile[] = [];
+  const lines = blob.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i]!.match(/^\*\*\* (Update|Add|Delete) File: (.+)$/);
+    if (!m) continue;
+    const entry: CodexPatchFile = {
+      path: m[2]!.trim(),
+      kind: m[1]!.toLowerCase() as CodexPatchFile["kind"],
+    };
+    const move = lines[i + 1]?.match(/^\*\*\* Move to: (.+)$/);
+    if (move) entry.movePath = move[1]!.trim();
+    files.push(entry);
+  }
+  return files;
+}
+
+/**
+ * Recognize and normalize a Codex apply_patch hook payload, or null when the
+ * payload isn't one (the caller then tries the Claude Code parser). Detection
+ * keys on the PATCH ENVELOPE ITSELF — any string field of tool_input carrying
+ * `*** Begin Patch` — rather than only on tool_name, so a schema rename or a
+ * shell-wrapped apply_patch can't silently disable capture.
+ */
+export function parseCodexHookInput(raw: unknown): CodexHookInput | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const o = raw as Record<string, unknown>;
+  const input = (o.tool_input ?? {}) as Record<string, unknown>;
+  // A Claude-shaped payload (tool_input.file_path) is never a Codex patch,
+  // even when its CONTENT happens to contain a patch envelope — an agent
+  // Writing documentation about apply_patch must not be routed here and have
+  // the marker text parsed as real file sections.
+  if (typeof input.file_path === "string") return null;
+  let blob: string | null = null;
+  for (const v of Object.values(input)) {
+    if (typeof v === "string" && v.includes(PATCH_MARKER)) {
+      blob = v;
+      break;
+    }
+  }
+  if (blob === null) return null;
+  const files = parseApplyPatchFiles(blob);
+  if (files.length === 0) return null;
+  return {
+    files,
+    sessionId: str(o.session_id),
+    cwd: str(o.cwd),
+  };
+}
+
+/** The Codex sibling of sessionActorId: `codex-<8 chars of the session id>`. */
+export function codexActorId(sessionId: string): string | null {
+  const clean = sessionId.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!clean) return null;
+  return `codex-${clean.slice(0, 8)}`;
+}
+
+/** A store-relative file entry for the Codex capture core. `moveRel` pairs a
+ * rename's destination with its source so a move is captured as ONE file whose
+ * key changed, not as an unrelated full delete + full add. */
+export interface CodexCaptureFile {
+  rel: string;
+  moveRel?: string;
+}
+
+/**
+ * Codex PreToolUse: snapshot each file's pre-patch content so Post can diff.
+ * Capture only — no prevention: Codex has its own permission model, and deny
+ * parity is a separate, later effort (verify Codex's deny schema first).
+ * `files` carry store-relative paths (the caller resolves blob paths against
+ * the payload's cwd and each file's own repo). For a rename, the SOURCE path
+ * is snapshotted; the destination doesn't exist yet.
+ */
+export function runCodexHookPre(store: Store, actor: string, files: CodexCaptureFile[]): void {
+  for (const f of files) {
+    const abs = safeAbs(store.paths.repoRoot, f.rel);
+    if (!abs) continue;
+    mkdirSync(store.paths.hookSnapshotsDir, { recursive: true });
+    writeFileSync(snapshotPath(store, actor, f.rel), readBefore(abs));
+  }
+}
+
+/**
+ * Codex PostToolUse: per file, diff the Pre snapshot against what's on disk
+ * now and record authorship. A failed patch leaves the disk identical to the
+ * snapshot — empty delta, nothing recorded — so tool_response parsing isn't
+ * needed for correctness. Consumes the snapshots.
+ *
+ * Renames are the attribution-sensitive case: recording a move as a full
+ * delete at the old path plus a full ADD at the new path would hand the mover
+ * ownership of every line in the file — including other actors' uncommitted
+ * work riding along in the move. Instead a rename records (a) the REMOVAL of
+ * the old path's lines (the mover really did remove that path), and (b) at
+ * the new path, only the lines the mover genuinely CHANGED during the move
+ * (old content diffed against new content under the new key). Unchanged moved
+ * lines stay unowned in the ledger and fall to the normal inference floor —
+ * no ledger answer beats a wrong ledger answer.
+ */
+export function runCodexHookPost(store: Store, actor: string, files: CodexCaptureFile[]): void {
+  for (const f of files) {
+    const snap = snapshotPath(store, actor, f.rel);
+    if (!existsSync(snap)) continue;
+    const before = readFileSync(snap, "utf8");
+    const abs = safeAbs(store.paths.repoRoot, f.rel);
+    if (!abs) {
+      rmSync(snap, { force: true });
+      continue;
+    }
+    const oldGone = !existsSync(abs);
+    const destAbs = f.moveRel ? safeAbs(store.paths.repoRoot, f.moveRel) : null;
+    if (f.moveRel && destAbs && oldGone && existsSync(destAbs)) {
+      // The rename actually happened: removal at the source...
+      if (before !== "") {
+        recordAuthorship(store, { actor, path: f.rel, oldText: before, newText: "", anchor: null });
+      }
+      // ...and at the destination, only what genuinely changed in transit.
+      const moved = readFileSync(destAbs, "utf8");
+      if (moved !== before) {
+        recordAuthorship(store, { actor, path: f.moveRel, oldText: before, newText: moved, anchor: null });
+        refreshClaims(store, actor, f.moveRel, Date.now());
+      }
+      refreshClaims(store, actor, f.rel, Date.now());
+      rmSync(snap, { force: true });
+      continue;
+    }
+    const after = readBefore(abs); // "" when the patch deleted the file
+    if (after !== before) {
+      recordAuthorship(store, { actor, path: f.rel, oldText: before, newText: after, anchor: null });
+      refreshClaims(store, actor, f.rel, Date.now());
+    }
+    rmSync(snap, { force: true });
+  }
+}
+
 /**
  * A per-SUBAGENT auto id from the hook payload's agent_id/agent_type. All
  * subagents of a session share its session_id, so without this every parallel

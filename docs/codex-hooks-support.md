@@ -1,7 +1,8 @@
 # Backlog: native hook capture for OpenAI Codex
 
-Status: **not started** — captured 2026-07-05. This is a marker so whoever owns
-Quilt picks it up, not a finished design.
+Status: **capture SHIPPED in 0.4.5** (2026-07-08); this doc is the recon +
+spike record. Prevention (deny) parity remains open — verify Codex's deny
+schema before attempting it.
 
 ## The premise that turned out wrong
 

@@ -35,16 +35,18 @@ Quilt captures who wrote which lines through either path, and you can use both:
   instructions to follow, and Quilt records the author of each change and denies
   a write into code another agent is mid-change on. Identity is automatic: each
   session gets its own id (see below). This is the seamless path.
+- **Hooks on Codex too.** When Codex CLI is installed, `quilt setup` also
+  wires `apply_patch` capture hooks into the user-global `~/.codex/hooks.json`
+  (additive; your other Codex hooks are untouched). A Codex session's patches
+  are then captured per file under a `codex-<session>` id, multi-file patches
+  included. One Codex reality to know: Codex skips newly added hooks until
+  you approve them once in an interactive session (it prompts); until then
+  Codex edits are not captured, and `quilt doctor` says so. Capture only for
+  now: prevention (claim denial) on Codex is a later effort.
 - **MCP (explicit).** The `quilt_edit` / `quilt_write` tools, and the
   `claim` → `commit_mine` loop below, work anywhere an agent can reach an MCP
-  server, Codex, Cursor, Aider, your own harness, including runtimes that have
-  no hook system. Reach for this when hooks aren't available.
-
-  > **Note (2026-07-05):** Codex is currently hooks-*less* only in this doc, not
-  > in reality: Codex CLI has a hook system (`~/.codex/hooks.json`) and could get
-  > the same seamless native capture Claude Code has. Native Codex hook support is
-  > a tracked backlog item: see [`codex-hooks-support.md`](codex-hooks-support.md).
-  > Until it lands, the MCP path above is how Codex participates.
+  server, Codex, Cursor, Aider, your own harness, including runtimes that
+  have no hook system. Reach for this when hooks aren't available.
 
 ### How agents get their ids
 

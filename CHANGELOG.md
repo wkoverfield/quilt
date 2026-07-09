@@ -8,6 +8,17 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **Native capture for OpenAI Codex.** `quilt setup` now wires `apply_patch`
+  capture hooks into the user-global `~/.codex/hooks.json` when Codex CLI is
+  installed (strictly additive; existing Codex hooks are preserved, and the
+  merge refuses anything it can't merge safely). Codex sessions are captured
+  per file under a `codex-<session>` auto id, multi-file patches included; a
+  patch that apply_patch rejects records nothing. Setup and `quilt doctor`
+  both state the Codex trust step plainly: Codex skips newly added hooks
+  until they are approved once in an interactive session, and doctor reports
+  wired-but-unapproved as its own warning. Capture only; prevention parity
+  on Codex is a later effort. Payload parsing is built against live-captured
+  samples in `docs/codex-payload-samples/`.
 - **Dead actors can no longer strand live work.** A claim whose holder shows
   no sign of life (no quilt command, captured edit, or re-claim for 5
   minutes, or an explicitly ended session) and has no uncommitted work in
