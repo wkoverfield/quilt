@@ -271,6 +271,35 @@ test("two actors editing the same file use separate snapshots (no cross-talk)", 
   }
 });
 
+test("two concurrent calls by the same actor/path use invocation-scoped snapshots", () => {
+  const { s, dir } = newStore();
+  try {
+    writeFileSync(join(dir, "m.js"), "function a() { return 0; }\nfunction b() { return 0; }\n");
+    const a = parseHookInput({
+      tool_name: "Edit", tool_use_id: "call-a",
+      tool_input: { file_path: "m.js", old_string: "function a() { return 0; }", new_string: "function a() { return 1; }" },
+    })!;
+    const b = parseHookInput({
+      tool_name: "Edit", tool_use_id: "call-b",
+      tool_input: { file_path: "m.js", old_string: "function b() { return 0; }", new_string: "function b() { return 2; }" },
+    })!;
+    runHookPre(s, "same-actor", a);
+    runHookPre(s, "same-actor", b);
+    applyEdit(dir, "m.js", "function a() { return 0; }", "function a() { return 1; }");
+    applyEdit(dir, "m.js", "function b() { return 0; }", "function b() { return 2; }");
+    runHookPost(s, "same-actor", b); // reverse Post order
+    runHookPost(s, "same-actor", a);
+    const events = readAuthorship(s);
+    assert.equal(events.length, 2);
+    assert.deepEqual(events.map((e) => e.added).flat().sort(), [
+      "function a() { return 1; }",
+      "function b() { return 2; }",
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("snapshot is consumed after Post (a second Post is a no-op)", () => {
   const { s, dir } = newStore();
   try {

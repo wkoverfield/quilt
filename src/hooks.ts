@@ -55,6 +55,7 @@ export interface HookInput {
   agentId: string | null;
   /** Subagent type (e.g. "code-reviewer") — a readable prefix for the auto id. */
   agentType: string | null;
+  invocationId?: string;
 }
 
 function str(v: unknown): string | null {
@@ -99,7 +100,16 @@ export function parseHookInput(raw: unknown): HookInput | null {
   const sessionId = str(o.session_id);
   const agentId = str(o.agent_id);
   const agentType = str(o.agent_type);
-  return { tool, path, edits, content, sessionId, agentId, agentType };
+  const suppliedInvocation = str(o.tool_use_id) ?? str(o.tool_call_id) ?? str(o.hook_event_id);
+  const invocationId = suppliedInvocation ?? createHash("sha256")
+    .update(JSON.stringify({ tool, path, edits, content }))
+    .digest("hex")
+    .slice(0, 16);
+  const normalized: HookInput = { tool, path, edits, content, sessionId, agentId, agentType };
+  // Internal transaction metadata; keep the long-standing normalized payload
+  // JSON shape stable for API consumers.
+  Object.defineProperty(normalized, "invocationId", { value: invocationId, enumerable: false });
+  return normalized;
 }
 
 /**
@@ -146,6 +156,7 @@ export interface CodexHookInput {
   sessionId: string | null;
   /** the Codex session's working directory — blob paths are relative to it. */
   cwd: string | null;
+  invocationId: string;
 }
 
 const PATCH_MARKER = "*** Begin Patch";
@@ -199,6 +210,10 @@ export function parseCodexHookInput(raw: unknown): CodexHookInput | null {
     files,
     sessionId: str(o.session_id),
     cwd: str(o.cwd),
+    invocationId:
+      str(o.tool_use_id) ??
+      str(o.tool_call_id) ??
+      createHash("sha256").update(blob).digest("hex").slice(0, 16),
   };
 }
 
@@ -225,12 +240,12 @@ export interface CodexCaptureFile {
  * the payload's cwd and each file's own repo). For a rename, the SOURCE path
  * is snapshotted; the destination doesn't exist yet.
  */
-export function runCodexHookPre(store: Store, actor: string, files: CodexCaptureFile[]): void {
+export function runCodexHookPre(store: Store, actor: string, files: CodexCaptureFile[], invocationId = "legacy"): void {
   for (const f of files) {
     const abs = safeAbs(store.paths.repoRoot, f.rel);
     if (!abs) continue;
     mkdirSync(store.paths.hookSnapshotsDir, { recursive: true });
-    writeFileSync(snapshotPath(store, actor, f.rel), readBefore(abs));
+    writeFileSync(snapshotPath(store, actor, f.rel, invocationId), readBefore(abs));
   }
 }
 
@@ -250,9 +265,9 @@ export function runCodexHookPre(store: Store, actor: string, files: CodexCapture
  * lines stay unowned in the ledger and fall to the normal inference floor —
  * no ledger answer beats a wrong ledger answer.
  */
-export function runCodexHookPost(store: Store, actor: string, files: CodexCaptureFile[]): void {
+export function runCodexHookPost(store: Store, actor: string, files: CodexCaptureFile[], invocationId = "legacy"): void {
   for (const f of files) {
-    const snap = snapshotPath(store, actor, f.rel);
+    const snap = snapshotPath(store, actor, f.rel, invocationId);
     if (!existsSync(snap)) continue;
     const before = readFileSync(snap, "utf8");
     const abs = safeAbs(store.paths.repoRoot, f.rel);
@@ -303,13 +318,13 @@ export function agentActorId(agentId: string, agentType: string | null): string 
   return `${type || "agent"}-${id}`;
 }
 
-function snapshotKey(actor: string, path: string): string {
+function snapshotKey(actor: string, path: string, invocationId: string): string {
   // 128 bits of sha256 — ample to avoid collisions for a transient scratch file.
-  return createHash("sha256").update(`${actor}\0${path}`).digest("hex").slice(0, 32);
+  return createHash("sha256").update(`${actor}\0${invocationId}\0${path}`).digest("hex").slice(0, 32);
 }
 
-function snapshotPath(store: Store, actor: string, path: string): string {
-  return store.paths.hookSnapshot(snapshotKey(actor, path));
+function snapshotPath(store: Store, actor: string, path: string, invocationId: string): string {
+  return store.paths.hookSnapshot(snapshotKey(actor, path, invocationId));
 }
 
 /** The pre-write content of a path (empty string for a not-yet-created file). */
@@ -402,7 +417,7 @@ export function runHookPre(
   // normalized path so Pre and Post agree however the payload spelled it.
   if (input.content !== null || input.edits.length > 0) {
     mkdirSync(store.paths.hookSnapshotsDir, { recursive: true });
-    writeFileSync(snapshotPath(store, actor, rel), before);
+    writeFileSync(snapshotPath(store, actor, rel, input.invocationId ?? "legacy"), before);
   }
   return { deny: false };
 }
@@ -441,7 +456,7 @@ export function runHookPost(store: Store, actor: string, input: HookInput, autoA
   // The snapshot is keyed by the RAW caller id — stable across the Pre/Post of
   // one tool call regardless of adoption (which is re-derived below from the
   // same `before` bytes Pre saw).
-  const snap = snapshotPath(store, actor, rel);
+  const snap = snapshotPath(store, actor, rel, input.invocationId ?? "legacy");
   if (!existsSync(snap)) return; // nothing captured for this call
   const before = readFileSync(snap, "utf8");
   const asActor = effectiveActor(store, actor, autoActor, rel, before, before !== "", input);

@@ -291,7 +291,9 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
       const headLines =
         current === head ? null : new Set(head === null ? [] : head.split("\n"));
       let bLine = 0; // 1-based line in baseline; advances on eq + del
+      const clobberKeyOf = opKeyer(addLoc, delLoc);
       for (const op of delta) {
+        const opKey = clobberKeyOf(op);
         if (headLines === null) break; // worktree == HEAD: nothing clobberable
         if (op.type === "eq") {
           bLine++;
@@ -307,7 +309,7 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         // overlaid it onto file.added, so a captured-but-unreconciled line still
         // names the right clobber victim. The victim added the line (keyed by its
         // scope), so look it up by the same symbol-qualified key.
-        const delKey = ownKey(delLoc(bLine), op.text);
+        const delKey = opKey!;
         const owner = ledgerOwn.get(path)?.get(delKey) ?? ownership.files[path]?.added[delKey];
         if (owner && owner !== activeActorId) {
           // A gated file's baseline stays frozen, so the same pending delta is
@@ -359,7 +361,9 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         const conflicts = ownership.conflicts;
         let curLine = 0; // 1-based line in `current`; advances on eq + add
         let baseLine = 0; // 1-based line in baseline; advances on eq + del
+        const inferKeyOf = opKeyer(addLoc, delLoc);
         for (const op of delta) {
+          const opKey = inferKeyOf(op);
           if (op.type === "eq") {
             curLine++;
             baseLine++;
@@ -374,7 +378,7 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
           }
           if (isTrivialLine(op.text)) continue;
           const map = op.type === "add" ? file.added : file.removed;
-          const key = op.type === "add" ? ownKey(addLoc(curLine), op.text) : ownKey(delLoc(baseLine), op.text);
+          const key = opKey!;
           const existing = map[key];
           if (existing && existing !== activeActorId) {
             const fileConflicts = (conflicts[path] ??= {});
@@ -438,9 +442,22 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
     const ledgerForPath = ledgerOwn.get(path);
     if (ledgerForPath) {
       const f = (ownership.files[path] ??= { added: {}, removed: {} });
-      for (const [key, actor] of ledgerForPath) {
-        if (!added.has(key) || isTrivialLine(keyText(key))) continue;
-        f.added[key] = actor;
+      const candidates = [...ledgerForPath.entries()];
+      const used = new Set<string>();
+      for (const key of added) {
+        if (isTrivialLine(keyText(key))) continue;
+        let hit = ledgerForPath.has(key) ? ([key, ledgerForPath.get(key)!] as const) : null;
+        if (!hit) {
+          const signature = `${key.slice(0, key.indexOf("\u0000"))}\u0000${keyText(key)}`;
+          const fallback = candidates.find(([candidate]) =>
+            !used.has(candidate) &&
+            `${candidate.slice(0, candidate.indexOf("\u0000"))}\u0000${keyText(candidate)}` === signature,
+          );
+          if (fallback) hit = fallback;
+        }
+        if (!hit) continue;
+        used.add(hit[0]);
+        f.added[key] = hit[1];
         if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
       }
     }
@@ -457,6 +474,20 @@ function reconcileLocked(store: Store, activeActorId: string | null): void {
         f.removed[key] = actor;
         if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
       }
+    }
+    // Explicit recovery is the final authority. `resolve --take` writes these
+    // audited overrides so a stale/phantom captured owner cannot immediately
+    // reappear on the next reconcile.
+    const transfers = ownership.transfers?.[path];
+    if (transfers) {
+      const f = (ownership.files[path] ??= { added: {}, removed: {} });
+      for (const [key, actor] of Object.entries(transfers)) {
+        if (added.has(key)) f.added[key] = actor;
+        else if (removed.has(key)) f.removed[key] = actor;
+        else delete transfers[key];
+        if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
+      }
+      if (Object.keys(transfers).length === 0) delete ownership.transfers![path];
     }
   }
 

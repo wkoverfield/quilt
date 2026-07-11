@@ -6,6 +6,34 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-07-10
+
+### Added
+
+- **Occurrence-aware ownership.** Changed lines are addressed as ordered
+  operation instances, so identical lines inside one function can belong to
+  different actors and commit independently. Committed instances settle out
+  before remaining dirty operations are re-indexed. This closes #100 and the
+  phantom-owner half of #101.
+- **Real collision recovery.** `quilt resolve <target> --take --from <actor>`
+  transfers current dirty operations with an immutable ledger record. Plain
+  `resolve` remains audit-only and now says so explicitly.
+- **Repository author email.** `quilt config author.email <email>` sets a
+  repo-wide commit email while preserving each actor's author name.
+- **Commit completeness signal.** CLI warnings and JSON/MCP responses expose
+  whether unsafe/shared files were withheld (`completeForActor`).
+
+### Fixed
+
+- Hook snapshots are scoped to one tool invocation, so concurrent calls by the
+  same actor on one path cannot consume or overwrite each other's Pre image.
+- Actor-sensitive commits fail before reconcile when a checkout-global current
+  pointer conflicts with another dirty actor. `QUILT_SESSION` is honored.
+- Torn-symbol protection blocks split contiguous runs in one symbol while
+  allowing independent runs and different appended symbols to commit.
+- `commit --mine` settles operations it landed, preventing committed historical
+  lines from reclaiming a remaining actor's identical dirty occurrence.
+
 ## [0.4.5] - 2026-07-09
 
 ### Added

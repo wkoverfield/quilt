@@ -5,6 +5,7 @@ export interface ActiveContext {
   session: Session | null;
   actor: Actor | null;
   actorId: string | null;
+  source: "actor-env" | "session-env" | "current-pointer" | "none";
 }
 
 /**
@@ -15,10 +16,18 @@ export interface ActiveContext {
  */
 export function activeContext(store: Store): ActiveContext {
   const envActor = process.env.QUILT_ACTOR;
-  const sessionId = store.readCurrentSessionId();
+  const envSession = process.env.QUILT_SESSION;
+  const sessionId = envSession ?? store.readCurrentSessionId();
   const session = sessionId ? store.readSession(sessionId) : null;
 
   const actorId = envActor ?? session?.actorId ?? null;
   const actor = actorId ? store.findActor(actorId) : null;
-  return { session, actor, actorId };
+  const source = envActor
+    ? "actor-env"
+    : envSession
+      ? "session-env"
+      : session
+        ? "current-pointer"
+        : "none";
+  return { session, actor, actorId, source };
 }

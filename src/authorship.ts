@@ -10,10 +10,11 @@ import { appendFileSync, existsSync, lstatSync, readFileSync, renameSync, writeF
 import { createHash } from "node:crypto";
 import { resolve, sep } from "node:path";
 import { lineDiff } from "./diff.js";
-import { parseSymbols, ownKey, symbolLocator } from "./symbols.js";
+import { keyText, parseSymbols, ownKey, opKeyer, symbolLocator } from "./symbols.js";
 import { claimHeldByOther, claimHolders, reclaimDeadForEdit, refreshClaims } from "./claims.js";
 import { repoRelative } from "./paths.js";
 import type { Store } from "./state.js";
+import { headBlob } from "./git.js";
 
 /** A denial: another actor holds the code this edit would touch. */
 export interface EditDenied {
@@ -71,6 +72,9 @@ export interface AuthorshipEvent {
   intent?: string;
   /** true for a whole-file write/create. */
   whole?: boolean;
+  /** Ownership instances that landed in a commit and must no longer compete
+   * with still-dirty identical occurrences. */
+  settledKeys?: string[];
 }
 
 /** The symbol names an `old_string` edit touches, or [] when it can't be located. */
@@ -217,8 +221,52 @@ function foldEvents(byPath: Map<string, Map<string, string>>, events: Authorship
     // removal, and vice versa; no owner-guard is needed or correct here (a removal
     // by another actor still means the line is gone).
     for (const key of ev.removedKeys ?? []) m.delete(key);
+    for (const key of ev.settledKeys ?? []) m.delete(key);
   }
 }
+
+/** Settle the actor's currently-owned instances on committed paths before the
+ * post-commit reconcile reindexes the remaining HEAD -> worktree diff. */
+export function settleCommittedAuthorship(store: Store, actor: string, paths: string[]): number {
+  return store.withLock(() => {
+    const ownership = store.readOwnership();
+    const settledKeys: string[] = [];
+    for (const path of paths) {
+      const file = ownership.files[path];
+      if (!file) continue;
+      for (const [key, owner] of [...Object.entries(file.added), ...Object.entries(file.removed)]) {
+        if (owner === actor) settledKeys.push(`${path}${OWNERSHIP_PATH_SEP}${key}`);
+      }
+    }
+    if (settledKeys.length === 0) return 0;
+    const events = readAuthorship(store);
+    const byPath = new Map<string, string[]>();
+    for (const packed of settledKeys) {
+      const i = packed.indexOf(OWNERSHIP_PATH_SEP);
+      const path = packed.slice(0, i);
+      const key = packed.slice(i + OWNERSHIP_PATH_SEP.length);
+      (byPath.get(path) ?? byPath.set(path, []).get(path)!).push(key);
+    }
+    let offset = 0;
+    for (const [path, keys] of byPath) {
+      const ev: AuthorshipEvent = {
+        seq: readCheckpoint(store).count + events.length + offset++,
+        ts: new Date().toISOString(),
+        actor,
+        path,
+        added: [],
+        removed: [],
+        anchor: null,
+        preHash: null,
+        settledKeys: keys,
+      };
+      appendFileSync(store.paths.authorshipLog, JSON.stringify(ev) + "\n");
+    }
+    return settledKeys.length;
+  });
+}
+
+const OWNERSHIP_PATH_SEP = "\u0001";
 
 /** A compacted fold of old events: the log's authorship folded once, so the log
  * can be truncated and reconcile need not re-read all of history every time. */
@@ -360,32 +408,63 @@ interface KeyedDelta {
  * (`oldText`) — each is where that line physically lives — so the fold keys the
  * same way reconcile does. A whole write is all-adds against the new content.
  */
-function keyedDelta(path: string, oldText: string, newText: string, whole: boolean): KeyedDelta {
+function keyedDelta(path: string, oldText: string, newText: string, whole: boolean, headText: string | null): KeyedDelta {
   if (whole) {
     const loc = symbolLocator(path, newText);
     const added = splitLines(newText);
-    return { added, removed: [], addedKeys: added.map((t, i) => ownKey(loc(i + 1), t)), removedKeys: [] };
+    const keyOf = opKeyer(loc, () => "");
+    const addedKeys = lineDiff("", newText)
+      .map((op) => keyOf(op))
+      .filter((key): key is string => key !== null);
+    return { added, removed: [], addedKeys, removedKeys: [] };
   }
   const addLoc = symbolLocator(path, newText);
   const delLoc = symbolLocator(path, oldText);
+  // Canonical keys are coordinates in HEAD -> current worktree, not merely in
+  // this one edit payload. That is what lets actor B's identical second add be
+  // occurrence 2 while actor A's still-dirty first add remains occurrence 1.
+  const canonical = (text: string) => {
+    const addByNewLine = new Map<number, string>();
+    const delByOldLine = new Map<number, string>();
+    const keyOf = opKeyer(symbolLocator(path, text), symbolLocator(path, headText ?? ""));
+    let newLine = 0;
+    let oldLine = 0;
+    for (const op of lineDiff(headText ?? "", text)) {
+      const key = keyOf(op);
+      if (op.type === "eq") { newLine++; oldLine++; }
+      else if (op.type === "add") { newLine++; addByNewLine.set(newLine, key!); }
+      else { oldLine++; delByOldLine.set(oldLine, key!); }
+    }
+    return { addByNewLine, delByOldLine };
+  };
+  const beforeCanonical = canonical(oldText);
+  const afterCanonical = canonical(newText);
   const added: string[] = [];
   const removed: string[] = [];
   const addedKeys: string[] = [];
   const removedKeys: string[] = [];
   let newLine = 0;
   let oldLine = 0;
+  const keyOf = opKeyer(addLoc, delLoc);
   for (const op of lineDiff(oldText, newText)) {
+    const key = keyOf(op);
     if (op.type === "eq") {
       newLine++;
       oldLine++;
     } else if (op.type === "add") {
       newLine++;
       added.push(op.text);
-      addedKeys.push(ownKey(addLoc(newLine), op.text));
+      addedKeys.push(afterCanonical.addByNewLine.get(newLine) ?? key!);
     } else {
       oldLine++;
       removed.push(op.text);
-      removedKeys.push(ownKey(delLoc(oldLine), op.text));
+      // Removing an uncommitted addition deletes its existing add-operation
+      // key. Removing a HEAD line creates a canonical delete-operation key.
+      removedKeys.push(
+        beforeCanonical.addByNewLine.get(oldLine) ??
+          [...afterCanonical.delByOldLine.values()].find((k) => keyText(k) === op.text) ??
+          key!,
+      );
     }
   }
   return { added, removed, addedKeys, removedKeys };
@@ -412,7 +491,13 @@ export function recordAuthorship(
   const { actor, path, oldText, newText, intent, whole } = args;
   return store.withLock(() => {
     const events = readAuthorship(store);
-    const { added, removed, addedKeys, removedKeys } = keyedDelta(path, oldText, newText, !!whole);
+    const { added, removed, addedKeys, removedKeys } = keyedDelta(
+      path,
+      oldText,
+      newText,
+      !!whole,
+      headBlob(store.paths.repoRoot, path),
+    );
     const ev: AuthorshipEvent = {
       // seq spans the compacted history too, so it stays monotonic after a
       // truncation resets the log to empty.
