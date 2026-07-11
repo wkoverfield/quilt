@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { Store } from "./state.js";
 import type { Outcome } from "./types.js";
+import { keySymbol } from "./symbols.js";
 
 /** Normalize a target the same way claims do, so `./a#f` and `a#f` agree. */
 export function normalizeTarget(raw: string): string {
@@ -68,4 +69,47 @@ export function resolutions(store: Store): Outcome[] {
     .readOutcomes()
     .outcomes.filter((o) => o.kind === "resolved")
     .reverse();
+}
+
+/** Transfer currently dirty operations on a target from a stale/conflicting
+ * owner to the resolving actor. The override is persisted and audited; unlike
+ * the historical `resolve` record, it changes the next commit selection. */
+export function takeOwnership(
+  store: Store,
+  rawTarget: string,
+  fromActor: string,
+  toActor: string,
+): { transferred: number; target: string } {
+  const target = normalizeTarget(rawTarget);
+  const hash = target.indexOf("#");
+  const path = hash === -1 ? target : target.slice(0, hash);
+  const symbol = hash === -1 ? null : target.slice(hash + 1);
+  return store.withLock(() => {
+    const ownership = store.readOwnership();
+    const file = ownership.files[path];
+    if (!file) return { transferred: 0, target };
+    const transfers = ((ownership.transfers ??= {})[path] ??= {});
+    let transferred = 0;
+    for (const side of [file.added, file.removed]) {
+      for (const [key, owner] of Object.entries(side)) {
+        const conflict = ownership.conflicts[path]?.[key] ?? [];
+        if (symbol !== null && keySymbol(key) !== symbol) continue;
+        if (owner !== fromActor && !conflict.includes(fromActor)) continue;
+        side[key] = toActor;
+        transfers[key] = toActor;
+        if (ownership.conflicts[path]?.[key]) delete ownership.conflicts[path]![key];
+        transferred++;
+      }
+    }
+    store.writeOwnership(ownership);
+    store.appendLedger({
+      ts: new Date().toISOString(),
+      type: "ownership.transferred",
+      target,
+      fromActor,
+      toActor,
+      transferred,
+    });
+    return { transferred, target };
+  });
 }

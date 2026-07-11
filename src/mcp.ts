@@ -9,8 +9,8 @@ import { reconcile, buildModel } from "./engine.js";
 import { selectOwned, commitSelection } from "./commit.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, listWaiters } from "./claims.js";
-import { recordOutcome, openEscalations } from "./outcomes.js";
-import { applyAndRecordEdit, applyAndRecordWrite, capturedBySelf } from "./authorship.js";
+import { recordOutcome, openEscalations, takeOwnership } from "./outcomes.js";
+import { applyAndRecordEdit, applyAndRecordWrite, capturedBySelf, settleCommittedAuthorship } from "./authorship.js";
 import { VERSION } from "./version.js";
 import { dependencyWarnings } from "./push.js";
 import { repoRelative } from "./paths.js";
@@ -335,9 +335,12 @@ export async function runMcpServer(store: Store): Promise<void> {
             : {}),
         });
       }
-      const res = commitSelection(repoRoot, sel, actor, message);
+      const res = commitSelection(repoRoot, sel, actor, message, {
+        defaultAuthorEmail: store.readConfig()?.defaultAuthorEmail,
+      });
       let releasedClaims = 0;
       if (res.committed) {
+        settleCommittedAuthorship(store, actorId, [...sel.files.map((f) => f.path), ...sel.wholeFiles]);
         // commit_mine auto-releases the committed files' claims — SAY so in
         // the response, or the protocol's trailing `release` reads as a
         // failure (`released: 0` burned a status call for every single
@@ -358,6 +361,8 @@ export async function runMcpServer(store: Store): Promise<void> {
           ? {
               ...res,
               releasedClaims,
+              completeForActor: sel.completeForActor,
+              withheldFiles: sel.blockedFiles,
               wholeFiles: sel.wholeFiles,
               skippedBinary: sel.skippedBinary,
               skippedUnowned: sel.skippedUnowned,
@@ -486,13 +491,22 @@ export async function runMcpServer(store: Store): Promise<void> {
         actor: actorArg,
         target: z.string().describe("the clash that was resolved, e.g. pool.js#maxConnections"),
         note: z.string().optional().describe("what you did to reconcile it"),
+        takeFrom: z.string().optional().describe("also transfer dirty operations from this stale/conflicting actor to the resolver"),
       },
     },
-    async ({ actor, target, note }) => {
+    async ({ actor, target, note, takeFrom }) => {
       const actorId = resolveActor(actor, false) ?? "unknown";
+      const transfer = takeFrom && actorId !== "unknown"
+        ? takeOwnership(store, target, takeFrom, actorId)
+        : null;
       const o = recordOutcome(store, "resolved", actorId, target, note, new Date().toISOString());
       store.appendLedger({ ts: o.ts, type: "collision.resolved", target: o.target, actorId });
-      return ok({ resolved: o });
+      return ok({
+        resolved: o,
+        ownershipChanged: Boolean(transfer?.transferred),
+        transfer,
+        note: transfer ? undefined : "audit record only; ownership unchanged",
+      });
     },
   );
 

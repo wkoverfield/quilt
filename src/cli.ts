@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
-import { repoRoot, shortHead, headSha } from "./git.js";
+import { changedPaths, repoRoot, shortHead, headSha } from "./git.js";
 import { activeContext } from "./session.js";
 import { reconcile, buildModel } from "./engine.js";
 import { initSymbols } from "./symbols.js";
@@ -18,13 +18,14 @@ import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
 import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
-import { recordOutcome } from "./outcomes.js";
+import { recordOutcome, takeOwnership } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
 import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, parseCodexHookInput, codexActorId, runCodexHookPre, runCodexHookPost, type CodexHookInput } from "./hooks.js";
 import { detect, planSetup, applySetup, mergeHookSettings, appendCoordination, type SetupStep } from "./onboard.js";
-import { recordAuthorship, capturedBySelf } from "./authorship.js";
+import { recordAuthorship, capturedBySelf, readAuthorship, settleCommittedAuthorship } from "./authorship.js";
+import type { ActiveContext } from "./session.js";
 import { repoRelative } from "./paths.js";
 import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
@@ -437,6 +438,26 @@ function ownershipSignals(store: Store, actorId: string) {
   };
 }
 
+/** A checkout-global current-session pointer is safe for a solo tree, but in a
+ * fleet it can name whichever actor ran `start` last. Refuse actor-sensitive
+ * mutation before reconcile can assign uncaptured work to the wrong identity. */
+function requireUnambiguousMutation(store: Store, ctx: ActiveContext): void {
+  if (ctx.source !== "current-pointer" || !ctx.actorId) return;
+  const dirty = new Set(changedPaths(store.paths.repoRoot));
+  const actors = new Set<string>();
+  for (const f of Object.values(store.readOwnership().files)) {
+    for (const owner of [...Object.values(f.added), ...Object.values(f.removed)]) actors.add(owner);
+  }
+  for (const ev of readAuthorship(store)) if (dirty.has(ev.path)) actors.add(ev.actor);
+  actors.delete(ctx.actorId);
+  if (actors.size === 0) return;
+  fail(
+    `ambiguous actor in a shared checkout: current pointer says ${ctx.actorId}, ` +
+      `but dirty work is attributed to ${[...actors].sort().join(", ")}. ` +
+      `Re-run with --as <actor>, QUILT_ACTOR=<actor>, or QUILT_SESSION=<session>.`,
+  );
+}
+
 const program = new Command();
 program
   .name("quilt")
@@ -479,6 +500,24 @@ program
           pc.dim(" (adds the shared MCP server + coordination snippet).\n"),
       );
     }
+  });
+
+program
+  .command("config")
+  .description("Read or set repository Quilt configuration")
+  .argument("<key>", "configuration key (author.email)")
+  .argument("[value]", "new value; omit to read")
+  .action((key: string, value?: string) => {
+    const store = requireStore();
+    if (key !== "author.email") fail(`unknown config key: ${key}`);
+    const config = store.readConfig()!;
+    if (value === undefined) {
+      process.stdout.write((config.defaultAuthorEmail ?? "") + "\n");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) fail(`invalid email: ${value}`);
+    store.writeConfig({ ...config, defaultAuthorEmail: value });
+    process.stdout.write(pc.green("✓ ") + `Default author email set to ${value}.\n`);
   });
 
 program
@@ -884,6 +923,8 @@ program
           `  Note: ${selection.blockedFiles.join(", ")} also contain changes owned by others — only your hunks are shown.\n\n`,
         ),
       );
+    } else {
+      process.stdout.write(pc.dim("  Complete for this actor: no owned operations were withheld.\n"));
     }
     if (selection.skippedUnowned.length) {
       process.stdout.write(
@@ -909,6 +950,7 @@ program
     if (!ctx.actorId) {
       fail("no active actor. Set QUILT_ACTOR=<id> (or run `quilt start --actor <id>`).");
     }
+    requireUnambiguousMutation(store, ctx);
     if (!ctx.actor) {
       // An explicit QUILT_ACTOR that never registered (it only claimed, or its
       // edits were captured under adoption) is a declared identity, not an
@@ -952,6 +994,7 @@ program
     if (opts.dryRun) {
       const res = commitSelection(root, selection, ctx.actor!, opts.message, {
         dryRun: true,
+        defaultAuthorEmail: store.readConfig()?.defaultAuthorEmail,
       });
       process.stdout.write("\n" + renderPreview(selection.patch) + "\n\n");
       if (res.reason && res.reason !== "dry-run") {
@@ -977,8 +1020,16 @@ program
       return;
     }
 
-    const res = commitSelection(root, selection, ctx.actor!, opts.message);
+    const res = commitSelection(root, selection, ctx.actor!, opts.message, {
+      defaultAuthorEmail: store.readConfig()?.defaultAuthorEmail,
+    });
     if (!res.committed) fail(res.reason ?? "commit failed");
+
+    settleCommittedAuthorship(
+      store,
+      ctx.actorId!,
+      [...selection.files.map((f) => f.path), ...selection.wholeFiles],
+    );
 
     // The work landed, so the reservations on it are spent — release them, as
     // the MCP commit_mine already does, so the fleet view doesn't keep showing
@@ -1029,7 +1080,7 @@ program
     }
     if (selection.blockedFiles.length) {
       process.stdout.write(
-        pc.dim(`  Left untouched in shared files: ${selection.blockedFiles.join(", ")}\n`),
+        pc.yellow(`  ⚠ Incomplete for this actor; withheld unsafe/shared files: ${selection.blockedFiles.join(", ")}\n`),
       );
     }
   });
@@ -1326,16 +1377,28 @@ program
   .description("Mark a collision as sewn/handled — closes its 'Needs you' flag and records the trail")
   .argument("<target>", "the clash that was resolved, e.g. pool.js#maxConnections")
   .option("--note <text>", "what was done to reconcile it")
-  .action((target: string, opts: { note?: string }) => {
+  .option("--take", "also transfer the target's dirty operations to this actor")
+  .option("--from <actor>", "actor whose stale/conflicting ownership to transfer")
+  .action((target: string, opts: { note?: string; take?: boolean; from?: string }) => {
     const store = requireStore();
     const ctx = activeContext(store);
     const actor = ctx.actorId ?? "unknown";
+    if (opts.take) {
+      if (!ctx.actorId) fail("--take needs an explicit actor (--as or QUILT_ACTOR)");
+      if (!opts.from) fail("--take requires --from <actor>");
+      requireUnambiguousMutation(store, ctx);
+      reconcile(store, ctx.actorId);
+      const transfer = takeOwnership(store, target, opts.from, ctx.actorId);
+      if (transfer.transferred === 0) fail(`no dirty operations on ${transfer.target} owned/conflicted with ${opts.from}`);
+      process.stdout.write(pc.green("✓ ") + `transferred ${transfer.transferred} operation(s) from ${opts.from} to ${ctx.actorId}\n`);
+    }
     const o = recordOutcome(store, "resolved", actor, target, opts.note, nowIso());
     store.appendLedger({ ts: o.ts, type: "collision.resolved", target: o.target, actorId: actor });
     process.stdout.write(
       pc.green("✓ ") + `resolved ${pc.bold(o.target)}` +
         (o.note ? pc.dim(` — ${o.note}`) : "") + "\n",
     );
+    if (!opts.take) process.stdout.write(pc.dim("  Audit record only; ownership was unchanged. Use --take --from <actor> to transfer it.\n"));
   });
 
 program
@@ -1530,8 +1593,8 @@ function runCodexHook(kind: "pre" | "post", codex: CodexHookInput): void {
     if (!g.store.findActor(id)) {
       g.store.upsertActor({ id, type: "agent", displayName: id, createdAt: nowIso() });
     }
-    if (kind === "pre") runCodexHookPre(g.store, id, g.files);
-    else runCodexHookPost(g.store, id, g.files);
+    if (kind === "pre") runCodexHookPre(g.store, id, g.files, codex.invocationId);
+    else runCodexHookPost(g.store, id, g.files, codex.invocationId);
   }
 }
 
@@ -1610,6 +1673,16 @@ program
         (ctx.session ? pc.dim(`  session ${ctx.session.id}`) : "") +
         "\n",
     );
+    if (ctx.source === "current-pointer") {
+      const dirtyActors = new Set<string>();
+      for (const f of Object.values(store.readOwnership().files)) {
+        for (const owner of [...Object.values(f.added), ...Object.values(f.removed)]) dirtyActors.add(owner);
+      }
+      dirtyActors.delete(ctx.actorId);
+      if (dirtyActors.size) {
+        process.stdout.write(pc.yellow(`⚠ checkout-global identity; other dirty actors: ${[...dirtyActors].join(", ")} — use --as before mutating\n`));
+      }
+    }
   });
 
 program

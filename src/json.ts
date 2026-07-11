@@ -67,6 +67,7 @@ export function mineJson(selection: Selection, includePatch: boolean) {
     wholeFiles: selection.wholeFiles,
     skippedBinary: selection.skippedBinary,
     skippedUnowned: selection.skippedUnowned,
+    completeForActor: selection.completeForActor,
     ...(includePatch ? { patch: selection.patch } : {}),
   };
 }

@@ -392,8 +392,7 @@ function editDistance(a: string, b: string, cap: number): number {
   return Math.min(prev[b.length] ?? cap, cap);
 }
 
-/** Separates the symbol scope from the line text in an ownership key. NUL can't
- * appear in a source line, so it's an unambiguous delimiter. */
+/** Separates fields in an ownership key. NUL can't appear in a source line. */
 export const OWN_KEY_SEP = "\u0000";
 
 /**
@@ -402,14 +401,21 @@ export const OWN_KEY_SEP = "\u0000";
  * different symbols (e.g. `  return null;` in two functions) from collapsing to
  * one owner. Top-level lines use an empty scope, so they key by text as before.
  */
-export function ownKey(symbol: string, text: string): string {
-  return symbol + OWN_KEY_SEP + text;
+export function ownKey(symbol: string, text: string, occurrence = 1): string {
+  return symbol + OWN_KEY_SEP + occurrence + OWN_KEY_SEP + text;
 }
 
 /** The line text back out of an ownership key (drops the symbol scope). */
 export function keyText(key: string): string {
+  const first = key.indexOf(OWN_KEY_SEP);
+  if (first === -1) return key;
+  const second = key.indexOf(OWN_KEY_SEP, first + 1);
+  return second === -1 ? key.slice(first + 1) : key.slice(second + 1);
+}
+
+export function keySymbol(key: string): string {
   const i = key.indexOf(OWN_KEY_SEP);
-  return i === -1 ? key : key.slice(i + 1);
+  return i === -1 ? "" : key.slice(0, i);
 }
 
 /**
@@ -463,6 +469,7 @@ export function opKeyer(
 ): (op: { type: "eq" | "add" | "del"; text: string }) => string | null {
   let newLine = newStart - 1;
   let oldLine = oldStart - 1;
+  const seen = new Map<string, number>();
   return (op) => {
     if (op.type === "eq") {
       newLine++;
@@ -471,10 +478,18 @@ export function opKeyer(
     }
     if (op.type === "add") {
       newLine++;
-      return ownKey(addLoc(newLine), op.text);
+      const symbol = addLoc(newLine);
+      const base = `add${OWN_KEY_SEP}${symbol}${OWN_KEY_SEP}${op.text}`;
+      const occurrence = (seen.get(base) ?? 0) + 1;
+      seen.set(base, occurrence);
+      return ownKey(symbol, op.text, occurrence);
     }
     oldLine++;
-    return ownKey(delLoc(oldLine), op.text);
+    const symbol = delLoc(oldLine);
+    const base = `del${OWN_KEY_SEP}${symbol}${OWN_KEY_SEP}${op.text}`;
+    const occurrence = (seen.get(base) ?? 0) + 1;
+    seen.set(base, occurrence);
+    return ownKey(symbol, op.text, occurrence);
   };
 }
 

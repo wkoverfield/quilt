@@ -10,6 +10,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
 | `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator (or, run from a non-repo directory that contains repos, wire that whole workspace: hooks + snippet at the root, full wiring in each child repo): the shared MCP server in `.mcp.json` (and `.cursor/mcp.json` when a `.cursor/` dir exists), the coordination snippet in `CLAUDE.md` (and an existing `AGENTS.md`), and the native-edit capture hooks in `.claude/settings.json` (idempotent). |
+| `quilt config author.email [email]` | Read or set the repository-default Git author email. Actor names remain distinct. |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. Optional — agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. Scopes only the CLI commands run in your terminal; it never binds other agents' captured edits (the pointer is checkout-global, capture identity is per-edit). |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
@@ -18,7 +19,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt conflicts [--json]` | Show shared changes: same-line clashes vs adjacent edits that commit cleanly. |
 | `quilt undo <actor> [--dry-run]` | Back out one actor's uncommitted changes, leaving everyone else's untouched. |
 | `quilt escalate <target> [--reason]` | Flag a collision agents can't reconcile for a human (shows under "Needs you"). |
-| `quilt resolve <target> [--note]` | Mark a collision sewn or handled. Clears its "Needs you" flag, records the trail. |
+| `quilt resolve <target> [--note] [--take --from <actor>]` | Mark a collision handled. Plain resolve is audit-only; `--take` transfers the named actor's dirty operations to the resolver. |
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [paths...] [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. Path args (files or directory prefixes) scope the preview. |
 | `quilt commit --mine [paths...] -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. Path args are a hard allow-list: name a file or directory and nothing else rides along. When another actor holds a live claim, a NEW file you never claimed or edited is left out loudly (`skippedUnowned`): claim it, or pass `--include-unclaimed` if it's yours. |
@@ -30,7 +31,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt whoami` | Show the active actor and session. |
 | `quilt end` | End the active session. |
 
-A global `--as <id>` sets your actor for any command (the per-command form of `QUILT_ACTOR=<id>`). An explicit `QUILT_ACTOR` env var wins over `--as`.
+A global `--as <id>` sets your actor for any command (the per-command form of `QUILT_ACTOR=<id>`). An explicit `QUILT_ACTOR` env var wins over `--as`; `QUILT_SESSION=<session>` pins a live session. Actor-sensitive mutation refuses a checkout-global pointer when another actor owns dirty work.
 
 Run `quilt --help` or `quilt <command> --help` for the full flag list.
 
@@ -96,11 +97,11 @@ stay in the tree), applies that patch to a throwaway temporary index
 `update-ref`), and produces a normal Git commit. Your real index and the working
 tree are never rewritten; other actors' changes stay exactly where they were.
 
-Attribution keys on symbol scope plus line content. Blank lines and lone
-braces/punctuation are ignored so they don't false-conflict. Identical lines in
-different functions are kept distinct; two identical lines in the same function
-can still collapse, which is rare and conservative by design. Binary files are
-never attributed or committed. Quilt is POSIX-first; CRLF and `core.autocrlf`
+Attribution keys each changed-operation instance by add/remove side, symbol
+scope, line content, and occurrence. Blank lines and lone braces/punctuation
+are ignored so they don't false-conflict. Identical lines in different functions
+or repeated inside one function remain distinct. Binary files are never
+attributed or committed. Quilt is POSIX-first; CRLF and `core.autocrlf`
 repos on Windows aren't handled yet.
 
 ## State layout

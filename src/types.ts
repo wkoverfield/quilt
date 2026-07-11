@@ -24,6 +24,7 @@ export interface Session {
 export interface Config {
   version: number;
   createdAt: string;
+  defaultAuthorEmail?: string;
 }
 
 export interface ActorsFile {
@@ -57,6 +58,9 @@ export interface OwnershipFile {
    * relPath -> { symbol\0text -> [actorId, ...] }
    */
   conflicts: Record<string, Record<string, string[]>>;
+  /** Explicit, audited recovery overrides. Applied after captured-ledger
+   * ownership so a human resolution actually changes committability. */
+  transfers?: Record<string, Record<string, string>>;
 }
 
 /** Last-observed content the reconciler diffs against, keyed by relPath. */

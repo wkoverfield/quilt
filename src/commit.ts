@@ -38,6 +38,9 @@ export interface Selection {
    * them (inference alone made them "owned") — surfaced so a default commit
    * never silently attaches a file the actor didn't touch. */
   skippedUnowned: string[];
+  /** False when actor-owned work was withheld because the file could not be
+   * split safely. Foreign adjacent work does not make a commit incomplete. */
+  completeForActor: boolean;
   hasMixed: boolean;
   totalAdded: number;
   totalRemoved: number;
@@ -101,8 +104,6 @@ function buildOwnedText(
   // lines cannot be partially committed — the result is a construct missing
   // some of its lines (the committed-syntax-error failure). Track the symbol
   // scope (the key's prefix) of every non-trivial changed line on each side.
-  const includedScopes = new Set<string>();
-  const excludedScopes = new Set<string>();
 
   // Pass 1 — decide every op. Non-trivial changed lines decide by owner.
   // Trivial lines (braces, blanks — never owned) are left undecided here and
@@ -112,6 +113,7 @@ function buildOwnedText(
   // lines silently vanished from committed files in the pilot.
   const decisions: (boolean | null)[] = new Array(ops.length).fill(null);
   const trivial: boolean[] = new Array(ops.length).fill(false);
+  const scopes: string[] = new Array(ops.length).fill("");
   ops.forEach((op, i) => {
     const key = keyOf(op); // every op, so the line cursor stays aligned
     if (op.type === "eq") return;
@@ -130,8 +132,7 @@ function buildOwnedText(
       hasOther = true;
     }
     decisions[i] = include;
-    const scope = key ? key.slice(0, key.indexOf(OWN_KEY_SEP)) : "";
-    if (scope) (include ? includedScopes : excludedScopes).add(scope);
+    scopes[i] = key ? key.slice(0, key.indexOf(OWN_KEY_SEP)) : "";
   });
 
   // Pass 2 — resolve trivial lines within each contiguous change run: nearest
@@ -196,7 +197,26 @@ function buildOwnedText(
     }
   });
 
-  const torn = [...includedScopes].some((s) => excludedScopes.has(s));
+  // A construct is torn only when one CONTIGUOUS change run is split between
+  // actors. V1 treated any two edits anywhere in the same function as a tear,
+  // which made independent operation instances in one symbol impossible to
+  // commit (#100). Separate runs already carry unchanged structural context
+  // and are safe to split; a mixed run remains fail-closed.
+  let torn = false;
+  const runIncludedScopes = new Set<string>();
+  const runExcludedScopes = new Set<string>();
+  const finishTearRun = () => {
+    if ([...runIncludedScopes].some((scope) => runExcludedScopes.has(scope))) torn = true;
+    runIncludedScopes.clear();
+    runExcludedScopes.clear();
+  };
+  ops.forEach((op, i) => {
+    if (op.type === "eq") { finishTearRun(); return; }
+    if (trivial[i]) return;
+    if (decisions[i] === true) runIncludedScopes.add(scopes[i]!);
+    else runExcludedScopes.add(scopes[i]!);
+  });
+  finishTearRun();
   if (!changed) return { added: 0, removed: 0, hasOther, hasUnclaimed, torn };
   // The actor's changes delete the file entirely.
   if (worktreeText === null && out.length === 0) {
@@ -361,6 +381,7 @@ export function selectOwned(
     wholeFiles,
     skippedBinary,
     skippedUnowned,
+    completeForActor: blockedFiles.length === 0,
     hasMixed,
     totalAdded,
     totalRemoved,
@@ -384,7 +405,7 @@ export function commitSelection(
   selection: Selection,
   actor: Actor,
   message: string,
-  opts: { dryRun?: boolean } = {},
+  opts: { dryRun?: boolean; defaultAuthorEmail?: string } = {},
 ): CommitResult {
   if (!selection.patch.trim() && selection.wholeFiles.length === 0) {
     return { committed: false, reason: "no owned changes to commit" };
@@ -446,7 +467,11 @@ export function commitSelection(
       return { committed: false, reason: "dry-run" };
     }
 
-    const email = actor.email ?? `${actor.id}@quilt.local`;
+    const repoEmail = git(["config", "--get", "user.email"], {
+      cwd: repoRoot,
+      check: false,
+    }).stdout.trim();
+    const email = actor.email ?? opts.defaultAuthorEmail ?? (repoEmail || `${actor.id}@quilt.local`);
     // Author AND committer are the actor, so `git log --format='%an / %cn'`
     // attributes the commit to the actor rather than the local git config.
     const identityEnv: Record<string, string> = {

@@ -1,4 +1,4 @@
-# Backlog: native hook capture for OpenAI Codex
+# Native hook capture for OpenAI Codex — shipped design record
 
 Status: **capture SHIPPED in 0.4.5** (2026-07-08); this doc is the recon +
 spike record. Prevention (deny) parity remains open — verify Codex's deny
@@ -34,12 +34,11 @@ The multi-file `apply_patch` is the real design wrinkle: one hook event can touc
 N files, so snapshot/diff/attribute must loop over the files parsed out of the
 patch blob, not assume a single `file_path`.
 
-## Open unknown — resolve before building
+## Historical unknown — resolved before shipping
 
-The exact JSON of a real Codex `apply_patch` hook payload is not documented (the
-patch structure inside `tool_input.command`). **First step: land a throwaway hook
-that logs one real payload from a live Codex `apply_patch`**, then design the
-parser against ground truth. Do not design the patch parser from the docs alone.
+The exact JSON of a real Codex `apply_patch` hook payload was not documented.
+The build first logged real payloads from live `apply_patch` calls; the resulting
+ground-truth samples remain under `docs/codex-payload-samples/`.
 
 ## Deny/prevention is a separate, later question
 

@@ -140,6 +140,15 @@ quilt preview --mine             # exact patch that would be committed
 quilt commit --mine -m "fix auth redirect"
 ```
 
+In a shared shell, make the committer explicit (`quilt --as auth-agent commit
+--mine ...`). Quilt refuses a checkout-global session identity when the dirty
+tree shows another actor. If a deploy provider requires a recognized Git email,
+set one once while keeping actor names distinct:
+
+```bash
+quilt config author.email you@example.com
+```
+
 `quilt fleet` shows the whole picture: every actor, their claims, and anything
 that needs a human. See [docs/reference.md](docs/reference.md) for the full
 command list.
