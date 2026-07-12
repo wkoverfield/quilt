@@ -1,8 +1,9 @@
 # quilt.dev site
 
 The static storefront: landing page (`index.html`), the worldview argument
-(`why.html`), benchmark results (`bench.html`), and `llms.txt`. The landing
-stays a short product page; depth lives on the other pages.
+(`why.html`), and `llms.txt`. The landing stays a short product page; the
+bench numbers appear on it as the proof strip, linking to
+`bench/RESULTS.md` in the repo (no separate benchmarks page by design).
 
 Design: the "Workshop" theme. Warm paper field (Gambetta display serif +
 Switzer body, both Fontshare; IBM Plex Mono for terminal content), with the
@@ -37,9 +38,9 @@ gets its own PostHog project later, swap the `KEY` constant in `index.html`.
 
 ## Maintenance notes
 
-- The bench numbers on `index.html` and `bench.html` mirror
+- The bench numbers on `index.html` mirror
   [`bench/RESULTS.md`](../bench/RESULTS.md). When a bench run changes the
-  numbers, update all three together.
+  numbers, update both together.
 - `assets/ui.png` is a `quilt ui` capture against a fixture repo (same
   image as `examples/ui.png` from the quilt ui branch, PR #105). It is
   not shown on the landing page by design; it's kept here for future
