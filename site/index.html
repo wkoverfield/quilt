@@ -57,19 +57,6 @@
   nav .links a:hover { color: var(--ink); text-decoration: none; }
   nav .links a[aria-current] { color: var(--ink); }
   @media (max-width: 860px) { nav .links { gap: 15px; font-size: 13.5px; } }
-  .menu-btn { display: none; margin-left: auto; background: none; border: 1px solid var(--stitch); border-radius: 8px;
-              padding: 7px 10px; cursor: pointer; color: var(--ink); align-items: center; }
-  .menu-btn svg { display: block; }
-  @media (max-width: 640px) {
-    .menu-btn { display: flex; }
-    nav .links { display: none; }
-    .navbar.open nav .links { display: flex; position: absolute; top: 100%; left: 0; right: 0;
-      flex-direction: column; align-items: stretch; gap: 0; padding: 6px 24px 14px;
-      background: var(--paper);
-      border-bottom: 1px dashed var(--stitch); box-shadow: 0 18px 40px -20px rgba(38,32,25,.35); }
-    .navbar.open nav .links a { padding: 11px 2px; border-top: 1px dashed var(--stitch); }
-    .navbar.open nav .links a.gh { border: none; border-top: 1px dashed var(--stitch); border-radius: 0; padding: 11px 2px; }
-  }
   .gh { border: 1px solid var(--stitch); border-radius: 8px; padding: 6px 13px; color: var(--ink) !important; transition: border-color .15s var(--ease); }
   .gh:hover { border-color: var(--ink); }
   section, .teams { scroll-margin-top: 76px; }
@@ -160,7 +147,23 @@
   .step p { color: var(--dim); font-size: 15px; margin: 0; }
   .step code { color: var(--ink); font-size: 13.5px; }
 
-  .teams { margin-top: 108px; border: 1px dashed var(--stitch); border-radius: 18px; background: var(--paper2);
+
+  .whygrid { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; align-items: center; }
+  @media (max-width: 900px) { .whygrid { grid-template-columns: 1fr; gap: 28px; } }
+  .whygrid > * { min-width: 0; }
+  .whymore { margin: 16px 0 0; font-size: 14.5px; }
+  .receipt { border: 1px dashed var(--stitch); border-radius: 14px; background: var(--card); padding: 20px 22px; }
+  .receipt .rt { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 10px; }
+  .receipt .hd { display: flex; font-family: var(--mono); font-size: 11px; color: var(--faint); padding-bottom: 7px; }
+  .receipt .hd span:first-child { flex: 1; }
+  .receipt .hd .cols, .receipt .row .cols { display: grid; grid-template-columns: 1fr 1.2fr; gap: 12px; flex: 1.6; }
+  .receipt .hd .cols span:last-child { color: var(--thread-ink); }
+  .receipt .row { display: flex; gap: 12px; padding: 8px 0; border-top: 1px dashed var(--border); font-size: 13.5px; }
+  .receipt .row > span:first-child { color: var(--dim); flex: 1; }
+  .receipt .wt { color: var(--coral-ink); }
+  .receipt .q { color: var(--green-ink); }
+
+  .teams { margin-top: 8px; border: 1px dashed var(--stitch); border-radius: 18px; background: var(--paper2);
            padding: 44px 48px; display: grid; grid-template-columns: 1.1fr .9fr; gap: 44px; align-items: center; }
   .teams > * { min-width: 0; }
   @media (max-width: 900px) { .teams { grid-template-columns: 1fr; padding: 32px 26px; } }
@@ -205,15 +208,7 @@
         </span>
         Quilt
       </a>
-      <button class="menu-btn" id="menu-btn" aria-label="menu" aria-expanded="false" aria-controls="nav-links">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M2 5h12M2 11h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <div class="links" id="nav-links">
-        <a href="why.html">Why</a>
-        <a href="bench.html">Numbers</a>
-        <a href="#teams">Teams</a>
+      <div class="links">
         <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
         <a class="gh" href="https://github.com/wkoverfield/quilt">GitHub</a>
       </div>
@@ -232,7 +227,7 @@
     </p>
     <div class="ctas">
       <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
-      <a class="btn ghost" href="why.html">Why not worktrees?</a>
+      <a class="btn ghost" href="#why">Why not worktrees?</a>
     </div>
     <div class="install">
       <span class="p">$</span>
@@ -291,7 +286,30 @@
 
   </section>
 
-  <section id="teams" class="reveal" style="padding-top:0">
+
+  <section id="why" class="reveal">
+    <div class="whygrid">
+      <div>
+        <h2>Worktrees isolate. They don't coordinate.</h2>
+        <p class="sub">
+          Every worktree is another install, build, and dev server, and its agent is blind
+          to everyone else's in-flight work, so collisions just wait for merge time.
+          Quilt keeps the whole fleet on one checkout, accounting for each other as they go.
+        </p>
+        <p class="whymore"><a href="why.html">The full argument, including the sharp edges</a></p>
+      </div>
+      <div class="receipt" aria-label="comparison: worktree per agent versus one checkout with Quilt">
+        <div class="rt">The running tab, per agent added</div>
+        <div class="hd"><span></span><div class="cols"><span>worktree each</span><span>one checkout + quilt</span></div></div>
+        <div class="row"><span>setup</span><div class="cols"><div class="wt">install + build, × N</div><div class="q">none</div></div></div>
+        <div class="row"><span>sees others' work</span><div class="cols"><div class="wt">no</div><div class="q">yes, live</div></div></div>
+        <div class="row"><span>collisions</span><div class="cols"><div class="wt">at merge</div><div class="q">prevented, or surfaced now</div></div></div>
+        <div class="row"><span>per-agent commits</span><div class="cols"><div class="wt">after a merge</div><div class="q">always</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="teams" class="reveal">
     <div class="teams">
       <div>
         <h2>Quilt for teams</h2>
@@ -382,20 +400,6 @@
     new IntersectionObserver(function (entries) {
       navbar.classList.toggle("scrolled", !entries[0].isIntersecting);
     }).observe(sentinel);
-  var menuBtn = document.getElementById("menu-btn");
-  if (menuBtn) {
-    var bar = document.getElementById("navbar");
-    menuBtn.addEventListener("click", function () {
-      var open = bar.classList.toggle("open");
-      menuBtn.setAttribute("aria-expanded", String(open));
-    });
-    bar.querySelectorAll(".links a").forEach(function (a) {
-      a.addEventListener("click", function () {
-        bar.classList.remove("open");
-        menuBtn.setAttribute("aria-expanded", "false");
-      });
-    });
-  }
   } else {
     document.querySelectorAll(".reveal").forEach(function (el) { el.classList.add("in"); });
   }

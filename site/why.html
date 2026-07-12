@@ -49,19 +49,6 @@
   .gh { border: 1px solid var(--stitch); border-radius: 8px; padding: 6px 13px; color: var(--ink) !important; }
   .gh:hover { border-color: var(--ink); }
   @media (max-width: 860px) { nav .links { gap: 15px; font-size: 13.5px; } }
-  .menu-btn { display: none; margin-left: auto; background: none; border: 1px solid var(--stitch); border-radius: 8px;
-              padding: 7px 10px; cursor: pointer; color: var(--ink); align-items: center; }
-  .menu-btn svg { display: block; }
-  @media (max-width: 640px) {
-    .menu-btn { display: flex; }
-    nav .links { display: none; }
-    .navbar.open nav .links { display: flex; position: absolute; top: 100%; left: 0; right: 0;
-      flex-direction: column; align-items: stretch; gap: 0; padding: 6px 24px 14px;
-      background: var(--paper);
-      border-bottom: 1px dashed var(--stitch); box-shadow: 0 18px 40px -20px rgba(38,32,25,.35); }
-    .navbar.open nav .links a { padding: 11px 2px; border-top: 1px dashed var(--stitch); }
-    .navbar.open nav .links a.gh { border: none; border-top: 1px dashed var(--stitch); border-radius: 0; padding: 11px 2px; }
-  }
   .eyebrow { font-family: var(--mono); font-size: 13px; color: var(--thread-ink); margin: 0 0 16px; }
   h1 { font-family: var(--display); font-weight: 600; letter-spacing: -.01em; }
   h2 { font-family: var(--display); font-weight: 600; }
@@ -112,15 +99,7 @@
         </span>
         Quilt
       </a>
-      <button class="menu-btn" id="menu-btn" aria-label="menu" aria-expanded="false" aria-controls="nav-links">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-          <path d="M2 5h12M2 11h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-        </svg>
-      </button>
-      <div class="links" id="nav-links">
-        <a href="why.html" aria-current="page">Why</a>
-        <a href="bench.html">Numbers</a>
-        <a href="index.html#teams">Teams</a>
+      <div class="links">
         <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
         <a class="gh" href="https://github.com/wkoverfield/quilt">GitHub</a>
       </div>
@@ -223,20 +202,6 @@
   new IntersectionObserver(function (entries) {
     navbar.classList.toggle("scrolled", !entries[0].isIntersecting);
   }).observe(sentinel);
-  var menuBtn = document.getElementById("menu-btn");
-  if (menuBtn) {
-    var bar = document.getElementById("navbar");
-    menuBtn.addEventListener("click", function () {
-      var open = bar.classList.toggle("open");
-      menuBtn.setAttribute("aria-expanded", String(open));
-    });
-    bar.querySelectorAll(".links a").forEach(function (a) {
-      a.addEventListener("click", function () {
-        bar.classList.remove("open");
-        menuBtn.setAttribute("aria-expanded", "false");
-      });
-    });
-  }
 })();
 </script>
 </body>
