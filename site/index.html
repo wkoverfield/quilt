@@ -37,7 +37,12 @@
   code, .mono { font-family: var(--mono); }
   ::selection { background: color-mix(in srgb, var(--thread) 30%, transparent); }
 
-  nav { display: flex; align-items: center; gap: 26px; padding: 20px 0; }
+  .navbar { position: sticky; top: 0; z-index: 50; border-bottom: 1px dashed transparent;
+            background: color-mix(in srgb, var(--bg) 72%, transparent);
+            -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+            transition: border-color .2s var(--ease); }
+  .navbar.scrolled { border-bottom-color: var(--border); }
+  nav { display: flex; align-items: center; gap: 26px; padding: 14px 0; }
   .mark { display: grid; grid-template-columns: 9px 9px; gap: 2.5px; }
   .mark i { width: 9px; height: 9px; border-radius: 2.5px; }
   .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 19px; color: var(--ink); }
@@ -45,9 +50,12 @@
   nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14px; align-items: center; }
   nav .links a { color: var(--dim); transition: color .15s var(--ease); }
   nav .links a:hover { color: var(--ink); text-decoration: none; }
-  @media (max-width: 760px) { nav .links a:not(.gh) { display: none; } }
+  nav .links a[aria-current] { color: var(--ink); }
+  @media (max-width: 760px) { nav .links a.hide-sm { display: none; } nav .links { gap: 16px; } }
+  @media (max-width: 430px) { nav .links a:not(.gh) { display: none; } }
   .gh { border: 1px solid var(--border); border-radius: 8px; padding: 6px 13px; color: var(--ink) !important; transition: border-color .15s var(--ease); }
   .gh:hover { border-color: var(--faint); }
+  section, .teams { scroll-margin-top: 76px; }
 
   .hero { text-align: center; padding: 84px 0 0; }
   .eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--thread-ink); margin: 0 0 22px; }
@@ -169,23 +177,27 @@
 </style>
 </head>
 <body>
+<div class="navbar" id="navbar">
+  <div class="wrap">
+    <nav>
+      <a class="brand" href="/">
+        <span class="mark" aria-hidden="true">
+          <i style="background:var(--amber)"></i><i style="background:var(--green)"></i>
+          <i style="background:var(--blue)"></i><i style="background:var(--magenta)"></i>
+        </span>
+        Quilt
+      </a>
+      <div class="links">
+        <a href="why.html">Why</a>
+        <a href="bench.html">Numbers</a>
+        <a class="hide-sm" href="#teams">Teams</a>
+        <a class="hide-sm" href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
+        <a class="gh" href="https://github.com/wkoverfield/quilt">GitHub</a>
+      </div>
+    </nav>
+  </div>
+</div>
 <div class="wrap">
-  <nav>
-    <a class="brand" href="/">
-      <span class="mark" aria-hidden="true">
-        <i style="background:var(--amber)"></i><i style="background:var(--green)"></i>
-        <i style="background:var(--blue)"></i><i style="background:var(--magenta)"></i>
-      </span>
-      Quilt
-    </a>
-    <div class="links">
-      <a href="why.html">Why</a>
-      <a href="bench.html">Numbers</a>
-      <a href="#teams">Teams</a>
-      <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
-      <a class="gh" href="https://github.com/wkoverfield/quilt">GitHub</a>
-    </div>
-  </nav>
 
   <header class="hero">
     <p class="eyebrow">Actor-owned patches for Git</p>
@@ -349,6 +361,15 @@
       });
     }, { rootMargin: "0px 0px -8% 0px" });
     document.querySelectorAll(".reveal").forEach(function (el) { io.observe(el); });
+
+    // Hairline under the sticky nav once the page scrolls: a sentinel above
+    // the fold flips it, so there's no scroll listener to throttle.
+    var navbar = document.getElementById("navbar");
+    var sentinel = document.createElement("div");
+    navbar.parentNode.insertBefore(sentinel, navbar.nextSibling);
+    new IntersectionObserver(function (entries) {
+      navbar.classList.toggle("scrolled", !entries[0].isIntersecting);
+    }).observe(sentinel);
   } else {
     document.querySelectorAll(".reveal").forEach(function (el) { el.classList.add("in"); });
   }
