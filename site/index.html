@@ -61,12 +61,6 @@
   .gh:hover { border-color: var(--ink); }
   section, .teams { scroll-margin-top: 76px; }
 
-  /* nine-patch ornament: the brand mark at content scale */
-  .qblock { display: grid; grid-template-columns: repeat(3, 9px); gap: 2.5px; margin-bottom: 26px; }
-  .qblock i { width: 9px; height: 9px; border-radius: 2px; background: var(--paper2); border: 1px solid var(--stitch); }
-  .qblock i.c1 { background: var(--coral); border: none; } .qblock i.c2 { background: var(--green); border: none; }
-  .qblock i.c3 { background: var(--blue); border: none; } .qblock i.c4 { background: var(--magenta); border: none; }
-  .qblock i.c5 { background: var(--thread); border: none; }
 
   .hero { padding: 78px 0 0; }
   .eyebrow { font-family: var(--mono); font-size: 13px; color: var(--thread-ink); margin: 0 0 18px; }
@@ -219,7 +213,6 @@
 <div class="wrap">
 
   <header class="hero">
-    <div class="qblock" aria-hidden="true"><i class="c1"></i><i></i><i class="c2"></i><i></i><i class="c5"></i><i></i><i class="c3"></i><i></i><i class="c4"></i></div>
     <p class="eyebrow">actor-owned patches for git</p>
     <h1>One repo. Every agent. Clean commits.</h1>
     <p class="lede">
