@@ -2,9 +2,18 @@
 
 The static storefront: landing page (`index.html`), the worldview argument
 (`why.html`), benchmark results (`bench.html`), and `llms.txt`. The landing
-stays a short product page; depth lives on the other pages. No build step, no framework, no dependencies;
-every page is self-contained HTML with inline CSS/JS. Fonts load from Google
-Fonts; everything else is local.
+stays a short product page; depth lives on the other pages.
+
+Design: the "Workshop" theme. Warm paper field (Gambetta display serif +
+Switzer body, both Fontshare; IBM Plex Mono for terminal content), with the
+loom, terminal snippets, and repro blocks kept as dark objects resting on the
+light page. Per-agent patch colors are shared with the `quilt ui` dashboard.
+Light-background text uses the darker `-ink` color cuts (all AA-checked);
+the originals stay for fills and dark-panel interiors.
+
+No build step, no framework, no dependencies; every page is self-contained
+HTML with inline CSS/JS. Fonts load from Fontshare (Gambetta, Switzer) and
+Google Fonts (IBM Plex Mono); everything else is local.
 
 ## Deploying
 
