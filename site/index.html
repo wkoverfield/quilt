@@ -80,6 +80,11 @@
   .install button { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
                     font-family: var(--mono); font-size: 11px; padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
   .install button:hover { color: var(--ink); border-color: var(--ink); }
+  .alt-copy { margin: 10px 0 0; }
+  .alt-copy button { background: none; border: none; padding: 0; cursor: pointer;
+    font: 12.5px var(--mono); color: var(--faint);
+    border-bottom: 1px dashed var(--stitch); padding-bottom: 1px; transition: color .15s var(--ease), border-color .15s var(--ease); }
+  .alt-copy button:hover { color: var(--ink); border-color: var(--ink); }
   .hero-note { color: var(--faint); font-size: 13.5px; margin-top: 16px; }
 
   /* the loom: a dark instrument resting on the paper */
@@ -230,6 +235,7 @@
       <span id="install-cmd">npm i -g @quilt-dev/cli &amp;&amp; quilt setup</span>
       <button id="copy" aria-label="copy install command">copy</button>
     </div>
+    <p class="alt-copy"><button id="copy-prompt" type="button">or copy a setup prompt for your coding agent</button></p>
     <p class="hero-note">MIT · no account, no daemon · wired in about five seconds</p>
 
     <div class="loom-frame" aria-label="Animated: four agents' line edits weave into one shared file, and resolve into one clean commit per agent. A fifth write into claimed code is denied.">
@@ -414,6 +420,40 @@
     var vid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random());
     send("quilt_site_pageview", vid, { path: location.pathname }).catch(function () {});
   } catch (e) { /* analytics must never break the page */ }
+
+  var AGENT_PROMPT = [
+    "Set up Quilt in this repository so multiple coding agents can safely share one checkout.",
+    "",
+    "1. Run: npm install -g @quilt-dev/cli && quilt setup",
+    "2. Run: quilt doctor, and confirm it reports capture flowing.",
+    "3. Commit the config files setup generated (.mcp.json, CLAUDE.md changes) so every checkout shares the wiring. .quilt/ stays local and gitignored.",
+    "",
+    "How it works after that: every edit is captured with its author automatically. Before editing via bash or codegen, claim first (quilt claim <file> --intent \"why\"). Commit only your own lines with: quilt commit --mine -m \"message\".",
+    "",
+    "Full docs if needed: https://raw.githubusercontent.com/wkoverfield/quilt/main/README.md and https://raw.githubusercontent.com/wkoverfield/quilt/main/docs/reference.md",
+    "",
+    "When done, report what quilt doctor said.",
+  ].join("\n");
+
+  function wireCopy(id, text, label) {
+    var el = document.getElementById(id);
+    var original = el.textContent;
+    var flash = function (t) {
+      el.textContent = t;
+      setTimeout(function () { el.textContent = original; }, 1600);
+    };
+    el.addEventListener("click", function () {
+      try {
+        if (!navigator.clipboard) throw new Error("no clipboard api");
+        navigator.clipboard.writeText(text)
+          .then(function () { flash(label); })
+          .catch(function () { flash("select it"); });
+      } catch (e) {
+        flash("select it");
+      }
+    });
+  }
+  wireCopy("copy-prompt", AGENT_PROMPT, "prompt copied, paste it to your agent");
 
   document.getElementById("copy").addEventListener("click", function () {
     var self = this;
