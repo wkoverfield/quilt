@@ -8,7 +8,7 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
-- **`quilt ui` — the fleet dashboard in a browser.** One command opens a live
+- **`quilt ui`: the fleet dashboard in a browser.** One command opens a live
   local web view of the same read-only fleet snapshot the terminal shows: who
   wrote what (per-actor line counts per file), active claims, blocked and
   queued actors, clashes, and the "Needs you" escalation queue. Local-only by

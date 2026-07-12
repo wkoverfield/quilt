@@ -115,7 +115,7 @@ const PAGE = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quilt — fleet</title>
+<title>Quilt · fleet</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23e5a06b'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%238fc46f'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%235aa9e6'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d074c4'/%3E%3C/svg%3E">
 <style>
   :root {
@@ -204,7 +204,7 @@ const PAGE = `<!doctype html>
     <div class="counts" id="counts"></div>
     <div class="live" id="live"><span class="pulse"></span><span id="livetext">live</span></div>
   </header>
-  <div class="banner" id="banner">Lost contact with quilt ui — is the command still running? Retrying…</div>
+  <div class="banner" id="banner">Lost contact with quilt ui. Is the command still running? Retrying…</div>
   <main id="main"></main>
   <footer>quilt <span id="ver"></span> · read-only view of <code>.quilt/</code> · refreshes every 2s</footer>
 </div>
@@ -248,7 +248,7 @@ const PAGE = `<!doctype html>
   }
   function section(label, sub, cls) {
     var p = el("p", "label", el("b", null, label));
-    if (sub) p.appendChild(document.createTextNode(" — " + sub));
+    if (sub) p.appendChild(document.createTextNode(" · " + sub));
     return el("section", cls || null, p);
   }
   function hint(parts) {
@@ -279,7 +279,7 @@ const PAGE = `<!doctype html>
     var main = el("main");
 
     if (d.needsYou.length) {
-      var needs = section("Needs you", "agents couldn\\u2019t reconcile these — your call", "needs");
+      var needs = section("Needs you", "agents couldn\\u2019t reconcile these; your call", "needs");
       var rows = el("div", "rows");
       d.needsYou.forEach(function (o) {
         rows.appendChild(el("div", "card",
@@ -294,12 +294,12 @@ const PAGE = `<!doctype html>
 
     var contended = d.overlaps.filter(function (o) { return o.kind === "contended"; });
     if (d.clobbers.length || contended.length) {
-      var clash = section("Clashes", "real collisions — worth your eyes", "clash");
+      var clash = section("Clashes", "real collisions; worth your eyes", "clash");
       var crows = el("div", "rows");
       d.clobbers.forEach(function (c) {
         crows.appendChild(el("div", "card",
           el("div", "row-title", "\\u26a0 " + c.path),
-          el("div", "row-sub", c.byActor + " overwrote " + c.victimActor + "\\u2019s uncommitted lines — both versions preserved")));
+          el("div", "row-sub", c.byActor + " overwrote " + c.victimActor + "\\u2019s uncommitted lines; both versions preserved")));
       });
       contended.forEach(function (o) {
         crows.appendChild(el("div", "card",
@@ -398,7 +398,7 @@ const PAGE = `<!doctype html>
       var scard = el("div", "card");
       d.sewn.forEach(function (o) {
         scard.appendChild(el("div", "dimline",
-          "\\u2713 " + o.target + (o.note ? " — " + o.note : "") + " ",
+          "\\u2713 " + o.target + (o.note ? ": " + o.note : "") + " ",
           el("span", "un", "(" + o.actor + ", " + ago(o.ts) + ")")));
       });
       sewn.appendChild(scard);
@@ -406,7 +406,7 @@ const PAGE = `<!doctype html>
     }
 
     if (d.unattributed.length) {
-      var un = section("Unattributed changes", "pre-existing or generated — no owner recorded");
+      var un = section("Unattributed changes", "pre-existing or generated; no owner recorded");
       var ucard = el("div", "card");
       d.unattributed.forEach(function (p) { ucard.appendChild(el("div", "dimline", p)); });
       un.appendChild(ucard);

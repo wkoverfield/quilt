@@ -635,7 +635,13 @@ function classifyHunk(
     }
     if (fileConflicts[key!]) {
       conflicted = true;
-      for (const a of fileConflicts[key!]!) owners.add(a);
+      // Every contender wrote this line (identical text), so each gets credit
+      // in the per-actor counts, not just whoever reconcile recorded first —
+      // otherwise the who-wrote-what view drops a real contender entirely.
+      for (const a of fileConflicts[key!]!) {
+        owners.add(a);
+        if (a !== owner) linesByActor[a] = (linesByActor[a] ?? 0) + 1;
+      }
     }
   }
 
