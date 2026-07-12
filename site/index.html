@@ -97,6 +97,12 @@
   .thread .ln { font-family: var(--mono); font-size: 10.5px; color: #5a5140; width: 18px; text-align: right; flex: none; }
   .thread .track { flex: 1; height: 8px; border-radius: 4px; background: repeating-linear-gradient(90deg, #2f2818 0 8px, transparent 8px 14px); position: relative; overflow: hidden; }
   .thread .yarn { position: absolute; inset: 0; border-radius: 4px; transform-origin: left center; }
+  .thread .dyarn { position: absolute; top: 0; bottom: 0; left: 30%; width: 34%; border-radius: 4px;
+                   border: 1.5px dashed var(--amber); background: color-mix(in srgb, var(--amber) 26%, transparent);
+                   transform-origin: right center; transform: scaleX(.24); opacity: .7; }
+  .thread .dx { position: absolute; left: calc(31% - 7px); top: 50%; margin-top: -7px; width: 14px; height: 14px;
+                border-radius: 50%; background: var(--dpanel); border: 1px solid var(--coral); color: var(--coral);
+                font: 600 9px/12px var(--mono); text-align: center; }
   .commits { border-left: 1px dashed var(--dborder); padding: 22px 24px; display: flex; flex-direction: column; justify-content: center; gap: 9px; color: var(--dink); }
   .cmt { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; }
   .cmt i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
@@ -109,8 +115,18 @@
   @media (prefers-reduced-motion: no-preference) {
     .yarn { transform: scaleX(0); animation: weave .5s var(--ease) forwards; }
     .cmt { opacity: 0; transform: translateY(6px); animation: rise .4s var(--ease) forwards; }
+    .dyarn { transform: scaleX(0); opacity: .95; animation: denyPush 1.15s var(--ease) 1.45s forwards; }
+    .dx { opacity: 0; animation: denyMark .25s var(--ease) 2s forwards; }
     @keyframes weave { to { transform: scaleX(1); } }
     @keyframes rise { to { opacity: 1; transform: none; } }
+    @keyframes denyPush {
+      0% { transform: scaleX(0); }
+      36% { transform: scaleX(1); }
+      50% { transform: scaleX(1); }
+      80% { transform: scaleX(.24); opacity: .8; }
+      100% { transform: scaleX(.24); opacity: .7; }
+    }
+    @keyframes denyMark { to { opacity: 1; } }
   }
 
 
@@ -233,7 +249,7 @@
         </div>
       </div>
     </div>
-    <p class="loom-caption"><b>Each color is an agent.</b> Every commit is exactly its author's lines, and the fifth write, into claimed code, never changed a byte.</p>
+    <p class="loom-caption"><b>Each color is an agent.</b> Every commit is exactly its author's lines, and the fifth write bounced off a1's claimed code on line 8 without changing a byte.</p>
 
   </header>
 
@@ -349,6 +365,16 @@
     yarn.style.width = r[2] + "%";
     yarn.style.animationDelay = (0.15 + i * 0.06) + "s";
     track.appendChild(yarn);
+    if (i === 7) {
+      // the denied write: pushes toward a1's claimed span, bounces, leaves a mark
+      var dy = document.createElement("div");
+      dy.className = "dyarn";
+      var dx = document.createElement("span");
+      dx.className = "dx";
+      dx.textContent = "\u2717";
+      track.appendChild(dy);
+      track.appendChild(dx);
+    }
     row.appendChild(ln);
     row.appendChild(track);
     threads.appendChild(row);
