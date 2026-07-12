@@ -387,10 +387,19 @@
 
   document.getElementById("copy").addEventListener("click", function () {
     var self = this;
-    navigator.clipboard.writeText("npm i -g @quilt-dev/cli && quilt setup").then(function () {
-      self.textContent = "copied";
+    var flash = function (text) {
+      self.textContent = text;
       setTimeout(function () { self.textContent = "copy"; }, 1600);
-    });
+    };
+    try {
+      if (!navigator.clipboard) throw new Error("no clipboard api");
+      navigator.clipboard.writeText("npm i -g @quilt-dev/cli && quilt setup")
+        .then(function () { flash("copied"); })
+        .catch(function () { flash("select it"); });
+    } catch (e) {
+      // file:// or an old browser: no clipboard access, so just say so.
+      flash("select it");
+    }
   });
 
   document.getElementById("waitlist").addEventListener("submit", function (ev) {

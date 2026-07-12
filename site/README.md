@@ -31,6 +31,7 @@ gets its own PostHog project later, swap the `KEY` constant in `index.html`.
   [`bench/RESULTS.md`](../bench/RESULTS.md). When a bench run changes the
   numbers, update all three together.
 - The dashboard screenshot is `assets/ui.png`, captured from `quilt ui`
-  against a fixture repo (same image as the README). `assets/contrast.gif`
-  is copied from `examples/contrast.gif`.
+  against a fixture repo (the same capture ships as `examples/ui.png` on
+  the quilt ui branch, PR #105). `assets/contrast.gif` is copied from
+  `examples/contrast.gif`.
 - Writing style: no em dashes in page prose (repo-wide rule).
