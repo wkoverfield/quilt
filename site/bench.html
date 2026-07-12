@@ -25,13 +25,13 @@
   a { color: var(--thread); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 3px; }
   code { font-family: var(--mono); font-size: .92em; }
-  .navbar .wrap { padding: 0 24px; }
+  .navbar .wrap { max-width: 1060px; padding: 0 24px; }
   .navbar { position: sticky; top: 0; z-index: 50; border-bottom: 1px dashed transparent;
             background: color-mix(in srgb, var(--bg) 72%, transparent);
             -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
   .navbar.scrolled { border-bottom-color: var(--border); }
   .navbar nav { position: relative; }
-  nav { display: flex; align-items: center; gap: 26px; padding: 14px 0; }
+  nav { display: flex; align-items: center; gap: 26px; padding: 14px 0; line-height: 1.5; }
   .mark { display: grid; grid-template-columns: 9px 9px; gap: 2.5px; }
   .mark i { width: 9px; height: 9px; border-radius: 2.5px; }
   .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 19px; color: var(--ink); }
