@@ -13,7 +13,8 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt config author.email [email]` | Read or set the repository-default Git author email. Actor names remain distinct. |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. Optional — agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. Scopes only the CLI commands run in your terminal; it never binds other agents' captured edits (the pointer is checkout-global, capture identity is per-edit). |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
-| `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. |
+| `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. JSON includes `files`, the per-file who-wrote-what rows (per-actor line counts). |
+| `quilt ui [--port <n>] [--no-open]` | The fleet view as a live local web page: who wrote what (per-actor line counts per file), active claims, blocked/queued actors, and the "Needs you" queue. Binds 127.0.0.1 only, read-only over `.quilt/`, refreshes every 2s; falls back to a free port when the default (4747) is taken. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |
 | `quilt mine [--json]` | Summarize the changes you own. |
 | `quilt conflicts [--json]` | Show shared changes: same-line clashes vs adjacent edits that commit cleanly. |

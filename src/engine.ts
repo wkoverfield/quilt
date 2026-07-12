@@ -44,6 +44,10 @@ export interface OwnedHunk {
   conflicted: boolean;
   /** Set only when ownership === "shared": is the overlap benign or a real clash? */
   overlap?: HunkOverlap;
+  /** Non-trivial changed lines per owning actor (adds + removes). */
+  linesByActor: Record<string, number>;
+  /** Non-trivial changed lines with no recorded owner. */
+  unownedLines: number;
 }
 
 export interface FileModel {
@@ -606,7 +610,9 @@ function classifyHunk(
   const file = ownership.files[path];
   const fileConflicts = ownership.conflicts[path] ?? {};
   const owners = new Set<string>();
+  const linesByActor: Record<string, number> = {};
   let unowned = false;
+  let unownedLines = 0;
   let conflicted = false;
 
   // A fresh keyer per hunk, started at the hunk's line offsets. Called on every
@@ -620,8 +626,13 @@ function classifyHunk(
     if (isTrivialLine(op.text)) continue;
     const map = op.type === "add" ? file?.added : file?.removed;
     const owner = map?.[key!];
-    if (owner) owners.add(owner);
-    else unowned = true;
+    if (owner) {
+      owners.add(owner);
+      linesByActor[owner] = (linesByActor[owner] ?? 0) + 1;
+    } else {
+      unowned = true;
+      unownedLines++;
+    }
     if (fileConflicts[key!]) {
       conflicted = true;
       for (const a of fileConflicts[key!]!) owners.add(a);
@@ -642,6 +653,10 @@ function classifyHunk(
     if (holder && holder !== activeActorId) {
       ownership_ = "other";
       actors.push(holder);
+      // Attribution pending: the honest read of these lines is "the claim
+      // holder's", so line counts follow the same call the ownership label made.
+      linesByActor[holder] = unownedLines;
+      unownedLines = 0;
     } else {
       ownership_ = "unclaimed";
     }
@@ -655,7 +670,7 @@ function classifyHunk(
     ownership_ === "shared"
       ? hunkOverlap(hunk, file, conflicted, opKeyer(addLoc, delLoc, hunk.newStart, hunk.oldStart))
       : undefined;
-  return { hunk, ownership: ownership_, actors, conflicted, overlap };
+  return { hunk, ownership: ownership_, actors, conflicted, overlap, linesByActor, unownedLines };
 }
 
 /**
