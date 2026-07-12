@@ -122,6 +122,7 @@ export function recordEvent(event: string, props: EventProps = {}): void {
     const child = spawn(process.execPath, ["-e", script], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
       env: { QUILT_T_URL: endpoint, QUILT_T_BODY: payload },
     });
     child.on("error", () => {});
