@@ -1,7 +1,8 @@
 # quilt.dev site
 
-The static storefront: landing page (`index.html`), benchmark results
-(`bench.html`), and `llms.txt`. No build step, no framework, no dependencies;
+The static storefront: landing page (`index.html`), the worldview argument
+(`why.html`), benchmark results (`bench.html`), and `llms.txt`. The landing
+stays a short product page; depth lives on the other pages. No build step, no framework, no dependencies;
 every page is self-contained HTML with inline CSS/JS. Fonts load from Google
 Fonts; everything else is local.
 
