@@ -11,162 +11,209 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23e5a06b'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%238fc46f'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%235aa9e6'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d074c4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;1,9..144,500&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+  /* ---- tokens: the loom ---- */
   :root {
-    --bg: #0f0d0a; --panel: #16130e; --panel2: #1b1712; --border: #2b251c;
-    --ink: #ece5d8; --dim: #a89f8d; --faint: #6f675a;
-    --thread: #e3b34c;
+    --bg: #0f0d0a; --bg2: #131009; --panel: #16130e; --panel2: #1a1610; --border: #2b251c;
+    --ink: #ece5d8; --dim: #a89f8d; --faint: #847c6e;
+    --thread: #e3b34c; --thread-ink: #f0c25e;
     --coral: #e06c75; --amber: #e5a06b; --gold: #e3c46b; --green: #8fc46f;
     --teal: #56c2a8; --blue: #5aa9e6; --violet: #8a7fe8; --magenta: #d074c4;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     --sans: "IBM Plex Sans", -apple-system, sans-serif;
     --display: "Fraunces", Georgia, serif;
+    --ease: cubic-bezier(.21,.9,.35,1); /* fast ease-out */
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body {
     margin: 0; background: var(--bg); color: var(--ink);
-    font: 16px/1.65 var(--sans);
-    background-image:
-      radial-gradient(1200px 600px at 80% -10%, rgba(227,179,76,.05), transparent 60%),
-      radial-gradient(900px 500px at -10% 30%, rgba(90,169,230,.04), transparent 60%);
+    font: 16.5px/1.65 var(--sans);
+    background-image: radial-gradient(1100px 520px at 50% -12%, rgba(227,179,76,.06), transparent 62%);
   }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
-  a { color: var(--thread); text-decoration: none; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .narrow { max-width: 760px; margin: 0 auto; }
+  a { color: var(--thread-ink); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 3px; }
-  code, pre, .mono { font-family: var(--mono); }
+  code, .mono { font-family: var(--mono); }
+  ::selection { background: color-mix(in srgb, var(--thread) 30%, transparent); }
 
-  /* nav */
-  nav { display: flex; align-items: center; gap: 22px; padding: 22px 0; }
+  /* ---- nav ---- */
+  nav { display: flex; align-items: center; gap: 26px; padding: 20px 0; }
   .mark { display: grid; grid-template-columns: 9px 9px; gap: 2.5px; }
   .mark i { width: 9px; height: 9px; border-radius: 2.5px; }
   .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 19px; color: var(--ink); }
   .brand:hover { text-decoration: none; }
-  nav .links { margin-left: auto; display: flex; gap: 20px; font-size: 14px; }
-  nav .links a { color: var(--dim); }
+  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14px; align-items: center; }
+  nav .links a { color: var(--dim); transition: color .15s var(--ease); }
   nav .links a:hover { color: var(--ink); text-decoration: none; }
+  @media (max-width: 760px) { nav .links a:not(.gh) { display: none; } }
+  .gh { border: 1px solid var(--border); border-radius: 8px; padding: 6px 13px; color: var(--ink) !important; transition: border-color .15s var(--ease); }
+  .gh:hover { border-color: var(--faint); }
 
-  /* hero */
-  .hero { display: grid; grid-template-columns: 1.05fr .95fr; gap: 48px; align-items: center; padding: 64px 0 72px; }
-  @media (max-width: 900px) { .hero { grid-template-columns: 1fr; padding-top: 32px; } }
-  .eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--thread); margin: 0 0 14px; }
-  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(38px, 5.2vw, 56px); line-height: 1.06; margin: 0 0 20px; letter-spacing: -.01em; }
-  h1 em { font-style: italic; color: var(--thread); }
-  .lede { color: var(--dim); font-size: 17.5px; max-width: 34em; margin: 0 0 28px; }
+  /* ---- hero ---- */
+  .hero { text-align: center; padding: 88px 0 24px; }
+  .eyebrow { font-family: var(--mono); font-size: 12.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--thread-ink); margin: 0 0 22px; }
+  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(42px, 6.4vw, 74px); line-height: 1.02; letter-spacing: -.015em; margin: 0 auto 22px; max-width: 13em; }
+  h1 em { font-style: italic; color: var(--thread-ink); }
+  .lede { color: var(--dim); font-size: 18px; max-width: 37em; margin: 0 auto 30px; }
   .lede strong { color: var(--ink); font-weight: 500; }
-
-  .install { display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--border);
-             border-radius: 10px; padding: 12px 16px; font-family: var(--mono); font-size: 14px; width: fit-content; max-width: 100%; }
-  .install .p { color: var(--faint); user-select: none; }
-  .install button { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
-                    font-family: var(--mono); font-size: 11px; padding: 3px 8px; cursor: pointer; }
-  .install button:hover { color: var(--ink); border-color: var(--faint); }
-  .ctas { display: flex; gap: 14px; margin-top: 22px; flex-wrap: wrap; }
-  .btn { display: inline-block; border-radius: 9px; padding: 10px 18px; font-size: 14.5px; font-weight: 500; }
+  .ctas { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; align-items: center; }
+  .btn { display: inline-block; border-radius: 10px; padding: 12px 22px; font-size: 15px; font-weight: 500; transition: transform .12s var(--ease), filter .15s var(--ease), border-color .15s var(--ease); }
+  .btn:active { transform: scale(.98); }
   .btn.primary { background: var(--thread); color: #171204; }
-  .btn.primary:hover { text-decoration: none; filter: brightness(1.08); }
+  .btn.primary:hover { text-decoration: none; filter: brightness(1.07); }
   .btn.ghost { border: 1px solid var(--border); color: var(--ink); }
   .btn.ghost:hover { text-decoration: none; border-color: var(--faint); }
-  .hero-note { color: var(--faint); font-size: 13px; margin-top: 18px; }
+  .install { display: inline-flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--border);
+             border-radius: 10px; padding: 11px 16px; font-family: var(--mono); font-size: 13.5px; margin-top: 22px; max-width: 100%; }
+  .install .p { color: var(--faint); user-select: none; }
+  .install button { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
+                    font-family: var(--mono); font-size: 11px; padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
+  .install button:hover { color: var(--ink); border-color: var(--faint); }
 
-  /* the two endings */
-  .endings { display: grid; gap: 14px; }
-  .ending { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 16px 18px; position: relative; }
-  .ending.with { border: 1px dashed color-mix(in srgb, var(--thread) 45%, var(--border)); }
-  .ending .tag { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-bottom: 10px; }
-  .ending.with .tag { color: var(--thread); }
-  .commit { display: flex; align-items: baseline; gap: 9px; font-family: var(--mono); font-size: 12.5px; padding: 3.5px 0; }
-  .commit .sha { color: var(--faint); }
-  .commit .dot { width: 8px; height: 8px; border-radius: 2.5px; flex: none; align-self: center; }
-  .commit .who { color: var(--dim); margin-left: auto; padding-left: 10px; flex: none; }
-  .commit.lost { color: var(--faint); }
-  .commit.lost .msg { text-decoration: line-through; text-decoration-color: var(--coral); }
-  .ending .aside { font-size: 12.5px; color: var(--faint); border-top: 1px dashed var(--border); margin-top: 10px; padding-top: 10px; }
-  .ending .aside b { color: var(--coral); font-weight: 500; }
-  .ending.with .aside b { color: var(--green); }
+  /* ---- the loom (hero artifact) ---- */
+  .loom-frame { margin: 56px auto 0; border: 1px solid var(--border); border-radius: 16px; background: var(--bg2);
+                box-shadow: 0 30px 80px -30px rgba(0,0,0,.7), 0 0 0 1px rgba(227,179,76,.04); overflow: hidden; }
+  .loom-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); }
+  .loom-bar i { width: 9px; height: 9px; border-radius: 50%; background: #2c2618; }
+  .loom-bar .t { font-family: var(--mono); font-size: 11.5px; color: var(--faint); margin-left: 8px; }
+  .loom-bar .r { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+  .loom { display: grid; grid-template-columns: 1.5fr 1fr; }
+  @media (max-width: 800px) { .loom { grid-template-columns: 1fr; } .commits { border-left: none !important; border-top: 1px dashed var(--border); } }
+  .threads { padding: 22px 24px; }
+  .thread { display: flex; align-items: center; gap: 12px; height: 24px; }
+  .thread .ln { font-family: var(--mono); font-size: 10.5px; color: #40392c; width: 18px; text-align: right; flex: none; }
+  .thread .track { flex: 1; height: 8px; border-radius: 4px; background: repeating-linear-gradient(90deg, #211c13 0 8px, transparent 8px 14px); position: relative; overflow: hidden; }
+  .thread .yarn { position: absolute; inset: 0; border-radius: 4px; transform-origin: left center; }
+  .commits { border-left: 1px dashed var(--border); padding: 22px 24px; display: flex; flex-direction: column; justify-content: center; gap: 9px; }
+  .cmt { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; }
+  .cmt i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
+  .cmt .sha { color: var(--faint); }
+  .cmt .who { margin-left: auto; color: var(--dim); }
+  .cmt.deny { color: var(--faint); }
+  .cmt.deny .x { color: var(--coral); }
+  .loom-caption { color: var(--faint); font-size: 13px; margin: 14px auto 0; max-width: 46em; }
+  .loom-caption b { color: var(--dim); font-weight: 500; }
   @media (prefers-reduced-motion: no-preference) {
-    .endings .ending { opacity: 0; transform: translateY(10px); animation: rise .6s ease forwards; }
-    .endings .ending.with { animation-delay: .25s; }
-    .with .commit { opacity: 0; animation: rise .45s ease forwards; }
-    .with .commit:nth-child(2) { animation-delay: .45s; } .with .commit:nth-child(3) { animation-delay: .55s; }
-    .with .commit:nth-child(4) { animation-delay: .65s; } .with .commit:nth-child(5) { animation-delay: .75s; }
-    .with .commit:nth-child(6) { animation-delay: .85s; } .with .commit:nth-child(7) { animation-delay: .95s; }
+    .yarn { transform: scaleX(0); animation: weave .5s var(--ease) forwards; }
+    .cmt { opacity: 0; transform: translateY(6px); animation: rise .4s var(--ease) forwards; }
+    @keyframes weave { to { transform: scaleX(1); } }
     @keyframes rise { to { opacity: 1; transform: none; } }
   }
 
-  /* sections */
-  section { padding: 68px 0; border-top: 1px dashed var(--border); }
-  .kicker { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--thread); margin: 0 0 10px; }
-  h2 { font-family: var(--display); font-weight: 600; font-size: clamp(27px, 3.4vw, 36px); line-height: 1.15; margin: 0 0 16px; max-width: 20em; }
-  .sub { color: var(--dim); max-width: 42em; margin: 0 0 34px; font-size: 16.5px; }
+  /* ---- proof strip ---- */
+  .proof { display: flex; justify-content: center; gap: 0; margin: 72px 0 0; border-block: 1px dashed var(--border); flex-wrap: wrap; }
+  .proof .cell { padding: 22px 34px; text-align: center; border-right: 1px dashed var(--border); flex: 1 1 auto; }
+  .proof .cell:last-child { border-right: none; }
+  .proof .pair { font-family: var(--mono); font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .proof .a { color: var(--coral); } .proof .arrow { color: var(--faint); font-size: 17px; padding: 0 5px; } .proof .b { color: var(--green); }
+  .proof .flip .a { color: var(--faint); } .proof .flip .b { color: var(--gold); }
+  .proof .what { color: var(--faint); font-size: 12px; margin-top: 4px; }
+  .proof-note { text-align: center; color: var(--faint); font-size: 13px; padding: 14px 0 0; }
+
+  /* ---- sections ---- */
+  section { padding: 118px 0 0; }
+  /* grid children default to min-width auto, so a wide <pre> can force its
+     column past the viewport; zero it and let overflow-x scrolling do its job */
+  .how > *, .argument > *, .duo > *, .teams > *, .loom > * { min-width: 0; }
+  pre.term { max-width: 100%; }
+  .kicker { font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--thread-ink); margin: 0 0 14px; }
+  h2 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 3.9vw, 44px); line-height: 1.08; letter-spacing: -.01em; margin: 0 0 18px; }
+  .sub { color: var(--dim); font-size: 17px; margin: 0; }
   .sub strong { color: var(--ink); font-weight: 500; }
+  .center { text-align: center; }
+  .center .sub { max-width: 40em; margin-inline: auto; }
 
-  .compare { width: 100%; border-collapse: collapse; font-size: 14.5px; }
-  .compare th, .compare td { padding: 12px 14px; border: 1px dashed var(--border); text-align: left; }
-  .compare th { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
-  .compare td:first-child { color: var(--dim); }
-  .compare .q { background: color-mix(in srgb, var(--thread) 5%, transparent); }
-  .compare .good { color: var(--green); }
-  .compare .bad { color: var(--coral); }
-  .compare .meh { color: var(--dim); }
+  /* the argument: editorial two-col + receipt */
+  .argument { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: start; margin-top: 8px; }
+  @media (max-width: 900px) { .argument { grid-template-columns: 1fr; } }
+  .argument .prose p { color: var(--dim); margin: 0 0 18px; }
+  .argument .prose p strong { color: var(--ink); font-weight: 500; }
+  .receipt { border: 1px dashed color-mix(in srgb, var(--thread) 35%, var(--border)); border-radius: 14px; background: var(--panel); padding: 22px 24px; }
+  .receipt .rt { font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); margin-bottom: 14px; }
+  .receipt .row { display: flex; justify-content: space-between; gap: 14px; padding: 9px 0; border-top: 1px dashed var(--border); font-size: 14px; }
+  .receipt .row span:first-child { color: var(--dim); }
+  .receipt .row .wt { color: var(--coral); text-align: right; }
+  .receipt .row .q { color: var(--green); text-align: right; }
+  .receipt .hd { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11.5px; color: var(--faint); padding-bottom: 8px; }
+  .receipt .hd span:last-child { color: var(--thread-ink); }
+  .receipt .row > span:last-child { flex: 1; }
+  .receipt .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex: 1.2; }
+  .receipt .cols div { text-align: left; font-size: 13.5px; }
+  .receipt-note { color: var(--faint); font-size: 13px; margin-top: 14px; }
 
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  @media (max-width: 860px) { .steps { grid-template-columns: 1fr; } }
-  .step { border: 1px solid var(--border); background: var(--panel); border-radius: 14px; padding: 20px; border-top: 3px solid var(--border); }
-  .step:nth-child(1) { border-top-color: var(--blue); }
-  .step:nth-child(2) { border-top-color: var(--amber); }
-  .step:nth-child(3) { border-top-color: var(--green); }
-  .step .n { font-family: var(--mono); color: var(--faint); font-size: 12px; }
-  .step h3 { font-family: var(--display); font-size: 20px; margin: 6px 0 8px; font-weight: 600; }
-  .step p { color: var(--dim); font-size: 14.5px; margin: 0; }
+  /* how it works: numbered rail + sticky artifact */
+  .how { display: grid; grid-template-columns: .95fr 1.05fr; gap: 56px; align-items: start; margin-top: 40px; }
+  @media (max-width: 900px) { .how { grid-template-columns: 1fr; } }
+  .steps { display: flex; flex-direction: column; }
+  .step { padding: 22px 4px; border-top: 1px dashed var(--border); }
+  .step .n { font-family: var(--mono); font-size: 12px; color: var(--thread-ink); }
+  .step h3 { font-family: var(--display); font-size: 21px; font-weight: 600; margin: 8px 0 8px; }
+  .step p { color: var(--dim); font-size: 15px; margin: 0; }
   .step code { color: var(--ink); font-size: 13px; }
-
-  pre.term { background: #0b0a07; border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px;
-             font-size: 13px; line-height: 1.7; overflow-x: auto; margin: 26px 0 0; }
+  .sticky { position: sticky; top: 32px; }
+  pre.term { background: #0b0a07; border: 1px solid var(--border); border-radius: 14px; padding: 20px 22px;
+             font-size: 13px; line-height: 1.75; overflow-x: auto; margin: 0; font-family: var(--mono); }
   pre.term .c { color: var(--faint); } pre.term .g { color: var(--green); } pre.term .r { color: var(--coral); }
-  pre.term .y { color: var(--gold); } pre.term .d { color: var(--dim); }
+  pre.term .d { color: var(--dim); }
+  .term-caption { color: var(--faint); font-size: 13px; margin-top: 12px; }
 
-  .numbers-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
-  @media (max-width: 860px) { .numbers-grid { grid-template-columns: repeat(2, 1fr); } }
-  .stat { border: 1px solid var(--border); background: var(--panel); border-radius: 14px; padding: 18px; }
-  .stat .pair { font-family: var(--mono); font-size: 30px; font-weight: 600; }
-  .stat .pair .a { color: var(--coral); } .stat .pair .arrow { color: var(--faint); font-size: 20px; padding: 0 4px; }
-  .stat .pair .b { color: var(--green); }
-  .stat .what { color: var(--dim); font-size: 13px; margin-top: 6px; }
-  .stat.flip .pair .a { color: var(--faint); } .stat.flip .pair .b { color: var(--gold); }
+  /* feature cards (duo) + fleet shot */
+  .duo { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 40px; }
+  @media (max-width: 860px) { .duo { grid-template-columns: 1fr; } }
+  .fcard { border: 1px solid var(--border); border-radius: 16px; background: var(--panel); padding: 26px; display: flex; flex-direction: column; gap: 18px; }
+  .fcard h3 { font-family: var(--display); font-size: 21px; font-weight: 600; margin: 0; }
+  .fcard p { color: var(--dim); font-size: 14.5px; margin: 0; }
+  .fcard pre.term { font-size: 12px; padding: 16px 18px; }
+  .fleet-card { margin-top: 16px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel); overflow: hidden; }
+  .fleet-card .fhead { display: grid; grid-template-columns: 1fr auto; gap: 20px; align-items: end; padding: 28px 28px 22px; }
+  @media (max-width: 700px) { .fleet-card .fhead { grid-template-columns: 1fr; } }
+  .fleet-card h3 { font-family: var(--display); font-size: 24px; font-weight: 600; margin: 0 0 6px; }
+  .fleet-card p { color: var(--dim); font-size: 15px; margin: 0; max-width: 40em; }
+  .fleet-card img { display: block; width: 100%; border-top: 1px solid var(--border); }
+  .pill { font-family: var(--mono); font-size: 12px; color: var(--dim); border: 1px solid var(--border); border-radius: 99px; padding: 6px 14px; white-space: nowrap; }
 
-  .shot { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; margin-top: 30px; }
-  .shot img { display: block; width: 100%; }
-  .shot-caption { color: var(--faint); font-size: 13px; margin-top: 12px; }
-
-  .fine { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 26px; font-size: 14px; color: var(--dim); padding: 0; margin: 0; list-style: none; }
+  /* sharp edges: quiet checklist */
+  .fine { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 44px; padding: 0; margin: 44px 0 0; list-style: none; }
   @media (max-width: 700px) { .fine { grid-template-columns: 1fr; } }
-  .fine li { padding-left: 20px; position: relative; }
-  .fine li::before { content: "×"; position: absolute; left: 0; color: var(--thread); font-family: var(--mono); }
+  .fine li { padding: 14px 0 14px 26px; position: relative; color: var(--dim); font-size: 14.5px; border-top: 1px dashed var(--border); }
+  .fine li::before { content: "×"; position: absolute; left: 2px; top: 13px; color: var(--thread-ink); font-family: var(--mono); }
+  .fine li code { color: var(--ink); font-size: 13px; }
 
-  /* waitlist */
-  .teams { border: 1px dashed color-mix(in srgb, var(--thread) 40%, var(--border)); border-radius: 18px;
-           background: linear-gradient(180deg, color-mix(in srgb, var(--thread) 4%, var(--panel)), var(--panel));
-           padding: 44px 40px; }
-  @media (max-width: 700px) { .teams { padding: 30px 22px; } }
-  .waitlist { display: flex; gap: 10px; max-width: 480px; margin-top: 26px; }
+  /* teams */
+  .teams { border: 1px dashed color-mix(in srgb, var(--thread) 40%, var(--border)); border-radius: 20px;
+           background: linear-gradient(180deg, color-mix(in srgb, var(--thread) 5%, var(--panel)), var(--panel));
+           padding: 52px; display: grid; grid-template-columns: 1.15fr .85fr; gap: 48px; align-items: center; }
+  @media (max-width: 900px) { .teams { grid-template-columns: 1fr; padding: 34px 26px; } }
+  .teams h2 { margin-bottom: 12px; }
+  .waitlist { display: flex; gap: 10px; }
   @media (max-width: 560px) { .waitlist { flex-direction: column; } }
   .waitlist input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--ink);
-                    border-radius: 9px; padding: 11px 14px; font: 14.5px var(--sans); }
+                    border-radius: 10px; padding: 12px 15px; font: 15px var(--sans); transition: border-color .15s var(--ease); }
   .waitlist input:focus { outline: none; border-color: var(--thread); }
-  .waitlist button { background: var(--thread); color: #171204; border: none; border-radius: 9px;
-                     padding: 11px 20px; font: 500 14.5px var(--sans); cursor: pointer; }
-  .waitlist button:hover { filter: brightness(1.08); }
+  .waitlist button { background: var(--thread); color: #171204; border: none; border-radius: 10px;
+                     padding: 12px 22px; font: 500 15px var(--sans); cursor: pointer; transition: filter .15s, transform .12s var(--ease); }
+  .waitlist button:hover { filter: brightness(1.07); }
+  .waitlist button:active { transform: scale(.98); }
   .waitlist button:disabled { opacity: .6; cursor: default; }
   .wl-note { color: var(--faint); font-size: 12.5px; margin-top: 12px; }
-  .wl-done { display: none; margin-top: 26px; font-size: 15px; color: var(--green); font-family: var(--mono); }
+  .wl-done { display: none; font-size: 15px; color: var(--green); font-family: var(--mono); }
   .wl-err { display: none; margin-top: 12px; font-size: 13px; color: var(--coral); }
 
-  footer { border-top: 1px dashed var(--border); padding: 34px 0 48px; display: flex; gap: 22px; align-items: center;
+  /* final cta */
+  .fin { text-align: center; padding: 128px 0 30px; }
+  .fin h2 { font-size: clamp(32px, 4.6vw, 52px); max-width: 15em; margin-inline: auto; }
+  footer { border-top: 1px dashed var(--border); margin-top: 96px; padding: 30px 0 46px; display: flex; gap: 22px; align-items: center;
            color: var(--faint); font-size: 13.5px; flex-wrap: wrap; }
   footer a { color: var(--dim); }
   footer .spacer { flex: 1; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { opacity: 0; transform: translateY(14px); transition: opacity .5s var(--ease), transform .5s var(--ease); }
+    .reveal.in { opacity: 1; transform: none; }
+  }
 </style>
 </head>
 <body>
@@ -182,147 +229,180 @@
     <div class="links">
       <a href="#argument">Why</a>
       <a href="#how">How it works</a>
-      <a href="bench.html">The numbers</a>
+      <a href="bench.html">Numbers</a>
       <a href="#teams">Teams</a>
       <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
-      <a href="https://github.com/wkoverfield/quilt">GitHub</a>
+      <a class="gh" href="https://github.com/wkoverfield/quilt">GitHub</a>
     </div>
   </nav>
 
   <header class="hero">
-    <div>
-      <p class="eyebrow">Actor-owned patches for Git</p>
-      <h1>One repo. Every agent. <em>Clean commits.</em></h1>
-      <p class="lede">
-        Quilt tracks which agent wrote which lines in a <strong>shared checkout</strong>,
-        so a fleet of coding agents works in one repo at once and each commits
-        exactly its own changes. No worktree per agent, no account, no daemon,
-        and Git stays the source of truth.
-      </p>
-      <div class="install">
-        <span class="p">$</span>
-        <span id="install-cmd">npm i -g @quilt-dev/cli &amp;&amp; quilt setup</span>
-        <button id="copy" aria-label="copy install command">copy</button>
-      </div>
-      <div class="ctas">
-        <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
-        <a class="btn ghost" href="bench.html">See the numbers</a>
-      </div>
-      <p class="hero-note">MIT licensed. Wired in about five seconds; agents are named automatically.</p>
+    <p class="eyebrow">Actor-owned patches for Git</p>
+    <h1>One repo. Every agent. <em>Clean commits.</em></h1>
+    <p class="lede">
+      Quilt tracks which agent wrote which lines in a <strong>shared checkout</strong>, so your
+      fleet works in one repo at once and each agent commits exactly its own changes.
+      No worktree per agent, no account, no daemon.
+    </p>
+    <div class="ctas">
+      <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
+      <a class="btn ghost" href="bench.html">See the numbers</a>
+    </div>
+    <div class="install">
+      <span class="p">$</span>
+      <span id="install-cmd">npm i -g @quilt-dev/cli &amp;&amp; quilt setup</span>
+      <button id="copy" aria-label="copy install command">copy</button>
     </div>
 
-    <div class="endings" aria-label="the same seven-agent run, with and without Quilt">
-      <div class="ending">
-        <div class="tag">7 agents, plain git</div>
-        <div class="commit"><span class="dot" style="background:#4a443a"></span><span class="sha">9f21c04</span><span class="msg">misc changes</span><span class="who">agent-1</span></div>
-        <div class="commit lost"><span class="dot" style="background:#332f28"></span><span class="sha">&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;</span><span class="msg">fix getUser redirect</span><span class="who">gone</span></div>
-        <div class="aside"><b>1 commit for 7 agents.</b> Six saw "nothing to commit". One change silently overwritten, credited to nobody, recovered by nobody.</div>
+    <div class="loom-frame" aria-label="Animated: four agents' line edits weave into one shared file, and resolve into one clean commit per agent. A fifth write into claimed code is denied.">
+      <div class="loom-bar" aria-hidden="true">
+        <i></i><i></i><i></i>
+        <span class="t">src/checkout.ts · one working tree, four agents</span>
+        <span class="r">quilt watch · live</span>
       </div>
-      <div class="ending with">
-        <div class="tag">Same run, with quilt</div>
-        <div class="commit"><span class="dot" style="background:var(--coral)"></span><span class="sha">b41e7a2</span><span class="msg">fix getUser redirect</span><span class="who">a1</span></div>
-        <div class="commit"><span class="dot" style="background:var(--amber)"></span><span class="sha">03d9c11</span><span class="msg">add rate limiter</span><span class="who">a2</span></div>
-        <div class="commit"><span class="dot" style="background:var(--green)"></span><span class="sha">7c5f2e8</span><span class="msg">migrate config schema</span><span class="who">a3</span></div>
-        <div class="commit"><span class="dot" style="background:var(--teal)"></span><span class="sha">e88a90d</span><span class="msg">test billing edge cases</span><span class="who">a4</span></div>
-        <div class="commit"><span class="dot" style="background:var(--blue)"></span><span class="sha">51b6d37</span><span class="msg">wire webhook retries</span><span class="who">a5</span></div>
-        <div class="commit"><span class="dot" style="background:var(--violet)"></span><span class="sha">a9042fe</span><span class="msg">docs for the auth flow</span><span class="who">a6</span></div>
-        <div class="aside"><b>6 clean commits, one per agent,</b> each exactly its own lines. The seventh write, into a claimed function, was denied before any bytes changed.</div>
+      <div class="loom" aria-hidden="true">
+        <div class="threads" id="threads"></div>
+        <div class="commits">
+          <div class="cmt" style="animation-delay:.9s"><i style="background:var(--coral)"></i><span class="sha">b41e7a2</span><span>fix getUser redirect</span><span class="who">a1</span></div>
+          <div class="cmt" style="animation-delay:1.05s"><i style="background:var(--green)"></i><span class="sha">7c5f2e8</span><span>migrate config schema</span><span class="who">a2</span></div>
+          <div class="cmt" style="animation-delay:1.2s"><i style="background:var(--blue)"></i><span class="sha">51b6d37</span><span>wire webhook retries</span><span class="who">a3</span></div>
+          <div class="cmt" style="animation-delay:1.35s"><i style="background:var(--magenta)"></i><span class="sha">a9042fe</span><span>test billing edge cases</span><span class="who">a4</span></div>
+          <div class="cmt deny" style="animation-delay:1.6s"><span class="x">✗</span><span>write into a1's claimed function</span><span class="who">denied</span></div>
+        </div>
       </div>
     </div>
+    <p class="loom-caption"><b>Every line is signed as it lands.</b> Four agents, one file, one checkout: each color is an agent, each commit is exactly its author's lines, and the fifth write, into claimed code, never changed a byte.</p>
+
+    <div class="proof" role="list" aria-label="benchmark results, without Quilt versus with Quilt">
+      <div class="cell" role="listitem"><div class="pair"><span class="a">3</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">changes silently lost</div></div>
+      <div class="cell" role="listitem"><div class="pair"><span class="a">9</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">changes misattributed</div></div>
+      <div class="cell" role="listitem"><div class="pair"><span class="a">1</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">broken final states</div></div>
+      <div class="cell flip" role="listitem"><div class="pair"><span class="a">0</span><span class="arrow">→</span><span class="b">3</span></div><div class="what">collisions surfaced instead</div></div>
+    </div>
+    <p class="proof-note">Measured on a six-scenario ladder of real multi-agent failure modes, same tasks, same tree, with and without Quilt. The assertions gate every CI run. <a href="bench.html">The numbers</a></p>
   </header>
 
-  <section id="argument">
+  <section id="argument" class="reveal">
     <p class="kicker">The argument</p>
-    <h2>Worktrees isolate. They don't coordinate.</h2>
-    <p class="sub">
-      A worktree per agent is the reflex answer, and for fully independent tasks it
-      works. But isolation has two costs that grow with every agent you add.
-      First, the bill: <strong>every worktree is another environment</strong>, another install,
-      another build cache, another dev server to keep alive. Second, the blindfold:
-      isolated agents <strong>can't see each other's in-flight work</strong>, so the collision
-      isn't prevented, it's deferred to merge time, where it's biggest and you're
-      the one holding it. The whole point of a shared checkout is paying for the
-      environment once, and letting agents account for each other as they go.
-    </p>
-    <table class="compare">
-      <tr><th></th><th>Run fewer agents</th><th>Worktree per agent</th><th class="q">One checkout + Quilt</th></tr>
-      <tr><td>Parallelism</td><td class="bad">capped low</td><td class="good">high</td><td class="q good">high</td></tr>
-      <tr><td>Setup per agent</td><td class="meh">none</td><td class="bad">install + build + env, times N</td><td class="q good">none (one checkout)</td></tr>
-      <tr><td>See each other's in-flight work</td><td class="meh">n/a</td><td class="bad">no</td><td class="q good">yes</td></tr>
-      <tr><td>Collisions</td><td class="meh">avoided by hand</td><td class="bad">surface at merge</td><td class="q good">prevented, or surfaced live</td></tr>
-      <tr><td>Clean per-agent commits</td><td class="meh">n/a</td><td class="meh">after a merge</td><td class="q good">yes</td></tr>
-    </table>
-    <p class="shot-caption">The two aren't mutually exclusive: worktrees for independent, long-running work, Quilt for agents in the same code at once.</p>
-  </section>
-
-  <section id="how">
-    <p class="kicker">How it works</p>
-    <h2>Attribution at the tool boundary, ownership per line.</h2>
-    <div class="steps">
-      <div class="step">
-        <span class="n">01 · capture</span>
-        <h3>Every edit is signed as it happens</h3>
-        <p>Capture hooks record each edit's author at the tool boundary. Each Claude Code
-        session or MCP connection is named automatically, with no ceremony and no protocol
-        for the agent to follow.</p>
+    <h2>Worktrees isolate.<br>They don't coordinate.</h2>
+    <div class="argument">
+      <div class="prose">
+        <p>
+          A worktree per agent is the reflex answer, and for fully independent tasks it works.
+          But isolation has two costs that grow with every agent you add.
+        </p>
+        <p>
+          <strong>The bill.</strong> Every worktree is another environment: another install, another
+          build cache, another dev server to keep alive. The whole point of a shared checkout
+          is paying for the environment once.
+        </p>
+        <p>
+          <strong>The blindfold.</strong> Isolated agents can't see each other's in-flight work, so the
+          collision isn't prevented, it's deferred to merge time, where it's biggest and you're
+          the one holding it. Agents that could have adapted to each other mid-task each build
+          against a world that no longer exists.
+        </p>
+        <p>
+          The two aren't mutually exclusive: worktrees for independent, long-running work,
+          Quilt for agents in the same code at once.
+        </p>
       </div>
-      <div class="step">
-        <span class="n">02 · coordinate</span>
-        <h3>Claims make intent visible</h3>
-        <p>Agents reserve files, directories, or single symbols (<code>utils.js#formatPrice</code>,
-        ten languages via tree-sitter). A write into claimed code is denied before any bytes
-        change, carrying the holder's stated intent.</p>
-      </div>
-      <div class="step">
-        <span class="n">03 · commit</span>
-        <h3>Each actor commits only its lines</h3>
-        <p><code>quilt commit --mine</code> reconstructs exactly your patch, even where two
-        actors share a hunk, and produces an ordinary Git commit. Everyone else's
-        uncommitted work stays untouched.</p>
+      <div class="receipt" aria-label="comparison: worktree per agent versus one checkout with Quilt">
+        <div class="rt">The running tab, per agent added</div>
+        <div class="hd"><span>worktree per agent</span><span>one checkout + quilt</span></div>
+        <div class="row"><span>setup</span><div class="cols"><div class="wt">install + build + env, × N</div><div class="q">none</div></div></div>
+        <div class="row"><span>sees others' work</span><div class="cols"><div class="wt">no</div><div class="q">yes, live</div></div></div>
+        <div class="row"><span>collisions</span><div class="cols"><div class="wt">surface at merge</div><div class="q">prevented, or surfaced now</div></div></div>
+        <div class="row"><span>per-agent commits</span><div class="cols"><div class="wt">after a merge</div><div class="q">always</div></div></div>
+        <div class="row"><span>parallelism</span><div class="cols"><div class="wt">high</div><div class="q">high</div></div></div>
+        <p class="receipt-note">Git stays the source of truth. Every Quilt commit is an ordinary Git commit; history is never rewritten.</p>
       </div>
     </div>
-    <pre class="term"><span class="c">$</span> QUILT_ACTOR=builder-flows quilt claim deals.js flows.js --intent "wire flows to deals"
+  </section>
+
+  <section id="how" class="reveal">
+    <p class="kicker">How it works</p>
+    <h2>Attribution at the tool boundary,<br>ownership per line.</h2>
+    <div class="how">
+      <div class="steps">
+        <div class="step">
+          <span class="n">01 · capture</span>
+          <h3>Every edit is signed as it happens</h3>
+          <p>Capture hooks record each edit's author at the tool boundary. Each Claude Code
+          session or MCP connection is named automatically: no ceremony, no protocol for the
+          agent to follow, nothing to approve.</p>
+        </div>
+        <div class="step">
+          <span class="n">02 · coordinate</span>
+          <h3>Claims make intent visible</h3>
+          <p>Agents reserve files, directories, or single symbols (<code>utils.js#formatPrice</code>,
+          ten languages via tree-sitter). A write into claimed code is denied before any bytes
+          change, and the denial carries the holder's stated intent and when their lease lapses.</p>
+        </div>
+        <div class="step">
+          <span class="n">03 · commit</span>
+          <h3>Each actor commits only its lines</h3>
+          <p><code>quilt commit --mine</code> reconstructs exactly your patch, even where two actors
+          share a hunk, and produces an ordinary Git commit. Everyone else's uncommitted work
+          stays untouched, and your claims auto-release.</p>
+        </div>
+      </div>
+      <div class="sticky">
+        <pre class="term"><span class="c">$</span> QUILT_ACTOR=builder-flows quilt claim deals.js flows.js \
+    --intent "wire flows to deals"
   <span class="r">✗ denied</span>  deals.js <span class="d">(held by builder-friction)</span>
       <span class="d">builder-friction is: friction pass: rename + archive flags</span>
       <span class="d">their claim lapses 22:12:05Z unless renewed</span>
-  <span class="g">✓ claimed</span> flows.js</pre>
-    <p class="shot-caption">A denied claim isn't a dead end: it names the holder, their intent, and when their lease lapses. The blocked agent builds its granted files, re-claims after the holder's commit auto-releases, and layers on top. Nothing lost.</p>
-  </section>
+  <span class="g">✓ claimed</span> flows.js
 
-  <section id="numbers">
-    <p class="kicker">Measured, not promised</p>
-    <h2>Same six scenarios, with and without Quilt.</h2>
-    <p class="sub">
-      Quilt ships with a scenario ladder of real multi-agent failure modes: disjoint fan-out,
-      same-line conflict, dependency cascade, refactor underfoot, emergent overlap, mixed
-      human and agent churn. Every scenario runs twice on the same tasks and the same shared
-      tree: plain git, then Quilt. The assertions gate every CI run.
-    </p>
-    <div class="numbers-grid">
-      <div class="stat"><div class="pair"><span class="a">3</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">changes silently lost</div></div>
-      <div class="stat"><div class="pair"><span class="a">9</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">changes misattributed</div></div>
-      <div class="stat"><div class="pair"><span class="a">1</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">broken final states</div></div>
-      <div class="stat flip"><div class="pair"><span class="a">0</span><span class="arrow">→</span><span class="b">3</span></div><div class="what">collisions surfaced for a human, instead of lost</div></div>
+<span class="c">$</span> quilt commit --mine -m "wire flows to deals"
+  <span class="g">✓</span> Committed 1 file(s) as <span class="d">builder-flows</span> (03d9c11).
+    <span class="d">Other actors' changes remain in the working tree.</span></pre>
+        <p class="term-caption">A denied claim isn't a dead end: the blocked agent builds its granted files, re-claims after the holder's commit auto-releases, and layers on top. Nothing lost.</p>
+      </div>
     </div>
-    <a class="btn ghost" href="bench.html">Per-scenario tables and the honest caveats</a>
   </section>
 
-  <section id="ui">
-    <p class="kicker">Mission control</p>
-    <h2>Watch the fleet, live.</h2>
-    <p class="sub">
-      <code>quilt ui</code> opens the whole picture in your browser: who wrote what with
-      per-actor line counts, active claims, who's blocked on whom, and a "needs you" queue
-      for the collisions agents couldn't sew themselves. Local-only, read-only, one command.
-      Prefer the terminal? <code>quilt fleet --watch</code> is the same view as text.
-    </p>
-    <div class="shot"><img src="assets/ui.png" alt="The quilt ui dashboard: an escalated collision under Needs you, two actor cards with claims, a who-wrote-what table with per-actor line counts, and blocked and queued actors." loading="lazy"></div>
+  <section class="reveal">
+    <p class="kicker">Built in</p>
+    <h2>When agents collide, nothing is lost.</h2>
+    <div class="duo">
+      <div class="fcard">
+        <h3>Push-awareness</h3>
+        <p>Claim a symbol that depends on a function another actor is changing, and Quilt warns you at claim time, so the dependent adapts instead of building against a stale signature.</p>
+        <pre class="term"><span class="c">$</span> quilt claim billing.js#total
+  <span class="g">✓ claimed</span> billing.js#total
+  <span class="d">⚠ heads-up: total depends on rate,
+    which codex is changing (billing.js#rate)</span></pre>
+      </div>
+      <div class="fcard">
+        <h3>Detect and preserve</h3>
+        <p>If one actor overwrites another's uncommitted lines anyway, Quilt snapshots the victim's version and says so. Both versions survive; you choose.</p>
+        <pre class="term"><span class="c">⚠ collision</span>  claude-ui overwrote codex's
+  edits in auth.ts. <span class="d">both saved, run:</span>
+<span class="c">$</span> quilt restore auth.ts</pre>
+      </div>
+    </div>
+    <div class="fleet-card">
+      <div class="fhead">
+        <div>
+          <h3>Watch the fleet, live</h3>
+          <p><code>quilt ui</code> opens the whole picture in your browser: who wrote what with per-actor
+          line counts, active claims, who's blocked on whom, and a needs-you queue for the collisions
+          agents couldn't sew themselves. Local-only, read-only, one command.</p>
+        </div>
+        <span class="pill">quilt ui · 127.0.0.1</span>
+      </div>
+      <img src="assets/ui.png" alt="The quilt ui dashboard: an escalated collision under Needs you, two actor cards with claims, a who-wrote-what table with per-actor line counts, and blocked and queued actors." loading="lazy">
+    </div>
   </section>
 
-  <section>
-    <p class="kicker">Straight answers</p>
-    <h2>Small tool, sharp edges stated.</h2>
-    <ul class="fine">
+  <section class="reveal">
+    <div class="center">
+      <p class="kicker">Straight answers</p>
+      <h2>Small tool, sharp edges stated.</h2>
+    </div>
+    <ul class="fine narrow">
       <li>All state lives in a local <code>.quilt/</code> sidecar. Delete it any time; your repo is untouched.</li>
       <li>Quilt never calls an LLM, never spawns agents, never rewrites Git history.</li>
       <li>Claude Code is first-class (hooks + MCP). Codex is capture-only today; Cursor and Aider via MCP tools.</li>
@@ -332,27 +412,43 @@
     </ul>
   </section>
 
-  <section id="teams">
+  <section id="teams" class="reveal">
     <div class="teams">
-      <p class="kicker">Coming next</p>
-      <h2>Quilt for teams</h2>
-      <p class="sub" style="margin-bottom:0">
-        Local Quilt stays free and open source. The team tier hoists the same primitives
-        your fleet already runs on, the append-only ledger, actor identities for humans and
-        agents, the escalation queue, into a <strong>shared claim ledger and control plane</strong>:
-        claims visible across machines, escalations routed to owners, and an audit trail of
-        who wrote what that survives any single checkout. Join the waitlist and we'll write
-        when it's real.
-      </p>
-      <form class="waitlist" id="waitlist">
-        <input type="email" id="wl-email" placeholder="you@company.com" required autocomplete="email">
-        <button type="submit" id="wl-btn">Join the waitlist</button>
-      </form>
-      <p class="wl-done" id="wl-done">✓ You're on the list. We'll write when it's real.</p>
-      <p class="wl-err" id="wl-err">That didn't send. Email <a href="mailto:wkoverfield@gmail.com?subject=Quilt%20teams%20waitlist">wkoverfield@gmail.com</a> instead.</p>
-      <p class="wl-note">Joining stores the email you enter and nothing else.</p>
+      <div>
+        <p class="kicker">Coming next</p>
+        <h2>Quilt for teams</h2>
+        <p class="sub">
+          Local Quilt stays free and open source. The team tier hoists the same primitives your
+          fleet already runs on, the append-only ledger, actor identities for humans and agents,
+          the escalation queue, into a <strong>shared claim ledger and control plane</strong>: claims visible
+          across machines, escalations routed to owners, and an audit trail of who wrote what
+          that survives any single checkout.
+        </p>
+      </div>
+      <div>
+        <form class="waitlist" id="waitlist">
+          <input type="email" id="wl-email" placeholder="you@company.com" required autocomplete="email" aria-label="work email">
+          <button type="submit" id="wl-btn">Join the waitlist</button>
+        </form>
+        <p class="wl-done" id="wl-done">✓ You're on the list. We'll write when it's real.</p>
+        <p class="wl-err" id="wl-err">That didn't send. Email <a href="mailto:wkoverfield@gmail.com?subject=Quilt%20teams%20waitlist">wkoverfield@gmail.com</a> instead.</p>
+        <p class="wl-note">Joining stores the email you enter and nothing else.</p>
+      </div>
     </div>
   </section>
+
+  <div class="fin reveal">
+    <p class="kicker">Five seconds to wired</p>
+    <h2>Give your whole fleet <em>one</em> checkout.</h2>
+    <div class="ctas" style="margin-top:26px">
+      <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
+      <a class="btn ghost" href="https://github.com/wkoverfield/quilt">Star on GitHub</a>
+    </div>
+    <div class="install">
+      <span class="p">$</span>
+      <span>npm i -g @quilt-dev/cli &amp;&amp; quilt setup</span>
+    </div>
+  </div>
 
   <footer>
     <span>MIT</span>
@@ -368,9 +464,50 @@
 <script>
 (function () {
   "use strict";
-  // One PostHog capture endpoint, used twice: an anonymous visit ping (fresh
-  // random id per pageview, no cookies, no localStorage, nothing persisted)
-  // and the waitlist form. That is the entire analytics surface of this site.
+
+  // ---- the loom: build threads (structure only; data-free, decorative) ----
+  var AGENTS = ["var(--coral)", "var(--green)", "var(--blue)", "var(--magenta)"];
+  // Each thread: [agent index, start %, width %] — hand-laid so rows read as
+  // interleaved per-agent edits in one file, some sharing a region.
+  var ROWS = [
+    [0, 0, 62], [0, 8, 44], [1, 4, 70], [2, 0, 38], [1, 12, 52],
+    [3, 0, 58], [2, 6, 66], [0, 2, 30], [3, 10, 48], [1, 0, 40],
+    [2, 14, 56], [3, 4, 34],
+  ];
+  var threads = document.getElementById("threads");
+  ROWS.forEach(function (r, i) {
+    var row = document.createElement("div");
+    row.className = "thread";
+    var ln = document.createElement("span");
+    ln.className = "ln";
+    ln.textContent = String(i + 1);
+    var track = document.createElement("div");
+    track.className = "track";
+    var yarn = document.createElement("div");
+    yarn.className = "yarn";
+    yarn.style.background = AGENTS[r[0]];
+    yarn.style.left = r[1] + "%";
+    yarn.style.width = r[2] + "%";
+    yarn.style.animationDelay = (0.15 + i * 0.06) + "s";
+    track.appendChild(yarn);
+    row.appendChild(ln);
+    row.appendChild(track);
+    threads.appendChild(row);
+  });
+
+  // ---- scroll reveals: once, fast ease-out, no re-trigger ----
+  if ("IntersectionObserver" in window) {
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (e.isIntersecting) { e.target.classList.add("in"); io.unobserve(e.target); }
+      });
+    }, { rootMargin: "0px 0px -8% 0px" });
+    document.querySelectorAll(".reveal").forEach(function (el) { io.observe(el); });
+  } else {
+    document.querySelectorAll(".reveal").forEach(function (el) { el.classList.add("in"); });
+  }
+
+  // ---- analytics: two events, no SDK, no cookies, nothing persisted ----
   var PH = "https://us.i.posthog.com/i/v0/e/";
   var KEY = "phc_7aGIe4BBqxv2qxtftFdi83so2t5LrV0UBFqZaYsOz9w";
   function send(event, distinctId, props) {
@@ -397,7 +534,6 @@
         .then(function () { flash("copied"); })
         .catch(function () { flash("select it"); });
     } catch (e) {
-      // file:// or an old browser: no clipboard access, so just say so.
       flash("select it");
     }
   });
