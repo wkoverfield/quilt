@@ -17,6 +17,14 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
+import {
+  TELEMETRY_DISCLOSURE,
+  maybePromptForTelemetry,
+  recordEvent,
+  telemetryDecided,
+  telemetryEnabled,
+  writeTelemetryConfig,
+} from "./telemetry.js";
 import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel, pathsClaimedByOthers, pathsClaimedBySelf, pathsClaimedBySelfAny, othersHoldLiveClaims, pendingGrants, markGrantsNotified, waitersBehind } from "./claims.js";
 import { recordOutcome, takeOwnership } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
@@ -629,6 +637,22 @@ program
           pc.dim(`  Update: quilt update   (or: ${NPM_UPDATE_COMMAND})\n`),
       );
     }
+
+    // The one-time opt-in question (TTY only, never asked twice, never in CI).
+    const consented = await maybePromptForTelemetry();
+    if (consented !== null) {
+      process.stdout.write(
+        pc.dim(
+          consented
+            ? "  Thanks. Anonymous counts only; opt out any time: quilt telemetry off\n"
+            : "  Telemetry stays off. Opt in any time: quilt telemetry on\n",
+        ),
+      );
+    }
+    recordEvent("quilt_setup_completed", {
+      orchestrator: d.orchestrator ?? "none",
+      already_wired: written.length === 0 && !initNeeded,
+    });
   });
 
 program
@@ -690,6 +714,7 @@ program
         `Session started for ${pc.bold(actor.id)} (${type}).\n` +
         pc.dim(`  session: ${session.id}\n  base:    ${shortHead(root)}\n`),
     );
+    recordEvent("quilt_session_started", { actor_type: type });
   });
 
 program
@@ -1083,6 +1108,7 @@ program
         pc.yellow(`  ⚠ Incomplete for this actor; withheld unsafe/shared files: ${selection.blockedFiles.join(", ")}\n`),
       );
     }
+    recordEvent("quilt_commit_mine", { files: committedCount });
   });
 
 program
@@ -1330,6 +1356,11 @@ program
         process.stdout.write(pc.yellow("  ⚠ heads-up ") + formatWarning(w) + "\n");
       }
     }
+    recordEvent("quilt_claim", {
+      granted: results.filter((r) => r.granted).length,
+      denied: results.filter((r) => !r.granted && !r.queued).length,
+      queued: results.filter((r) => !r.granted && r.queued).length,
+    });
     // A queued target is a SUCCESS (registered — keep working), not a denial.
     if (results.some((r) => !r.granted && !r.queued)) process.exitCode = 1;
   });
@@ -1370,6 +1401,7 @@ program
       pc.yellow("⚑ ") + `escalated ${pc.bold(o.target)} for review` +
         (o.note ? pc.dim(` — ${o.note}`) : "") + "\n",
     );
+    recordEvent("quilt_escalation", {});
   });
 
 program
@@ -1655,6 +1687,37 @@ program
       /* fail-open: skip capture */
     }
     process.exit(0);
+  });
+
+program
+  .command("telemetry")
+  .description("Show or change anonymous usage telemetry (off by default, opt-in)")
+  .argument("[state]", "on | off; omit to show the current state")
+  .action((state?: string) => {
+    if (state === undefined || state === "status") {
+      const effective = telemetryEnabled();
+      const source = process.env.QUILT_TELEMETRY !== undefined
+        ? ` (forced by QUILT_TELEMETRY=${process.env.QUILT_TELEMETRY})`
+        : telemetryDecided()
+          ? ""
+          : " (never asked; `quilt setup` asks once)";
+      process.stdout.write(
+        `Telemetry: ${effective ? pc.green("on") : pc.dim("off")}${pc.dim(source)}\n` +
+          pc.dim("  " + TELEMETRY_DISCLOSURE + "\n"),
+      );
+      return;
+    }
+    if (state !== "on" && state !== "off") fail(`expected "on" or "off", got "${state}"`);
+    writeTelemetryConfig(state === "on");
+    process.stdout.write(
+      (state === "on" ? pc.green("✓ ") + "Telemetry on. " : pc.green("✓ ") + "Telemetry off. ") +
+        pc.dim(state === "on" ? "Anonymous counts only; `quilt telemetry off` reverses this.\n" : "Nothing will be sent.\n"),
+    );
+    if (process.env.QUILT_TELEMETRY !== undefined) {
+      process.stdout.write(
+        pc.yellow("⚠ ") + `QUILT_TELEMETRY=${process.env.QUILT_TELEMETRY} is set and overrides this for any process that sees it.\n`,
+      );
+    }
   });
 
 program

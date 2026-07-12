@@ -6,6 +6,19 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in anonymous telemetry.** Off by default; `quilt setup` asks once,
+  on an interactive TTY only, and no answer means no. When enabled, Quilt
+  sends anonymous usage counts (setup completions, sessions started,
+  claim granted/denied/queued counts, commits, escalations) under a
+  locally generated random id. Never code, file paths, repo names, actor
+  ids, or commit messages; the hot hook path is never instrumented, and
+  events post from a detached process so no command waits on the network.
+  `quilt telemetry on|off` changes the decision any time;
+  `QUILT_TELEMETRY=0` force-disables per process. Documented in the
+  README and docs/reference.md.
+
 ## [0.4.6] - 2026-07-10
 
 ### Added

@@ -28,6 +28,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? Also checks the installed version against npm (cached daily, silent offline), the system git (2.18+ needed), and live-tests that the wired MCP server starts and lists its tools. |
 | `quilt update [--check]` | Update to the latest published version. Detects how Quilt was installed (npm/pnpm/bun) and runs the right command, or prints it when the installer can't be detected confidently. `--check` only reports (non-zero exit when behind). |
+| `quilt telemetry [on\|off]` | Show or change anonymous usage telemetry. Off by default; `quilt setup` asks once on a TTY. See [Telemetry](#telemetry). |
 | `quilt whoami` | Show the active actor and session. |
 | `quilt end` | End the active session. |
 
@@ -124,3 +125,33 @@ repos on Windows aren't handled yet.
 ```
 
 `.quilt/` is git-ignored automatically.
+
+## Telemetry
+
+Anonymous usage telemetry is off by default and strictly opt-in: `quilt setup`
+asks once, on an interactive TTY only (never in CI, never over a pipe), and
+records the decision either way so it never asks twice. Toggle any time with
+`quilt telemetry on|off`; `quilt telemetry` shows the current state.
+
+What is sent when enabled, and only then:
+
+| Event | When | Properties |
+| --- | --- | --- |
+| `quilt_setup_completed` | `quilt setup` finishes | detected orchestrator name, whether the repo was already wired |
+| `quilt_session_started` | `quilt start` | actor type (`human`/`agent`/`bot`) |
+| `quilt_claim` | `quilt claim` with targets | counts: granted, denied, queued |
+| `quilt_commit_mine` | `quilt commit --mine` succeeds | count of files committed |
+| `quilt_escalation` | `quilt escalate` | none |
+
+Every event also carries the quilt version, the platform (`darwin`/`linux`),
+the Node major version, and a random anonymous id generated locally (stored in
+`~/.config/quilt/telemetry.json`, kept across on/off toggles). Nothing else:
+no code, file paths, repo names, actor ids, branch names, commit messages, or
+claim intents. The hot capture path (`hook-pre`/`hook-post`) is never
+instrumented.
+
+Environment variables: `QUILT_TELEMETRY=0` forces telemetry off for a process
+regardless of the stored decision (set it in CI); `QUILT_TELEMETRY=1` forces
+it on the same way. Events are posted to PostHog by a short-lived detached
+process, so no quilt command ever waits on the network, and delivery failures
+are silent.
