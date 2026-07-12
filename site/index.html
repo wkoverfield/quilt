@@ -113,15 +113,6 @@
     @keyframes rise { to { opacity: 1; transform: none; } }
   }
 
-  .proof { display: flex; margin: 72px 0 0; border-block: 1px dashed var(--stitch); flex-wrap: wrap; }
-  .proof .cell { padding: 20px 32px 20px 0; text-align: left; border-right: 1px dashed var(--stitch); flex: 1 1 auto; }
-  .proof .cell + .cell { padding-left: 32px; }
-  .proof .cell:last-child { border-right: none; }
-  .proof .pair { font-family: var(--display); font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .proof .a { color: var(--coral-ink); } .proof .arrow { color: var(--faint); font-size: 19px; padding: 0 6px; font-family: var(--sans); } .proof .b { color: var(--green-ink); }
-  .proof .flip .a { color: var(--faint); } .proof .flip .b { color: var(--gold-ink); }
-  .proof .what { color: var(--faint); font-size: 13px; margin-top: 2px; }
-  .proof-note { color: var(--faint); font-size: 13.5px; padding: 12px 0 0; }
 
   section { padding: 108px 0 0; }
   h2 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 3.8vw, 42px); line-height: 1.08; letter-spacing: -.008em; margin: 0 0 14px; max-width: 18em; }
@@ -249,13 +240,6 @@
     </div>
     <p class="loom-caption"><b>Each color is an agent.</b> Every commit is exactly its author's lines, and the fifth write, into claimed code, never changed a byte.</p>
 
-    <div class="proof" role="list" aria-label="benchmark results, without Quilt versus with Quilt">
-      <div class="cell" role="listitem"><div class="pair"><span class="a">3</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">changes silently lost</div></div>
-      <div class="cell" role="listitem"><div class="pair"><span class="a">9</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">changes misattributed</div></div>
-      <div class="cell" role="listitem"><div class="pair"><span class="a">1</span><span class="arrow">→</span><span class="b">0</span></div><div class="what">broken final states</div></div>
-      <div class="cell flip" role="listitem"><div class="pair"><span class="a">0</span><span class="arrow">→</span><span class="b">3</span></div><div class="what">collisions surfaced instead</div></div>
-    </div>
-    <p class="proof-note">Same tasks, same tree, with and without Quilt. <a href="https://github.com/wkoverfield/quilt/blob/main/bench/RESULTS.md">Full results in the repo</a></p>
   </header>
 
   <section class="reveal">
