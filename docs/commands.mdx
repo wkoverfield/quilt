@@ -1,0 +1,64 @@
+---
+title: "Commands"
+description: "The full CLI surface. Run quilt <command> --help for every flag."
+---
+
+A global `--as <id>` sets your actor for any command (the per-command form of
+`QUILT_ACTOR=<id>`). An explicit `QUILT_ACTOR` env var wins over `--as`;
+`QUILT_SESSION=<session>` pins a live session.
+
+## Setup and health
+
+| Command | Purpose |
+| --- | --- |
+| `quilt init` | Initialize `.quilt/` in the repo. |
+| `quilt setup [--dry-run]` | Wire Quilt into the repo's orchestrator: capture hooks, the shared MCP server, and the coordination snippet. Run from a directory of repos, it wires the whole workspace. Idempotent. |
+| `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, is capture actually flowing? Also checks the installed version, the system git (2.18+), and live-tests the wired MCP server. |
+| `quilt update [--check]` | Update to the latest published version, using whichever installer put Quilt here. |
+| `quilt config author.email [email]` | Read or set the repository-default Git author email. Actor names remain distinct. |
+
+## Identity and sessions
+
+| Command | Purpose |
+| --- | --- |
+| `quilt start --actor <id> [--type human\|agent\|bot]` | Start a session for an actor. Optional: agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. |
+| `quilt whoami` | Show the active actor and session. |
+| `quilt end` | End the active session. |
+
+## Watching the fleet
+
+| Command | Purpose |
+| --- | --- |
+| `quilt ui [--port <n>] [--no-open]` | The fleet dashboard as a live local web page: who wrote what with per-actor line counts, claims, blocked/queued actors, and the needs-you queue. Binds 127.0.0.1 only, read-only. |
+| `quilt fleet [--json] [--watch]` | The same mission-control view in the terminal. JSON includes `files`, the per-file who-wrote-what rows. |
+| `quilt status [--json]` | Who owns which working-tree changes. |
+| `quilt mine [--json]` | Summarize the changes you own. |
+| `quilt conflicts [--json]` | Shared changes: same-line clashes vs adjacent edits that commit cleanly. |
+| `quilt watch` | Attribute edits live on file events and catch collisions as they happen. |
+
+## Claims and coordination
+
+| Command | Purpose |
+| --- | --- |
+| `quilt claim [targets...] [--intent "..."] [--creating] [--wait [s]] [--queue]` | Reserve files, directories, or symbols (`file#symbol`) before editing. A denial names the holder and their intent. `--queue` auto-grants when the target frees. Dead holders with no uncommitted work are reclaimed automatically. |
+| `quilt release [paths...]` | Release your claims (all of yours if no paths). |
+| `quilt escalate <target> [--reason]` | Flag a collision agents can't reconcile for a human (shows under "Needs you"). |
+| `quilt resolve <target> [--note] [--take --from <actor>]` | Mark a collision handled. `--take` transfers the named actor's dirty operations to the resolver. |
+
+## Committing and recovery
+
+| Command | Purpose |
+| --- | --- |
+| `quilt commit --mine [paths...] -m <msg> [--dry-run]` | Commit only your owned patch. Path args are a hard allow-list. Auto-releases your claims on the committed files. |
+| `quilt preview --mine [paths...] [--json]` | Print the exact patch `commit --mine` would create. |
+| `quilt undo <actor> [--dry-run]` | Back out one actor's uncommitted changes, leaving everyone else's untouched. |
+| `quilt restore [path] [--json]` | List or recover work overwritten by another actor (both versions are preserved on detection). |
+
+## Integration
+
+| Command | Purpose |
+| --- | --- |
+| `quilt mcp` | Run the MCP server (stdio) for agent integration. |
+
+The canonical, always-current version of this table lives in the repo at
+[docs/reference.md](https://github.com/wkoverfield/quilt/blob/main/docs/reference.md).

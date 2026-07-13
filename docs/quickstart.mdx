@@ -1,0 +1,65 @@
+---
+title: "Quickstart"
+description: "From a git repo to four coordinated agents in about five seconds."
+---
+
+## Install and wire
+
+```bash
+npm install -g @quilt-dev/cli
+cd your-repo
+quilt setup      # wires capture hooks + the optional MCP server
+quilt doctor     # confirms it's wired and capture is flowing
+```
+
+`quilt setup` detects your orchestrator and wires the repo: native-edit capture
+hooks (Claude Code), the shared MCP server in `.mcp.json`, and a coordination
+snippet in `CLAUDE.md`/`AGENTS.md`. It is idempotent, and `--dry-run` shows what
+would change. Commit the generated config so every checkout shares the wiring;
+`.quilt/` itself stays local and gitignored.
+
+## Four terminals, one repo
+
+```bash
+cd your-repo
+quilt setup          # once
+claude               # terminal 1
+claude               # terminal 2
+claude               # terminal 3
+claude               # terminal 4
+```
+
+Nothing else. No per-terminal ceremony: the capture hooks attribute every edit
+to its session automatically, each Claude Code session or MCP connection gets
+its own id, and a write into code another session has claimed is denied before
+any bytes change.
+
+Want a stable, readable id instead of an auto-generated one?
+
+```bash
+QUILT_ACTOR=auth-agent claude    # this agent's edits belong to auth-agent
+```
+
+## Watch it, then commit it
+
+```bash
+quilt ui                          # the fleet dashboard in your browser
+quilt status                      # who owns what, in the terminal
+quilt preview --mine              # the exact patch commit --mine would create
+quilt commit --mine -m "fix auth redirect"
+```
+
+Each commit contains exactly that actor's lines, even where two actors touched
+the same file. Everyone else's uncommitted work stays exactly where it was.
+
+<Note>
+Claude Code loads the MCP server after a restart plus a one-time `/mcp`
+approval. That step is optional: the capture hooks already protect every edit,
+and `quilt claim` / `quilt commit --mine` work from the shell either way.
+</Note>
+
+## A workspace of repos
+
+Start sessions from a directory that holds several repos? Run `quilt setup`
+there instead: it wires the workspace root and every repo inside, and each edit
+is captured into the repo its file belongs to.

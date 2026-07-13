@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quilt docs · quickstart, commands, how it works</title>
+<meta name="description" content="Everything you need to run Quilt: install and quickstart, the full command list, how attribution works, and wiring a set of coding agents into one shared checkout.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23e5a06b'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%238fc46f'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%235aa9e6'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d074c4'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://api.fontshare.com">
+<link href="https://api.fontshare.com/v2/css?f[]=gambetta@500,600,700&f[]=switzer@400,500,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #f7f2e6; --paper2: #efe8d7; --card: #fdfaf2; --border: #ddd3bd; --stitch: #cfc3a9;
+    --ink: #262019; --dim: #5f564a; --faint: #776d5e;
+    --thread: #e3b34c; --thread-ink: #8a650c;
+    --coral: #e06c75; --coral-ink: #a83e4c; --amber: #e5a06b; --green: #8fc46f; --green-ink: #426a2d;
+    --blue: #5aa9e6; --magenta: #d074c4;
+    --dpanel: #211b12; --dborder: #3a3226; --dink: #ece5d8; --ddim: #a89f8d; --dfaint: #847c6e;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Switzer", -apple-system, sans-serif;
+    --display: "Gambetta", Georgia, serif;
+    --ease: cubic-bezier(.21,.9,.35,1);
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16.5px/1.68 var(--sans); }
+  body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 2000; opacity: .04;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E"); }
+  a { color: var(--thread-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  code { font-family: var(--mono); font-size: .92em; }
+  .navbar .wrap { max-width: 1060px; padding: 0 24px; }
+  .navbar { position: sticky; top: 0; z-index: 50; border-bottom: 1px dashed transparent;
+            background: color-mix(in srgb, var(--paper) 80%, transparent);
+            -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+  .navbar.scrolled { border-bottom-color: var(--stitch); }
+  .navbar nav { position: relative; }
+  nav { display: flex; align-items: center; gap: 26px; padding: 14px 0; line-height: 1.5; }
+  .mark { display: grid; grid-template-columns: 9px 9px; gap: 2.5px; }
+  .mark i { width: 9px; height: 9px; border-radius: 2.5px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 20px; color: var(--ink); }
+  .brand:hover { text-decoration: none; }
+  nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14.5px; align-items: center; }
+  nav .links a { color: var(--dim); }
+  nav .links a:hover { color: var(--ink); text-decoration: none; }
+  nav .links a[aria-current] { color: var(--ink); }
+  .gh { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--stitch); border-radius: 8px; padding: 6px 13px; color: var(--ink) !important; }
+  .gh:hover { border-color: var(--ink); }
+  .gh .ghc { color: var(--faint); font-family: var(--mono); font-size: 12px; padding-left: 8px; border-left: 1px solid var(--stitch); }
+  @media (max-width: 860px) { nav .links { gap: 15px; font-size: 13.5px; } }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 44px 24px 80px; }
+  .docs { display: grid; grid-template-columns: 200px 1fr; gap: 56px; align-items: start; }
+  @media (max-width: 800px) { .docs { grid-template-columns: 1fr; gap: 24px; } }
+  .docs > * { min-width: 0; }
+
+  .rail { position: sticky; top: 84px; display: flex; flex-direction: column; gap: 2px; }
+  .rail a { font-size: 14px; color: var(--dim); padding: 7px 10px; border-left: 2px solid var(--border); }
+  .rail a:hover { color: var(--ink); text-decoration: none; }
+  .rail a.on { color: var(--ink); border-left-color: var(--thread-ink); }
+  @media (max-width: 800px) {
+    .rail { position: static; flex-direction: row; flex-wrap: wrap; gap: 8px; }
+    .rail a { border: 1px dashed var(--stitch); border-radius: 99px; padding: 5px 13px; font-size: 13px; }
+    .rail a.on { border-color: var(--thread-ink); }
+  }
+
+  .eyebrow { font-family: var(--mono); font-size: 13px; color: var(--thread-ink); margin: 0 0 14px; }
+  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(32px, 4.4vw, 44px); line-height: 1.06; letter-spacing: -.01em; margin: 0 0 14px; }
+  h2 { font-family: var(--display); font-weight: 600; font-size: 26px; margin: 56px 0 12px; scroll-margin-top: 84px; }
+  h3 { font-family: var(--display); font-weight: 600; font-size: 19px; margin: 28px 0 8px; }
+  p { color: var(--dim); margin: 0 0 16px; }
+  p strong { color: var(--ink); font-weight: 500; }
+  ul { color: var(--dim); padding-left: 22px; margin: 0 0 16px; }
+  ul li { margin: 7px 0; }
+  ul li strong { color: var(--ink); font-weight: 500; }
+
+  pre.term { background: var(--dpanel); border: 1px solid var(--dborder); border-radius: 12px; padding: 16px 19px;
+             font-size: 13px; line-height: 1.7; overflow-x: auto; font-family: var(--mono); max-width: 100%; color: var(--dink); margin: 18px 0; }
+  pre.term .c { color: var(--dfaint); } pre.term .g { color: var(--green); } pre.term .d { color: var(--ddim); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 16px 0 26px; background: var(--card); }
+  th, td { padding: 9px 12px; border: 1px dashed var(--border); text-align: left; vertical-align: top; }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); font-weight: 500; background: var(--paper2); }
+  td:first-child { white-space: nowrap; font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+  td:last-child { color: var(--dim); }
+  @media (max-width: 700px) { table { display: block; overflow-x: auto; } td:first-child { white-space: normal; } }
+
+  .note { border: 1px dashed var(--stitch); border-radius: 12px; background: var(--paper2); padding: 14px 18px; font-size: 14.5px; color: var(--dim); margin: 18px 0; }
+  .note strong { color: var(--ink); font-weight: 500; }
+
+  footer { border-top: 1px dashed var(--stitch); margin-top: 72px; padding-top: 26px; color: var(--faint); font-size: 14px; display: flex; gap: 22px; flex-wrap: wrap; }
+  footer a { color: var(--dim); }
+</style>
+</head>
+<body>
+<div class="navbar" id="navbar">
+  <div class="wrap" style="padding-top:0;padding-bottom:0">
+    <nav>
+      <a class="brand" href="index.html">
+        <span class="mark" aria-hidden="true">
+          <i style="background:var(--amber)"></i><i style="background:var(--green)"></i>
+          <i style="background:var(--blue)"></i><i style="background:var(--magenta)"></i>
+        </span>
+        Quilt
+      </a>
+      <div class="links">
+        <a href="docs.html" aria-current="page">Docs</a>
+        <a class="gh" href="https://github.com/wkoverfield/quilt"><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>GitHub<span class="ghc" id="gh-count" hidden></span></a>
+      </div>
+    </nav>
+  </div>
+</div>
+<div class="wrap">
+  <div class="docs">
+    <aside class="rail" aria-label="sections">
+      <a href="#quickstart">Quickstart</a>
+      <a href="#commands">Commands</a>
+      <a href="#attribution">How attribution works</a>
+      <a href="#agents">Running your agents</a>
+      <a href="#state">State and safety</a>
+    </aside>
+
+    <main>
+      <p class="eyebrow">docs</p>
+      <h1>Everything you need to run Quilt.</h1>
+      <p>
+        The short version of the full documentation. The always-current deep
+        references live in the repo:
+        <a href="https://github.com/wkoverfield/quilt/blob/main/docs/reference.md">reference.md</a> and
+        <a href="https://github.com/wkoverfield/quilt/blob/main/docs/orchestrators.md">orchestrators.md</a>.
+      </p>
+
+      <h2 id="quickstart">Quickstart</h2>
+      <pre class="term"><span class="c">$</span> npm install -g @quilt-dev/cli
+<span class="c">$</span> cd your-repo
+<span class="c">$</span> quilt setup     <span class="c"># wires capture hooks + the optional MCP server</span>
+<span class="c">$</span> quilt doctor    <span class="c"># confirms it's wired and capture is flowing</span></pre>
+      <p>
+        <code>quilt setup</code> detects your orchestrator and wires the repo: capture hooks,
+        the shared MCP server in <code>.mcp.json</code>, and a coordination snippet in
+        <code>CLAUDE.md</code>. It is idempotent, and <code>--dry-run</code> shows what would change.
+        Commit the generated config so every checkout shares the wiring; <code>.quilt/</code>
+        itself stays local and gitignored.
+      </p>
+      <h3>Four terminals, one repo</h3>
+      <pre class="term"><span class="c">$</span> quilt setup      <span class="c"># once</span>
+<span class="c">$</span> claude           <span class="c"># terminal 1</span>
+<span class="c">$</span> claude           <span class="c"># terminal 2, 3, 4...</span></pre>
+      <p>
+        Nothing else. Each Claude Code session or MCP connection is named automatically,
+        every edit is attributed to its session as it happens, and a write through the
+        wired edit tools into code another session has claimed is denied before any
+        bytes change. Want a stable,
+        readable id? <code>QUILT_ACTOR=auth-agent claude</code>.
+      </p>
+      <p>Watch it live and commit when ready:</p>
+      <pre class="term"><span class="c">$</span> quilt ui                        <span class="c"># the dashboard, local-only</span>
+<span class="c">$</span> quilt status                    <span class="c"># who owns what</span>
+<span class="c">$</span> quilt commit --mine -m "fix auth redirect"
+  <span class="g">✓</span> Committed 1 file(s) <span class="d">(b41e7a2). Other actors' changes remain in the working tree.</span></pre>
+      <div class="note">
+        <strong>Claude Code note:</strong> the optional MCP claim tools appear after a restart
+        plus a one-time <code>/mcp</code> approval. The capture hooks protect every edit either
+        way, and <code>quilt claim</code> / <code>quilt commit --mine</code> always work from the shell.
+      </div>
+
+      <h2 id="commands">Commands</h2>
+      <p>A global <code>--as &lt;id&gt;</code> sets your actor for any command. <code>QUILT_ACTOR</code> wins over <code>--as</code>.</p>
+      <table>
+        <tr><th>command</th><th>what it does</th></tr>
+        <tr><td>quilt setup</td><td>Wire the repo (or a whole workspace of repos): hooks, MCP server, coordination snippet. Idempotent; <code>--dry-run</code> previews.</td></tr>
+        <tr><td>quilt doctor</td><td>Health check: wired, identity set, capture flowing, git version, MCP server live-test.</td></tr>
+        <tr><td>quilt ui</td><td>The fleet dashboard in your browser: who wrote what, claims, blocked and queued actors, the needs-you queue. Binds 127.0.0.1 only.</td></tr>
+        <tr><td>quilt fleet</td><td>The same view in the terminal; <code>--watch</code> refreshes live, <code>--json</code> for programs.</td></tr>
+        <tr><td>quilt status</td><td>Who owns which working-tree changes.</td></tr>
+        <tr><td>quilt claim</td><td>Reserve files, directories, or symbols (<code>file#symbol</code>) before editing, with <code>--intent "why"</code>. A denial names the holder, their intent, and when their lease lapses. <code>--queue</code> auto-grants when the target frees.</td></tr>
+        <tr><td>quilt release</td><td>Release your claims (all of them if no paths given).</td></tr>
+        <tr><td>quilt commit --mine</td><td>Commit exactly your lines as an ordinary Git commit, even where files are shared. Auto-releases your claims on the committed files. <code>preview --mine</code> shows the patch first.</td></tr>
+        <tr><td>quilt escalate</td><td>Flag a collision agents can't reconcile for a human; shows under "needs you".</td></tr>
+        <tr><td>quilt resolve</td><td>Mark a collision handled; <code>--take --from &lt;actor&gt;</code> transfers their dirty operations to you.</td></tr>
+        <tr><td>quilt undo / restore</td><td>Back out one actor's uncommitted changes, or recover work another actor overwrote (both versions are preserved on detection).</td></tr>
+        <tr><td>quilt watch</td><td>Attribute edits live on file events and catch collisions the moment they happen.</td></tr>
+        <tr><td>quilt telemetry</td><td>Show or change anonymous usage telemetry. Off by default, strictly opt-in.</td></tr>
+        <tr><td>quilt mcp</td><td>Run the MCP server (stdio) for agent integration.</td></tr>
+      </table>
+      <p>Full flags: <code>quilt &lt;command&gt; --help</code>, or the <a href="https://github.com/wkoverfield/quilt/blob/main/docs/reference.md">complete reference</a>.</p>
+
+      <h2 id="attribution">How attribution works</h2>
+      <p>One governing rule: <strong>a blocked commit beats a wrong one</strong>. Uncaptured work is surfaced as unattributed, never guessed into the wrong author's commit.</p>
+      <ul>
+        <li><strong>Capture at the tool boundary (primary).</strong> Hooks and the MCP edit tools record each edit's author the moment it happens, into an append-only ledger. Any line the ledger knows wins.</li>
+        <li><strong>Claims (prevention and binding).</strong> A claim reserves both editing and attribution. Edits that bypass capture (bash, codegen) bind to whoever claimed the file first.</li>
+        <li><strong>Reconcile inference (the floor).</strong> Each command diffs the tree against the last observed snapshot and attributes the delta to the actor running it, gated so a contested tree is never absorbed by whoever reconciles first.</li>
+      </ul>
+      <p>
+        <code>commit --mine</code> keeps only the lines you own, applies that patch to a throwaway
+        temporary index, and produces an ordinary Git commit. Your real index and working
+        tree are never rewritten, and other actors' changes stay exactly where they were.
+        Attribution keys each change by side, symbol scope, content, and occurrence, so
+        identical lines in different functions can belong to different actors.
+      </p>
+
+      <h2 id="agents">Running your agents</h2>
+      <p><strong>Two ways to capture.</strong> On Claude Code, hooks capture every native edit with zero ceremony. Everywhere else, the shared MCP server (<code>quilt mcp</code>) exposes the same capture and prevention as tools: <code>start_session</code>, <code>claim</code>, <code>get_conflicts</code>, <code>commit_mine</code>, <code>quilt_edit</code>, and friends.</p>
+      <ul>
+        <li><strong>Claude Code</strong>: first-class (hooks + MCP). Subagents get their own ids automatically.</li>
+        <li><strong>Codex CLI</strong>: capture via <code>~/.codex/hooks.json</code>, wired by setup. Requires a one-time interactive hook approval; capture-only today.</li>
+        <li><strong>Cursor</strong>: via MCP (<code>.cursor/mcp.json</code>, wired when a <code>.cursor/</code> directory exists).</li>
+        <li><strong>Anything else</strong>: route edits through <code>quilt_edit</code> / <code>quilt_write</code>, or claim first and edit however you like.</li>
+      </ul>
+      <p><strong>The loop that pays:</strong> claim before editing (whole files normally, <code>file#symbol</code> to share a file), don't force a denial (queue, adapt, or escalate), and finish with <code>commit --mine</code>. Several subagents sharing one process? Give each a stable id and pass it as <code>actor</code> on every call.</p>
+
+      <h2 id="state">State and safety</h2>
+      <p>Everything lives in a local <code>.quilt/</code> sidecar: actors, sessions, per-line ownership, the append-only capture ledger, live claims, preserved overwrites, and the escalation queue. Delete it any time; your repo is untouched.</p>
+      <ul>
+        <li>Quilt never calls an LLM, never spawns agents, never rewrites Git history. Every commit it produces is an ordinary Git commit.</li>
+        <li>Enforcement is scoped: wired edit tools are blocked at claim boundaries; raw shell and other processes are advisory. The <a href="why.html#edges">sharp edges, stated plainly</a>.</li>
+        <li>POSIX only for now: macOS and Linux.</li>
+        <li>Telemetry is off by default and strictly opt-in; when enabled it sends anonymous counts only, never code, paths, or names.</li>
+      </ul>
+
+      <footer>
+        <span>MIT</span>
+        <a href="index.html">quilt home</a>
+        <a href="why.html">Why</a>
+        <a href="https://github.com/wkoverfield/quilt">GitHub</a>
+        <a href="https://www.npmjs.com/package/@quilt-dev/cli">npm</a>
+      </footer>
+    </main>
+  </div>
+</div>
+<script>
+(function () {
+  "use strict";
+  if (!("IntersectionObserver" in window)) return;
+  var navbar = document.getElementById("navbar");
+  var sentinel = document.createElement("div");
+  navbar.parentNode.insertBefore(sentinel, navbar.nextSibling);
+  new IntersectionObserver(function (entries) {
+    navbar.classList.toggle("scrolled", !entries[0].isIntersecting);
+  }).observe(sentinel);
+
+  // highlight the rail link for the section in view
+  var links = [].slice.call(document.querySelectorAll(".rail a"));
+  var byId = {};
+  links.forEach(function (a) { byId[a.getAttribute("href").slice(1)] = a; });
+  var seen = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (e.isIntersecting) {
+        links.forEach(function (a) { a.classList.remove("on"); });
+        byId[e.target.id].classList.add("on");
+      }
+    });
+  }, { rootMargin: "-20% 0px -70% 0px" });
+  ["quickstart", "commands", "attribution", "agents", "state"].forEach(function (id) {
+    seen.observe(document.getElementById(id));
+  });
+})();
+</script>
+<script>
+  (function () {
+    var ghc = document.getElementById("gh-count");
+    if (!ghc || !window.fetch) return;
+    fetch("https://api.github.com/repos/wkoverfield/quilt")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || typeof d.stargazers_count !== "number") return;
+        var n = d.stargazers_count;
+        ghc.textContent = "\u2605 " + (n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, "") + "k" : n);
+        ghc.hidden = false;
+      })
+      .catch(function () {});
+  })();
+</script>
+</body>
+</html>

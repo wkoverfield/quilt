@@ -1,0 +1,27 @@
+# Quilt
+
+> Quilt is a command-line tool that tracks which agent wrote which lines in a shared Git checkout, so multiple AI coding agents can work in one repo at once and each commits only its own changes. Actor-owned patches for Git: per-line attribution, symbol-level claims, collision prevention, and a live fleet dashboard. Local-first (all state in a `.quilt/` sidecar), MIT licensed, POSIX (macOS/Linux), Node 20+.
+
+Install: `npm install -g @quilt-dev/cli && quilt setup` (wires capture hooks and an MCP server into the repo; agents are named automatically per session/connection).
+
+Key facts for agents:
+- Every commit Quilt produces is an ordinary Git commit; Quilt never rewrites history, never calls an LLM, and never spawns agents.
+- `quilt commit --mine -m "msg"` commits exactly the calling actor's lines, even when they share a hunk with another actor's changes.
+- `quilt claim <file|dir|file#symbol> --intent "why"` reserves code before editing; a denied claim names the holder, their intent, and when their lease lapses. `--queue` auto-grants when the target frees.
+- `quilt ui` opens a local-only dashboard (who wrote what, claims, escalations); `quilt fleet --json` is the same view for programs.
+- MCP server: `quilt mcp` (stdio), 12 tools including start_session, claim, get_status, get_conflicts, commit_mine, escalate, quilt_edit, quilt_write.
+
+## Docs
+
+- [README](https://raw.githubusercontent.com/wkoverfield/quilt/main/README.md): overview, quickstart, the worktrees argument
+- [Command reference](https://raw.githubusercontent.com/wkoverfield/quilt/main/docs/reference.md): full command list, how attribution works, `.quilt/` state layout
+- [Running a fleet](https://raw.githubusercontent.com/wkoverfield/quilt/main/docs/orchestrators.md): Claude Code, Codex, Cursor, Aider; process-per-agent vs many-in-one-process
+- [Benchmarks](https://raw.githubusercontent.com/wkoverfield/quilt/main/bench/RESULTS.md): the six-scenario ladder, WITH vs WITHOUT Quilt
+- [Changelog](https://raw.githubusercontent.com/wkoverfield/quilt/main/CHANGELOG.md)
+- [Security policy](https://raw.githubusercontent.com/wkoverfield/quilt/main/SECURITY.md)
+
+## Optional
+
+- [Capture-strategy eval](https://raw.githubusercontent.com/wkoverfield/quilt/main/bench/authorship/RESULTS.md): why capture-at-the-tool-boundary, and the fail-safe design
+- [Latency measurements](https://raw.githubusercontent.com/wkoverfield/quilt/main/bench/authorship/LATENCY.md): capture is ~0.01 ms; reconcile ~40-70 ms, near-flat in file count
+- [Contributing](https://raw.githubusercontent.com/wkoverfield/quilt/main/CONTRIBUTING.md)

@@ -14,3 +14,4 @@ examples/contrast-with.gif
 .mcp.json
 .claude/
 CLAUDE.md
+.playwright-mcp/

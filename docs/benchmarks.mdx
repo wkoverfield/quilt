@@ -1,0 +1,58 @@
+---
+title: "Benchmarks"
+description: "The same six scenarios, with and without Quilt. The assertions gate CI."
+---
+
+Quilt ships with a graded scenario ladder of multi-agent failure modes, drawn
+from live two-agent experiments. Every scenario runs twice on the same tasks
+and the same shared working tree: plain git, then Quilt. Both runs are graded
+on the same metrics, and the WITH-Quilt assertions gate every CI run.
+
+Latest run: 2026-07-12, Quilt 0.4.6. Reproduce with `npm run bench`.
+
+## The headline
+
+Across the ladder (18 intended changes, 2 to 4 concurrent actors):
+
+| across all six scenarios | without Quilt | with Quilt |
+| --- | --- | --- |
+| changes silently lost | 3 | **0** |
+| changes misattributed | 9 | **0** |
+| broken final states | 1 | **0** |
+| collisions surfaced for a human | 0 | 3 |
+| scenarios with fully correct attribution | 2 of 6 | **6 of 6** |
+
+Features landed is identical across conditions on every rung: where the
+baseline silently dropped a change, Quilt surfaced the same collision instead.
+The difference is what happens to the losing edit.
+
+## The ladder
+
+| Rung | Scenario | Without Quilt | With Quilt |
+| --- | --- | --- | --- |
+| L1 | Disjoint at scale: 4 agents, 4 functions, 1 file | 3 misattributed, one entangled commit | 4 clean commits, each to its author |
+| L2 | Incompatible conflict: same line, two values | 1 silently lost | surfaced for a human |
+| L3 | Dependency cascade: signature changes under a call site | broken final state | dependent saw the claim, adapted |
+| L4 | Refactor underfoot: symbol restructured mid-edit | 1 silently lost | collision surfaced, both preserved |
+| L5 | Emergent overlap: a task drifts into another's code | 1 lost, 2 misattributed | late claim denied, caught live |
+| L6 | Mixed actors + noise: human + agent + bot churn | 3 misattributed | each change under its true author |
+
+## How to read this honestly
+
+- **The scripted layer encodes cooperative agents.** Actors claim before
+  editing and back off on denial. It proves what the coordination contract
+  delivers when followed; a live sub-agent layer tests whether real agents
+  follow it.
+- **Harness wall clock is not latency.** Each scripted action spawns a fresh
+  CLI process, so harness timings measure process startup. Measured
+  separately: per-edit capture is ~0.01 ms, and reconcile stays under ~70 ms
+  even at 150 changed files.
+- **The no-redo baseline is deliberate.** When plain git silently loses an
+  edit, nobody redoes it, because nobody knows.
+- **Capture coverage is measured too.** Across 13 real Claude agents on
+  bash-tempting tasks, 100% of file writes went through capturable tools. The
+  one theoretical gap (raw shell edits) fails safe: surfaced as unattributed,
+  never miscredited.
+
+Raw results, per-rung tables, and the harness source live in the repo:
+[bench/](https://github.com/wkoverfield/quilt/tree/main/bench).

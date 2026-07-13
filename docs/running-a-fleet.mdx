@@ -1,0 +1,60 @@
+---
+title: "Running a fleet"
+description: "Claude Code, Codex, Cursor, Aider: wiring agents into one coordinated checkout."
+---
+
+`quilt setup` wires the current repo for whatever orchestrator it detects. This
+page is the short version; the full runbook, including the protocol that binds
+external edits and the deadlock-break play, lives in
+[docs/orchestrators.md](https://github.com/wkoverfield/quilt/blob/main/docs/orchestrators.md)
+in the repo.
+
+## Two ways to capture
+
+**Hooks (zero ceremony).** On Claude Code, PreToolUse/PostToolUse hooks capture
+every Edit/Write/MultiEdit with its author as it happens. Agents use their
+built-in tools normally; there is no protocol to follow. Each session is named
+automatically, or set `QUILT_ACTOR=<id>` on the process for a stable id.
+
+**MCP tools (works anywhere).** The shared MCP server (`quilt mcp`, stdio)
+exposes the same capture and prevention as tools: `start_session`, `claim`,
+`get_status`, `get_conflicts`, `commit_mine`, `quilt_edit`, `quilt_write`, and
+friends. Each MCP connection is named automatically, the same way sessions are.
+
+## Per orchestrator
+
+- **Claude Code**: first-class. `quilt setup` wires hooks plus `.mcp.json`.
+  Subagents get their own ids automatically. The MCP claim tools appear after a
+  restart and a one-time `/mcp` approval; the hooks protect you either way.
+- **Codex CLI**: capture via `~/.codex/hooks.json` (wired by setup when Codex
+  is installed). Codex requires a one-time interactive approval of new hooks;
+  `quilt doctor` reports wired-but-unapproved. Capture only today; prevention
+  parity is planned.
+- **Cursor**: via MCP (`.cursor/mcp.json`, wired by setup when a `.cursor/`
+  directory exists).
+- **Aider, or any other runtime**: route edits through the `quilt_edit` /
+  `quilt_write` MCP tools, or claim first and edit however you like.
+
+## Many agents, one process
+
+Identity is automatic when each agent is its own session or MCP connection.
+When several subagents share one process or one MCP connection, the connection
+cannot tell them apart: give each a stable id (its role or task name) and pass
+it as `actor` on every quilt call, or set `QUILT_ACTOR` per subprocess.
+
+## The coordination loop that pays
+
+1. **Claim before editing** what you're about to touch, with a short intent:
+   whole files normally, a directory for codegen, `file#symbol` to share one
+   file between actors.
+2. **On denial, don't force it.** The response names the holder, their intent,
+   and when their lease lapses. Queue (`--queue`) to be auto-granted when it
+   frees, adapt around compatible work, or escalate a genuine both-need-the-
+   same-line conflict for a human.
+3. **Commit with `commit --mine`.** It commits exactly your lines, leaves
+   everyone else's work untouched, and auto-releases your claims on the
+   committed files.
+
+Bash and codegen edits are not auto-captured: a whole-file claim placed before
+the edit is what binds them to you. Uncaptured edits are surfaced as
+unattributed, never miscredited.

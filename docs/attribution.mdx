@@ -1,0 +1,61 @@
+---
+title: "How attribution works"
+description: "Conservative by design: a blocked commit beats a wrong one."
+---
+
+Quilt's attribution has one governing rule: a blocked commit beats a wrong one.
+Uncaptured work is surfaced as unattributed, never guessed into the wrong
+author's commit.
+
+## The three layers
+
+1. **Capture at the tool boundary (primary).** The hooks and the
+   `quilt_edit`/`quilt_write` MCP tools record each edit's author the moment it
+   happens, into an append-only authorship ledger. Any line the ledger has an
+   author for wins.
+2. **Claims (prevention and binding).** A claim reserves both editing and
+   attribution: another actor's reconcile can never absorb in-flight work on a
+   claimed file, and edits that bypass capture (bash, codegen) bind to whoever
+   claimed the file before editing.
+3. **Reconcile inference (the floor).** Each `quilt` command diffs the tree
+   against the last observed snapshot and attributes the delta to the actor
+   running the command, gated so a contested tree is never absorbed by whoever
+   reconciles first.
+
+## Commit construction
+
+`commit --mine` diffs HEAD against the worktree, keeps only the lines you own
+(even where they share a hunk with another actor's changes), applies that patch
+to a throwaway temporary index (`GIT_INDEX_FILE` + `git apply --cached` +
+`write-tree` + `commit-tree` + `update-ref`), and produces an ordinary Git
+commit. Your real index and working tree are never rewritten; other actors'
+changes stay exactly where they were.
+
+Attribution keys each changed operation by add/remove side, symbol scope, line
+content, and occurrence, so identical lines in different functions (or even the
+same function) can belong to different actors. Blank lines and lone punctuation
+ride along with their hunk instead of being owned.
+
+## State layout
+
+Everything lives under `.quilt/` (local, gitignored, safe to delete):
+
+| File | What it holds |
+| --- | --- |
+| `actors.json` | Known actors (humans, agents, bots). |
+| `sessions/` | Session records. |
+| `ownership.json` | Per-file, per-actor line ownership. |
+| `authorship.log` | The append-only capture ledger, one event per edit. |
+| `ledger.jsonl` | Append-only event log (claims, commits, reclaims, resolutions). |
+| `claims.json` | Live reservations. |
+| `clobbers.json` + `snapshots/` | Detected overwrites and the preserved victim content. |
+| `outcomes.json` | Escalations ("needs you") and resolutions. |
+| `observed.json` | The last-observed tree snapshot reconcile diffs against. |
+
+## The design evidence
+
+The capture-first architecture was chosen by measurement, not taste: three
+strategies scored against ground truth, plus coverage measured over 13 real
+Claude agents (100% of file writes went through capturable tools). The eval and
+its honest caveats are in the repo:
+[bench/authorship/RESULTS.md](https://github.com/wkoverfield/quilt/blob/main/bench/authorship/RESULTS.md).

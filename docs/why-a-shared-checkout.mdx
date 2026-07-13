@@ -1,0 +1,48 @@
+---
+title: "Why a shared checkout"
+description: "Worktrees isolate. They don't coordinate."
+---
+
+A worktree per agent is the reflex answer to parallel agents, and for fully
+independent, long-running tasks it works. But isolation has two costs that grow
+with every agent you add.
+
+**The bill.** Every worktree is another environment: another install, another
+build cache, another dev server to keep alive. The whole point of a shared
+checkout is paying for the environment once.
+
+**The blindfold.** Isolated agents can't see each other's in-flight work. The
+collision between their changes isn't prevented, it's deferred to merge time,
+where it's biggest, has the least context attached, and you're the one holding
+it. Two agents that would have adapted to each other mid-task instead each
+build against a world that no longer exists.
+
+## The comparison
+
+|                                 | Run fewer agents | Worktree per agent          | One checkout + Quilt        |
+| ------------------------------- | ---------------- | --------------------------- | --------------------------- |
+| Parallelism                     | capped low       | high                        | high                        |
+| Setup per agent                 | none             | full install/build/env, times N | none (one checkout)     |
+| See each other's in-flight work | n/a              | no                          | yes                         |
+| Collisions                      | avoided by hand  | surface at merge            | prevented, or surfaced live |
+| Clean per-agent commits         | n/a              | after a merge               | yes                         |
+
+## What "coordinate" means in practice
+
+On a shared checkout with Quilt, agents account for each other as they go:
+
+- An agent claims what it is about to edit; a second agent's write into that
+  code is denied before any bytes change, and the denial carries the holder's
+  stated intent and when their lease lapses.
+- A claim on a symbol that depends on a function another actor is changing
+  comes back with a warning, so the dependent adapts instead of building
+  against a stale signature.
+- When work genuinely collides, the collision is surfaced live (in
+  `quilt ui`, `quilt fleet`, and the MCP responses), while both versions are
+  preserved. Nothing is silently lost.
+
+The two approaches aren't mutually exclusive: worktrees for independent,
+long-running work, Quilt for agents in the same code at once.
+
+The claim ladder, the denial-with-intent flow, and what happens on real
+contention are measured in the [benchmarks](/docs/benchmarks).

@@ -1,0 +1,67 @@
+---
+title: "Introduction"
+description: "Actor-owned patches for Git. Same repo. Many agents. Clean commits."
+---
+
+Quilt is a command-line tool that tracks which agent wrote which lines in a
+shared Git checkout, so multiple AI coding agents can work in one repo at once
+and each commits only its own changes.
+
+It captures every edit at the tool boundary, keeps a per-line record of who
+wrote what, and reconstructs each agent's own changes at commit time. Git stays
+the source of truth. Quilt never calls an LLM or spawns agents, and its state
+lives in a `.quilt/` sidecar you can delete without touching your repo.
+
+![Two agents editing one file, plain git vs Quilt. Without Quilt, the first agent's commit absorbs the other's work. With Quilt, each change is committed by the agent that made it.](https://raw.githubusercontent.com/wkoverfield/quilt/main/examples/contrast.gif)
+
+```bash
+npm install -g @quilt-dev/cli
+quilt setup     # capture hooks wired, protection live, ~5 seconds
+```
+
+## The problem
+
+You want your agents in one checkout: one `node_modules`, one build, one dev
+server, one environment to keep working, not a worktree per agent with its own
+install and its own drift. But on a shared checkout, plain git bites even when
+agents work on completely different things: the first `git commit -am` sweeps
+everyone else's uncommitted files into one blob, codegen and lockfile churn get
+credited to whoever committed last, and two agents occasionally do land on the
+same line, where one silently overwrites the other.
+
+Quilt makes the shared checkout safe. Every agent commits exactly its own lines
+and nothing else. When two agents genuinely want the same code, that becomes a
+coordinated handoff instead of a silent loss.
+
+## What it does
+
+- **One shared checkout.** Humans, agents, and bots are actors editing one
+  working tree. No worktree per agent.
+- **Line-level attribution.** `commit --mine` commits only your lines, even
+  when they share a hunk with another actor's.
+- **Symbol-level claims.** Reserve `utils.js#formatPrice`, not the whole file.
+  Ten languages via tree-sitter; whole-file claims for the rest.
+- **Collision prevention.** A write into code another agent has claimed is
+  denied, with the holder's stated intent, before any bytes change.
+- **Push-awareness.** Claim a symbol that depends on a function another actor
+  is changing, and Quilt warns you at claim time.
+- **Detect and preserve.** If one actor overwrites another's uncommitted
+  lines, Quilt snapshots the victim's version so nothing is silently lost.
+- **A live dashboard.** `quilt ui` shows who wrote what, active claims, and
+  anything that needs a human, in your browser, local-only.
+
+## Measured, not promised
+
+Quilt ships with a six-scenario ladder of real multi-agent failure modes, run
+WITH and WITHOUT Quilt on the same tasks and the same shared tree. From the
+latest run: plain git silently lost 3 changes, misattributed 9, and broke the
+final state once. Quilt: zero of each, with the three genuine collisions
+surfaced for a human instead. See [Benchmarks](/docs/benchmarks).
+
+## Where to go next
+
+- [Quickstart](/docs/quickstart): from install to four agents in one repo.
+- [Why a shared checkout](/docs/why-a-shared-checkout): the argument against
+  a worktree per agent.
+- [Running a fleet](/docs/running-a-fleet): Claude Code, Codex, Cursor, Aider.
+- [Commands](/docs/commands): the full CLI surface.

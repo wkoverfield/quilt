@@ -1,0 +1,42 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "Quilt",
+  "description": "Actor-owned patches for Git. Same repo. Many agents. Clean commits.",
+  "colors": {
+    "primary": "#b8860b",
+    "light": "#e3b34c",
+    "dark": "#0f0d0a"
+  },
+  "favicon": "/docs/images/favicon.svg",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get started",
+        "pages": ["docs/introduction", "docs/quickstart"]
+      },
+      {
+        "group": "Guides",
+        "pages": ["docs/why-a-shared-checkout", "docs/running-a-fleet"]
+      },
+      {
+        "group": "Reference",
+        "pages": ["docs/commands", "docs/attribution", "docs/benchmarks"]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      { "label": "npm", "href": "https://www.npmjs.com/package/@quilt-dev/cli" }
+    ],
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/wkoverfield/quilt"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/wkoverfield/quilt"
+    }
+  }
+}
