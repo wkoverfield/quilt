@@ -8,6 +8,16 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **`quilt ui`: the fleet dashboard in a browser.** One command opens a live
+  local web view of the same read-only fleet snapshot the terminal shows: who
+  wrote what (per-actor line counts per file), active claims, blocked and
+  queued actors, clashes, and the "Needs you" escalation queue. Local-only by
+  design: binds 127.0.0.1, rejects non-loopback Host headers (DNS-rebinding
+  guard), writes nothing, and falls back to a free port when 4747 is taken.
+- **Per-file authorship rows in the fleet view.** `quilt fleet --json` (and
+  `/api/fleet` in the UI) now includes `files`: every changed file with
+  per-actor changed-line counts, unattributed line counts, and the file's
+  worst overlap (`none`/`adjacent`/`contended`).
 - **Opt-in anonymous telemetry.** Off by default; `quilt setup` asks once,
   on an interactive TTY only, and no answer means no. When enabled, Quilt
   sends anonymous usage counts (setup completions, sessions started,

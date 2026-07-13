@@ -17,6 +17,7 @@ import { selectOwned, commitSelection } from "./commit.js";
 import { renderStatus, renderPreview } from "./render.js";
 import { statusJson, mineJson, conflictsJson } from "./json.js";
 import { runWatch, watcherRunning } from "./watch.js";
+import { DEFAULT_UI_PORT, openInBrowser, startUiServer } from "./ui.js";
 import {
   TELEMETRY_DISCLOSURE,
   maybePromptForTelemetry,
@@ -852,6 +853,35 @@ program
     const timer = setInterval(draw, 1000);
     const stop = () => {
       clearInterval(timer);
+      process.stdout.write("\n");
+      process.exit(0);
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+
+program
+  .command("ui")
+  .description("Open the fleet dashboard in your browser — live who-wrote-what, claims, and the needs-you queue")
+  .option("--port <port>", "port to listen on", String(DEFAULT_UI_PORT))
+  .option("--no-open", "print the URL without opening a browser")
+  .action(async (opts: { port: string; open: boolean }) => {
+    const store = requireStore();
+    const preferred = Number.parseInt(opts.port, 10);
+    if (!Number.isInteger(preferred) || preferred < 0 || preferred > 65535) {
+      fail(`invalid port: ${opts.port}`);
+    }
+    const { port, url } = await startUiServer(store, preferred);
+    if (port !== preferred && preferred !== 0) {
+      process.stdout.write(pc.dim(`  port ${preferred} was taken — using ${port}\n`));
+    }
+    process.stdout.write(
+      pc.bold("Quilt") + pc.dim(" · ui") + `   ${url}\n` +
+        pc.dim("  local-only (127.0.0.1) · read-only view of .quilt/ · Ctrl-C to stop\n"),
+    );
+    if (opts.open) openInBrowser(url);
+    // Keep the process alive until the user stops it; the server holds the loop.
+    const stop = () => {
       process.stdout.write("\n");
       process.exit(0);
     };

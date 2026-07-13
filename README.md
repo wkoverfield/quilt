@@ -126,6 +126,16 @@ lines, even where two sessions touched the same file. (Claude Code will also
 offer to enable the optional quilt MCP server for the project; approving it
 adds the claim/prevention tools, but the hooks protect you either way.)
 
+### Watch the fleet
+
+`quilt ui` opens the same picture in your browser, live: who wrote what
+(per-actor line counts per file), active claims, who's blocked on whom, and
+anything that needs a human. Local-only (127.0.0.1), read-only, one command.
+
+![The quilt ui dashboard: an escalated collision at the top under "Needs you", actor cards with their claims, a who-wrote-what table with per-actor line counts, and blocked/queued actors.](examples/ui.png)
+
+Prefer the terminal? `quilt fleet --watch` is the same view as text.
+
 Set an explicit id when you want one that is stable across sessions:
 
 ```bash
