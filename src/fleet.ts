@@ -65,8 +65,28 @@ export interface FleetClobber {
   victimActor: string;
 }
 
+/**
+ * One changed file with its per-actor line counts — the "who wrote what" row.
+ * Line counts follow the engine's ownership calls (non-trivial changed lines;
+ * attribution-pending lines credited to the live claim holder).
+ */
+export interface FleetFileView {
+  path: string;
+  isNew: boolean;
+  isDeleted: boolean;
+  binary: boolean;
+  /** Changed lines per actor, descending by count. */
+  actors: Array<{ id: string; lines: number }>;
+  /** Non-trivial changed lines with no recorded owner. */
+  unattributedLines: number;
+  /** Worst overlap in the file: none, benign adjacency, or a real clash. */
+  overlap: "none" | "adjacent" | "contended";
+}
+
 export interface FleetView {
   actors: FleetActorView[];
+  /** Every changed file with per-actor line counts — who wrote what. */
+  files: FleetFileView[];
   overlaps: FleetOverlap[];
   /** Who's blocked on whom (denied claims still held by the holder). */
   blocked: FleetBlock[];
@@ -97,9 +117,12 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
   const filesByActor = new Map<string, Set<string>>();
   const unattributed = new Set<string>();
   const overlaps: FleetOverlap[] = [];
+  const fileRows: FleetFileView[] = [];
   for (const f of model.files) {
     let owned = false;
     let changed = false;
+    const lineCounts = new Map<string, number>();
+    let unownedLines = 0;
     // An overlap = a hunk owned by more than one actor (engine marks it
     // "shared"). The engine further tags each shared hunk: "adjacent" (different
     // lines sharing a hunk — commits cleanly) or "contended" (a same-line
@@ -114,6 +137,10 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
         owned = true;
         (filesByActor.get(a) ?? filesByActor.set(a, new Set()).get(a)!).add(f.path);
       }
+      for (const [a, n] of Object.entries(h.linesByActor)) {
+        lineCounts.set(a, (lineCounts.get(a) ?? 0) + n);
+      }
+      unownedLines += h.unownedLines;
       if (h.ownership === "shared") {
         for (const a of h.actors) overlapActors.add(a);
         overlapLines += h.hunk.ops.filter((o) => o.type !== "eq").length;
@@ -121,6 +148,19 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
       }
     }
     if (changed && !owned) unattributed.add(f.path);
+    if (changed || f.binary) {
+      fileRows.push({
+        path: f.path,
+        isNew: f.isNew,
+        isDeleted: f.isDeleted,
+        binary: f.binary,
+        actors: [...lineCounts.entries()]
+          .map(([id, lines]) => ({ id, lines }))
+          .sort((a, b) => b.lines - a.lines || a.id.localeCompare(b.id)),
+        unattributedLines: unownedLines,
+        overlap: contended ? "contended" : overlapActors.size ? "adjacent" : "none",
+      });
+    }
     if (overlapActors.size) {
       overlaps.push({
         path: f.path,
@@ -183,8 +223,15 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
       intent: w.intent,
     }));
 
+  fileRows.sort(
+    (a, b) =>
+      Number(b.overlap === "contended") - Number(a.overlap === "contended") ||
+      a.path.localeCompare(b.path),
+  );
+
   return {
     actors,
+    files: fileRows,
     overlaps,
     blocked,
     queue,

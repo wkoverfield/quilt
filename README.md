@@ -126,6 +126,16 @@ lines, even where two sessions touched the same file. (Claude Code will also
 offer to enable the optional quilt MCP server for the project; approving it
 adds the claim/prevention tools, but the hooks protect you either way.)
 
+### Watch the fleet
+
+`quilt ui` opens the same picture in your browser, live: who wrote what
+(per-actor line counts per file), active claims, who's blocked on whom, and
+anything that needs a human. Local-only (127.0.0.1), read-only, one command.
+
+![The quilt ui dashboard: an escalated collision at the top under "Needs you", actor cards with their claims, a who-wrote-what table with per-actor line counts, and blocked/queued actors.](examples/ui.png)
+
+Prefer the terminal? `quilt fleet --watch` is the same view as text.
+
 Set an explicit id when you want one that is stable across sessions:
 
 ```bash
@@ -194,6 +204,19 @@ the difference between process-per-agent and many-agents-in-one-process setups.
   works, and the `.quilt/` state layout.
 - [bench/](bench/): the scenario ladder Quilt is tested against, run with and
   without Quilt on the same metrics.
+
+## Telemetry
+
+Off by default, and opt-in for real: `quilt setup` asks once, on an
+interactive terminal only, and no answer means no. If you say yes, Quilt
+sends anonymous usage counts (which commands run, how many claims were
+granted/denied/queued, quilt version, OS) under a random id generated on
+your machine. It never sends code, file paths, repo names, actor names,
+branch names, or commit messages, and events are posted by a detached
+process so no command ever waits on the network. Change your mind any
+time with `quilt telemetry on|off`, or set `QUILT_TELEMETRY=0` to force
+it off for any process (useful in CI). The full event list is in
+[docs/reference.md](docs/reference.md).
 
 ## Contributing
 
