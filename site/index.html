@@ -112,13 +112,15 @@
                 border-radius: 50%; background: var(--dpanel); border: 1px solid var(--coral); color: var(--coral);
                 font: 600 9px/12px var(--mono); text-align: center; }
   .commits { border-left: 1px dashed var(--dborder); padding: 22px 24px; display: flex; flex-direction: column; justify-content: center; gap: 9px; color: var(--dink); }
-  .cmt { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px; }
+  .cmt { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px;
+         padding: 3px 8px; margin: -3px -8px; border-radius: 6px; transition: background .2s var(--ease); }
+  .cmt.active { background: rgba(236,229,216,.07); }
   .cmt i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
   .cmt .sha { color: var(--dfaint); }
   .cmt .who { margin-left: auto; color: var(--ddim); }
   .cmt.deny { color: var(--dfaint); }
   .cmt.deny .x { color: var(--coral); }
-  .loom-caption { color: var(--faint); font-size: 13.5px; margin: 16px auto 0; max-width: 46em; }
+  .loom-caption { color: var(--faint); font-size: 14px; margin: 16px auto 0; max-width: 46em; transition: opacity .18s var(--ease); min-height: 2.6em; }
   .loom-caption b { color: var(--dim); font-weight: 500; }
   .loom-bar .livedot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 5px; }
   @media (prefers-reduced-motion: no-preference) {
@@ -249,7 +251,7 @@
         </div>
       </div>
     </div>
-    <p class="loom-caption"><b>Each color is an agent.</b> Every commit is exactly its author's lines, and the fifth write bounced off a1's claimed code on line 8 without changing a byte.</p>
+    <p class="loom-caption" id="loom-narration"><b>Four agents, one file:</b> four clean commits and one denial. Nothing lost, nothing miscredited.</p>
     </div>
     </div>
 
@@ -395,6 +397,30 @@
     function seg(p, a, b) { return p <= a ? 0 : p >= b ? 1 : (p - a) / (b - a); }
     function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
 
+    var narr = document.getElementById("loom-narration");
+    var MSGS = [
+      "<b>Keep scrolling.</b> a1 starts editing checkout.ts, and every line it touches is attributed to a1 the moment it lands.",
+      "<b>a2, a3, and a4 pile into the same file.</b> No worktrees, no waiting: every line keeps its author, and each agent ships a commit that is exactly its own lines.",
+      "<b>A fifth write aims into the function a1 claimed.</b> Denied before a single byte changes.",
+      "<b>Four agents, one file:</b> four clean commits and one denial. Nothing lost, nothing miscredited.",
+    ];
+    var msgIdx = -1, msgTimer = null;
+    function setMsg(i) {
+      if (i === msgIdx) return;
+      msgIdx = i;
+      narr.style.opacity = "0";
+      clearTimeout(msgTimer);
+      msgTimer = setTimeout(function () {
+        while (narr.firstChild) narr.removeChild(narr.firstChild);
+        var parts = MSGS[i].split(/<\/?b>/);
+        var bold = document.createElement("b");
+        bold.textContent = parts[1];
+        narr.appendChild(bold);
+        narr.appendChild(document.createTextNode(parts[2]));
+        narr.style.opacity = "1";
+      }, 180);
+    }
+
     function render(p) {
       for (var a = 0; a < 4; a++) {
         var base = a * 0.17;
@@ -415,6 +441,13 @@
       var dv = easeOut(seg(p, 0.82, 0.9));
       cmts[4].style.opacity = dv;
       cmts[4].style.transform = "translateY(" + (1 - dv) * 6 + "px)";
+
+      // narration + the commit row whose chapter is playing
+      setMsg(p < 0.17 ? 0 : p < 0.68 ? 1 : p < 0.92 ? 2 : 3);
+      for (var k = 0; k < 4; k++) {
+        cmts[k].classList.toggle("active", p >= k * 0.17 && p < k * 0.17 + 0.17);
+      }
+      cmts[4].classList.toggle("active", p >= 0.68 && p < 0.92);
     }
 
     var ticking = false;
