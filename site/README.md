@@ -1,6 +1,6 @@
 # quilt.dev site
 
-The static storefront: landing page (`index.html`), the worldview argument
+The static site: landing page (`index.html`), the worldview argument
 (`why.html`), on-site docs (`docs.html`, the condensed version; deep
 references stay canonical in the repo's docs/), and `llms.txt`. No separate
 benchmarks page by design; bench numbers live in the repo.
