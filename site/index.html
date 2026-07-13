@@ -120,8 +120,10 @@
   .cmt .who { margin-left: auto; color: var(--ddim); }
   .cmt.deny { color: var(--dfaint); }
   .cmt.deny .x { color: var(--coral); }
-  .loom-caption { color: var(--faint); font-size: 14px; margin: 16px auto 0; max-width: 46em; transition: opacity .18s var(--ease); min-height: 2.6em; }
-  .loom-caption b { color: var(--dim); font-weight: 500; }
+  .loom-caption { color: var(--dim); font-size: 18.5px; line-height: 1.55; margin: 26px auto 0; max-width: 34em;
+                  transition: opacity .18s var(--ease), transform .18s var(--ease); min-height: 3.2em; }
+  .loom-caption b { color: var(--ink); font-weight: 600; font-family: var(--display); font-size: 1.06em; }
+  @media (max-width: 700px) { .loom-caption { font-size: 16px; } }
   .loom-bar .livedot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 5px; }
   @media (prefers-reduced-motion: no-preference) {
     .livedot { animation: breathe 2.4s ease-in-out infinite; }
@@ -409,6 +411,7 @@
       if (i === msgIdx) return;
       msgIdx = i;
       narr.style.opacity = "0";
+      narr.style.transform = "translateY(6px)";
       clearTimeout(msgTimer);
       msgTimer = setTimeout(function () {
         while (narr.firstChild) narr.removeChild(narr.firstChild);
@@ -418,6 +421,7 @@
         narr.appendChild(bold);
         narr.appendChild(document.createTextNode(parts[2]));
         narr.style.opacity = "1";
+        narr.style.transform = "none";
       }, 180);
     }
 
