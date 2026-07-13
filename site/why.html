@@ -100,7 +100,7 @@
         Quilt
       </a>
       <div class="links">
-        <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
+        <a href="docs.html">Docs</a>
         <a class="gh" href="https://github.com/wkoverfield/quilt"><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>GitHub</a>
       </div>
     </nav>
@@ -169,7 +169,27 @@
   <pre class="term"><span class="c">⚠ collision</span>  claude-ui overwrote codex's edits in auth.ts. <span class="d">both saved, run:</span>
 <span class="c">$</span> quilt restore auth.ts</pre>
 
-  <h2>Small tool, sharp edges stated</h2>
+
+  <h2>Nearby tools, and the difference</h2>
+  <p>
+    Pieces of this exist elsewhere, and some of them are good. Worktree managers
+    (Cursor's parallel agents, Conductor) isolate agents in separate checkouts and
+    meet at merge time. Attribution tools (Git AI, agentdiff) record which agent
+    wrote what, some with cryptographic signing. Coordination servers (MCP Agent
+    Mail and similar) hand out advisory file leases so agents don't collide.
+  </p>
+  <p>
+    Quilt is the composite, built around one mechanism none of them have:
+    <strong><code>commit --mine</code> takes a dirty shared tree and produces clean,
+    correctly attributed Git commits per agent</strong>, even where two agents
+    touched the same file. Attribution feeds the claims, claims feed the commit
+    construction, and the whole loop runs on one checkout with one dev server.
+    Use a lease server without attribution and you still can't untangle the tree
+    at commit time. Use attribution without claims and you learn who collided
+    only after they did.
+  </p>
+
+  <h2 id="edges">Small tool, sharp edges stated</h2>
   <ul class="fine">
     <li>All state lives in a local <code>.quilt/</code> sidecar. Delete it any time; your repo is untouched.</li>
     <li>Quilt never calls an LLM, never spawns agents, never rewrites Git history.</li>

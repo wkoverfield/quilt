@@ -1,9 +1,9 @@
 # quilt.dev site
 
 The static storefront: landing page (`index.html`), the worldview argument
-(`why.html`), and `llms.txt`. The landing stays a short product page; the
-bench numbers appear on it as the proof strip, linking to
-`bench/RESULTS.md` in the repo (no separate benchmarks page by design).
+(`why.html`), on-site docs (`docs.html`, the condensed version; deep
+references stay canonical in the repo's docs/), and `llms.txt`. No separate
+benchmarks page by design; bench numbers live in the repo.
 
 Design: the "Workshop" theme. Warm paper field (Gambetta display serif +
 Switzer body, both Fontshare; IBM Plex Mono for terminal content), with the

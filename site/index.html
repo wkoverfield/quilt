@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Quilt · one repo, every agent, clean commits</title>
-<meta name="description" content="Quilt tracks which agent wrote which lines in a shared Git checkout, so a fleet of coding agents can work in one repo at once and each commits exactly its own changes. No worktrees, no account, no daemon.">
+<meta name="description" content="Quilt tracks which agent wrote which lines in a shared Git checkout, so all your coding agents work in one repo at once and each commits exactly its own changes. No worktrees, no account, no daemon.">
 <meta property="og:title" content="Quilt · one repo, every agent, clean commits">
-<meta property="og:description" content="Per-line attribution, symbol claims, and collision prevention for fleets of coding agents on one shared checkout.">
+<meta property="og:description" content="Per-line attribution, symbol claims, and collision prevention for coding agents on one shared checkout.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23e5a06b'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%238fc46f'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%235aa9e6'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d074c4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -80,11 +80,6 @@
   .install button { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
                     font-family: var(--mono); font-size: 11px; padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
   .install button:hover { color: var(--ink); border-color: var(--ink); }
-  .alt-copy { margin: 10px 0 0; }
-  .alt-copy button { background: none; border: none; padding: 0; cursor: pointer;
-    font: 12.5px var(--mono); color: var(--faint);
-    border-bottom: 1px dashed var(--stitch); padding-bottom: 1px; transition: color .15s var(--ease), border-color .15s var(--ease); }
-  .alt-copy button:hover { color: var(--ink); border-color: var(--ink); }
   .hero-note { color: var(--faint); font-size: 13.5px; margin-top: 16px; }
 
   /* the loom: a dark instrument resting on the paper */
@@ -211,7 +206,7 @@
         Quilt
       </a>
       <div class="links">
-        <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
+        <a href="docs.html">Docs</a>
         <a class="gh" href="https://github.com/wkoverfield/quilt"><svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>GitHub</a>
       </div>
     </nav>
@@ -224,7 +219,7 @@
     <h1>One repo. Every agent. Clean commits.</h1>
     <p class="lede">
       Quilt tracks which agent wrote which lines in a <strong>shared checkout</strong>,
-      so your whole fleet works in one repo and each agent commits exactly its own changes.
+      so all your agents work in one repo and each one commits exactly its own changes.
     </p>
     <div class="ctas">
       <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
@@ -234,9 +229,9 @@
       <span class="p">$</span>
       <span id="install-cmd">npm i -g @quilt-dev/cli &amp;&amp; quilt setup</span>
       <button id="copy" aria-label="copy install command">copy</button>
+      <button id="copy-prompt" aria-label="copy a setup prompt for your coding agent">copy agent prompt</button>
     </div>
-    <p class="alt-copy"><button id="copy-prompt" type="button">or copy a setup prompt for your coding agent</button></p>
-    <p class="hero-note">MIT · no account, no daemon · wired in about five seconds</p>
+    <p class="hero-note">MIT · macOS and Linux · no account, no daemon · claims are <a href="why.html#edges">advisory by design</a></p>
 
     <div class="loom-frame" aria-label="Animated: four agents' line edits weave into one shared file, and resolve into one clean commit per agent. A fifth write into claimed code is denied.">
       <div class="loom-bar" aria-hidden="true">
@@ -327,7 +322,7 @@
   </section>
 
   <div class="fin reveal">
-    <h2>Give your whole fleet <em>one</em> checkout.</h2>
+    <h2>Give all your agents <em>one</em> checkout.</h2>
     <div class="ctas" style="margin-top:24px">
       <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
       <a class="btn ghost" href="https://github.com/wkoverfield/quilt">Star on GitHub</a>
@@ -337,7 +332,7 @@
   <footer>
     <span>MIT</span>
     <a href="why.html">Why</a>
-    <a href="https://github.com/wkoverfield/quilt/tree/main/docs">Docs</a>
+    <a href="docs.html">Docs</a>
     <a href="https://github.com/wkoverfield/quilt">GitHub</a>
     <a href="https://www.npmjs.com/package/@quilt-dev/cli">npm</a>
   </footer>
@@ -453,7 +448,7 @@
       }
     });
   }
-  wireCopy("copy-prompt", AGENT_PROMPT, "prompt copied, paste it to your agent");
+  wireCopy("copy-prompt", AGENT_PROMPT, "copied for your agent");
 
   document.getElementById("copy").addEventListener("click", function () {
     var self = this;
