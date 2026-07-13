@@ -6,6 +6,8 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-13
+
 ### Added
 
 - **`quilt ui`: the fleet dashboard in a browser.** One command opens a live
