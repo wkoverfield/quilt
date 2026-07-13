@@ -113,11 +113,15 @@
   .cmt.deny .x { color: var(--coral); }
   .loom-caption { color: var(--faint); font-size: 13.5px; margin: 16px auto 0; max-width: 46em; }
   .loom-caption b { color: var(--dim); font-weight: 500; }
+  .loom-bar .livedot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 5px; }
   @media (prefers-reduced-motion: no-preference) {
-    .yarn { transform: scaleX(0); animation: weave .5s var(--ease) forwards; }
-    .cmt { opacity: 0; transform: translateY(6px); animation: rise .4s var(--ease) forwards; }
-    .dyarn { transform: scaleX(0); opacity: .95; animation: denyPush 1.15s var(--ease) 1.45s forwards; }
-    .dx { opacity: 0; animation: denyMark .25s var(--ease) 2s forwards; }
+    .play .yarn { transform: scaleX(0); animation: weave .5s var(--ease) forwards; }
+    .play .cmt { opacity: 0; transform: translateY(6px); animation: rise .4s var(--ease) forwards; }
+    .play .dyarn { transform: scaleX(0); opacity: .95; animation: denyPush 1.15s var(--ease) 1.45s forwards; }
+    .play .dx { opacity: 0; animation: denyMark .25s var(--ease) 2s forwards; }
+    .fading .threads, .fading .commits { opacity: 0; transition: opacity .45s var(--ease); }
+    .livedot { animation: breathe 2.4s ease-in-out infinite; }
+    @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
     @keyframes weave { to { transform: scaleX(1); } }
     @keyframes rise { to { opacity: 1; transform: none; } }
     @keyframes denyPush {
@@ -238,7 +242,7 @@
       <div class="loom-bar" aria-hidden="true">
         <i></i><i></i><i></i>
         <span class="t">src/checkout.ts · one working tree, four agents</span>
-        <span class="r">quilt watch · live</span>
+        <span class="r"><i class="livedot" aria-hidden="true"></i>quilt watch · live</span>
       </div>
       <div class="loom" aria-hidden="true">
         <div class="threads" id="threads"></div>
@@ -380,6 +384,27 @@
     row.appendChild(track);
     threads.appendChild(row);
   });
+
+  var loom = document.querySelector(".loom-frame");
+  var reduced = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (loom && !reduced) {
+    loom.classList.add("play");
+    var loomInView = true;
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver(function (e) { loomInView = e[0].isIntersecting; }).observe(loom);
+    }
+    // one full scene (~2.6s) + a calm hold, then a gentle unweave and replay
+    setInterval(function () {
+      if (!loomInView || document.hidden) return;
+      loom.classList.add("fading");
+      setTimeout(function () {
+        loom.classList.remove("play");
+        void loom.offsetWidth; // style flush so the animations restart
+        loom.classList.remove("fading");
+        loom.classList.add("play");
+      }, 460);
+    }, 8500);
+  }
 
   if ("IntersectionObserver" in window) {
     var io = new IntersectionObserver(function (entries) {
