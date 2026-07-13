@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Quilt · one repo, every agent, clean commits</title>
-<meta name="description" content="Quilt tracks which agent wrote which lines in a shared Git checkout, so all your agents work in one repo, against one dev server, and each commits exactly its own changes. No worktrees, no account, no daemon.">
-<meta property="og:title" content="Quilt · one repo, every agent, clean commits">
-<meta property="og:description" content="Per-line attribution, symbol claims, and collision prevention for coding agents on one shared checkout.">
+<title>Quilt · coordinate your agents, trust the merge</title>
+<meta name="description" content="Quilt records who wrote every line while your coding agents work in one repo, so they don't overwrite each other and you can trust the merge. Per-line authorship, claims, and a clean commit per agent. Free and open source.">
+<meta property="og:title" content="Quilt · coordinate your agents, trust the merge">
+<meta property="og:description" content="Per-line authorship, claims, and clean per-agent commits, so many agents share one repo and you can trust what they produced. Free and open source.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1' y='1' width='6' height='6' rx='1.5' fill='%23e5a06b'/%3E%3Crect x='9' y='1' width='6' height='6' rx='1.5' fill='%238fc46f'/%3E%3Crect x='1' y='9' width='6' height='6' rx='1.5' fill='%235aa9e6'/%3E%3Crect x='9' y='9' width='6' height='6' rx='1.5' fill='%23d074c4'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -178,6 +178,25 @@
   .wl-done { display: none; font-size: 15px; color: var(--green-ink); font-family: var(--mono); }
   .wl-err { display: none; margin-top: 12px; font-size: 13.5px; color: var(--coral-ink); }
 
+  /* roadmap: today / next / teams, the growth arc */
+  .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 48px; text-align: left; }
+  @media (max-width: 860px) { .roadmap { grid-template-columns: 1fr; } }
+  .roadmap > * { min-width: 0; }
+  .tier { border: 1px solid var(--border); border-radius: 14px; background: var(--card); padding: 24px; border-top: 3px solid var(--border); }
+  .tier.today { border-top-color: var(--green); }
+  .tier.next { border-top-color: var(--blue); }
+  .tier.teams { border-top-color: var(--thread); background: var(--paper2); }
+  .tier-tag { font-family: var(--mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  .tier.today .tier-tag { color: var(--green-ink); }
+  .tier ul { list-style: none; padding: 0; margin: 14px 0 0; }
+  .tier ul li { position: relative; padding: 7px 0 7px 20px; color: var(--dim); font-size: 14.5px; border-top: 1px dashed var(--border); }
+  .tier ul li:first-child { border-top: none; }
+  .tier ul li::before { content: "·"; position: absolute; left: 4px; color: var(--thread-ink); font-weight: 700; }
+  .tier ul li code { color: var(--ink); font-size: 13px; }
+  .tier p { color: var(--dim); font-size: 14.5px; margin: 14px 0 0; }
+  .tier .waitlist { flex-direction: column; max-width: none; margin: 18px 0 0; }
+  .tier .waitlist button { width: 100%; }
+
   .fin { text-align: center; padding: 120px 0 20px; }
   .fin .ctas { justify-content: center; }
   .fin h2 { font-size: clamp(32px, 4.4vw, 50px); max-width: 15em; margin-inline: auto; }
@@ -214,12 +233,12 @@
 <div class="wrap">
 
   <header class="hero">
-    <p class="eyebrow">for coding agents sharing one checkout</p>
-    <h1>One repo. Every agent. Clean commits.</h1>
+    <p class="eyebrow">for teams shipping agent-written code</p>
+    <h1>Coordinate your agents. Trust the merge.</h1>
     <p class="lede">
-      Quilt tracks which agent wrote which lines in a <strong>shared checkout</strong>,
-      so all your agents work in one repo, against one dev server, and each one
-      commits exactly its own changes.
+      Quilt records who wrote every line while your agents work together in one
+      repo. They don't overwrite each other, each ships a <strong>clean commit</strong>,
+      and you see exactly who wrote what before you merge.
     </p>
     <div class="ctas">
       <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
@@ -252,7 +271,7 @@
         </div>
       </div>
     </div>
-    <p class="loom-caption" id="loom-narration"><b>Four agents, one file:</b> four clean commits and one denial. Nothing lost, nothing miscredited.</p>
+    <p class="loom-caption" id="loom-narration"><b>Four agents, one file:</b> four clean commits, every line traceable to its author. A merge you can actually review.</p>
     </div>
     </div>
 
@@ -288,7 +307,7 @@
         <p class="sub">
           Every worktree is another install, build, and dev server, and its agent is blind
           to everyone else's in-flight work, so collisions just wait for merge time.
-          Quilt keeps the whole fleet on one checkout, accounting for each other as they go.
+          Quilt keeps all your agents on one checkout, accounting for each other as they go.
         </p>
       </div>
       <div class="receipt" aria-label="comparison: worktree per agent versus one checkout with Quilt">
@@ -302,17 +321,30 @@
     </div>
   </section>
 
-  <section id="teams" class="reveal">
-    <div class="teams">
-      <div>
-        <h2>Quilt for teams</h2>
-        <p class="sub">
-          A <strong>shared claim ledger and control plane</strong>: claims visible across machines,
-          escalations routed to owners, an audit trail that survives any single checkout.
-          Local Quilt stays free and open source.
-        </p>
+  <section id="roadmap" class="reveal">
+    <h2>Coordination is how you earn a trustworthy merge.</h2>
+    <p class="sub">Both legs get deeper from here. Local Quilt stays free and open source.</p>
+    <div class="roadmap">
+      <div class="tier today">
+        <span class="tier-tag">Today</span>
+        <ul>
+          <li>One shared checkout, no worktrees</li>
+          <li>Per-agent, per-line authorship</li>
+          <li>Claims that deny a collision before any byte changes</li>
+          <li>A clean, correctly attributed commit per agent</li>
+          <li>Who wrote what, per file, in <code>quilt ui</code></li>
+        </ul>
       </div>
-      <div>
+      <div class="tier next">
+        <span class="tier-tag">Next</span>
+        <ul>
+          <li>Review a merge by author and prompt, line by line</li>
+          <li>The actor layer across worktrees and other topologies</li>
+        </ul>
+      </div>
+      <div class="tier teams" id="teams">
+        <span class="tier-tag">Teams · waitlist</span>
+        <p>A shared ledger across machines, so a whole team sees one source of truth for who wrote what.</p>
         <form class="waitlist" id="waitlist">
           <input type="email" id="wl-email" placeholder="you@company.com" required autocomplete="email" aria-label="work email">
           <button type="submit" id="wl-btn">Join the waitlist</button>
@@ -324,7 +356,7 @@
   </section>
 
   <div class="fin reveal">
-    <h2>Give all your agents <em>one</em> checkout.</h2>
+    <h2>Know who wrote <em>what</em>, before you merge.</h2>
     <div class="ctas" style="margin-top:24px">
       <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
       <a class="btn ghost" href="https://github.com/wkoverfield/quilt">Star on GitHub</a>
@@ -402,7 +434,7 @@
       "<b>Keep scrolling.</b> a1 starts editing checkout.ts, and every line it touches is attributed to a1 the moment it lands.",
       "<b>a2, a3, and a4 pile into the same file.</b> No worktrees, no waiting: every line keeps its author, and each agent ships a commit that is exactly its own lines.",
       "<b>A fifth write aims into the function a1 claimed.</b> Denied before a single byte changes.",
-      "<b>Four agents, one file:</b> four clean commits and one denial. Nothing lost, nothing miscredited.",
+      "<b>Four agents, one file:</b> four clean commits, every line traceable to its author. A merge you can actually review.",
     ];
     var msgIdx = -1, msgTimer = null;
     function setMsg(i) {
