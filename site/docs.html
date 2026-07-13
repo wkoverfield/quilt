@@ -150,8 +150,9 @@
 <span class="c">$</span> claude           <span class="c"># terminal 2, 3, 4...</span></pre>
       <p>
         Nothing else. Each Claude Code session or MCP connection is named automatically,
-        every edit is attributed to its session as it happens, and a write into code
-        another session has claimed is denied before any bytes change. Want a stable,
+        every edit is attributed to its session as it happens, and a write through the
+        wired edit tools into code another session has claimed is denied before any
+        bytes change. Want a stable,
         readable id? <code>QUILT_ACTOR=auth-agent claude</code>.
       </p>
       <p>Watch it live and commit when ready:</p>
@@ -215,7 +216,7 @@
       <p>Everything lives in a local <code>.quilt/</code> sidecar: actors, sessions, per-line ownership, the append-only capture ledger, live claims, preserved overwrites, and the escalation queue. Delete it any time; your repo is untouched.</p>
       <ul>
         <li>Quilt never calls an LLM, never spawns agents, never rewrites Git history. Every commit it produces is an ordinary Git commit.</li>
-        <li>Claims are advisory coordination for cooperative agents, not a sandbox. The <a href="why.html#edges">sharp edges, stated plainly</a>.</li>
+        <li>Enforcement is scoped: wired edit tools are blocked at claim boundaries; raw shell and other processes are advisory. The <a href="why.html#edges">sharp edges, stated plainly</a>.</li>
         <li>POSIX only for now: macOS and Linux.</li>
         <li>Telemetry is off by default and strictly opt-in; when enabled it sends anonymous counts only, never code, paths, or names.</li>
       </ul>

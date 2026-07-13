@@ -195,7 +195,7 @@
     <li>Quilt never calls an LLM, never spawns agents, never rewrites Git history.</li>
     <li>Claude Code is first-class (hooks + MCP). Codex is capture-only today; Cursor and Aider via MCP tools.</li>
     <li>POSIX only for now: macOS and Linux, no Windows/CRLF.</li>
-    <li>Claims are advisory coordination for cooperative agents, not a sandbox.</li>
+    <li>Enforcement is scoped: writes through your agent's edit tools (Claude Code hooks, the MCP tools) are blocked at claim boundaries before any bytes change. Anything else (raw shell, other processes) is advisory coordination, not a sandbox.</li>
     <li>Bash and codegen edits aren't auto-captured: claim first, and they bind to you. Uncaptured edits are surfaced, never miscredited.</li>
   </ul>
 
