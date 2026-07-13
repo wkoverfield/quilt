@@ -83,9 +83,16 @@
   .install button:hover { color: var(--ink); border-color: var(--ink); }
   .hero-note { color: var(--faint); font-size: 13.5px; margin-top: 16px; }
 
-  /* the loom: a dark instrument resting on the paper */
-  .loom-frame { margin: 56px auto 0; border: 1px solid var(--dborder); border-radius: 16px; background: var(--dpanel);
+  /* the loom: a dark instrument, scrubbed by scroll */
+  .loom-stage { height: 300vh; position: relative; margin-top: 56px; }
+  @media (max-width: 800px) { .loom-stage { height: 260vh; } }
+  .loom-sticky { position: sticky; top: 90px; }
+  .loom-frame { margin: 0 auto; border: 1px solid var(--dborder); border-radius: 16px; background: var(--dpanel);
                 box-shadow: 0 32px 70px -30px rgba(38,32,25,.45); overflow: hidden; }
+  @media (prefers-reduced-motion: reduce) {
+    .loom-stage { height: auto; }
+    .loom-sticky { position: static; }
+  }
   .loom-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--dborder); }
   .loom-bar i { width: 9px; height: 9px; border-radius: 50%; background: #3b3220; }
   .loom-bar .t { font-family: var(--mono); font-size: 11.5px; color: var(--ddim); margin-left: 8px; }
@@ -115,23 +122,8 @@
   .loom-caption b { color: var(--dim); font-weight: 500; }
   .loom-bar .livedot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 5px; }
   @media (prefers-reduced-motion: no-preference) {
-    .play .yarn { transform: scaleX(0); animation: weave .5s var(--ease) forwards; }
-    .play .cmt { opacity: 0; transform: translateY(6px); animation: rise .4s var(--ease) forwards; }
-    .play .dyarn { transform: scaleX(0); opacity: .95; animation: denyPush 1.15s var(--ease) 1.45s forwards; }
-    .play .dx { opacity: 0; animation: denyMark .25s var(--ease) 2s forwards; }
-    .fading .threads, .fading .commits { opacity: 0; transition: opacity .45s var(--ease); }
     .livedot { animation: breathe 2.4s ease-in-out infinite; }
     @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-    @keyframes weave { to { transform: scaleX(1); } }
-    @keyframes rise { to { opacity: 1; transform: none; } }
-    @keyframes denyPush {
-      0% { transform: scaleX(0); }
-      36% { transform: scaleX(1); }
-      50% { transform: scaleX(1); }
-      80% { transform: scaleX(.24); opacity: .8; }
-      100% { transform: scaleX(.24); opacity: .7; }
-    }
-    @keyframes denyMark { to { opacity: 1; } }
   }
 
 
@@ -238,6 +230,8 @@
     </div>
     <p class="hero-note">MIT · macOS and Linux · no account, no daemon · claims <a href="why.html#edges">block wired edits, advisory beyond them</a></p>
 
+    <div class="loom-stage" id="loom-stage">
+    <div class="loom-sticky">
     <div class="loom-frame" aria-label="Animated: four agents' line edits weave into one shared file, and resolve into one clean commit per agent. A fifth write into claimed code is denied.">
       <div class="loom-bar" aria-hidden="true">
         <i></i><i></i><i></i>
@@ -247,15 +241,17 @@
       <div class="loom" aria-hidden="true">
         <div class="threads" id="threads"></div>
         <div class="commits">
-          <div class="cmt" style="animation-delay:.9s"><i style="background:var(--coral)"></i><span class="sha">b41e7a2</span><span>fix getUser redirect</span><span class="who">a1</span></div>
-          <div class="cmt" style="animation-delay:1.05s"><i style="background:var(--green)"></i><span class="sha">7c5f2e8</span><span>migrate config schema</span><span class="who">a2</span></div>
-          <div class="cmt" style="animation-delay:1.2s"><i style="background:var(--blue)"></i><span class="sha">51b6d37</span><span>wire webhook retries</span><span class="who">a3</span></div>
-          <div class="cmt" style="animation-delay:1.35s"><i style="background:var(--magenta)"></i><span class="sha">a9042fe</span><span>test billing edge cases</span><span class="who">a4</span></div>
-          <div class="cmt deny" style="animation-delay:1.6s"><span class="x">✗</span><span>write into a1's claimed function</span><span class="who">denied</span></div>
+          <div class="cmt"><i style="background:var(--coral)"></i><span class="sha">b41e7a2</span><span>fix getUser redirect</span><span class="who">a1</span></div>
+          <div class="cmt"><i style="background:var(--green)"></i><span class="sha">7c5f2e8</span><span>migrate config schema</span><span class="who">a2</span></div>
+          <div class="cmt"><i style="background:var(--blue)"></i><span class="sha">51b6d37</span><span>wire webhook retries</span><span class="who">a3</span></div>
+          <div class="cmt"><i style="background:var(--magenta)"></i><span class="sha">a9042fe</span><span>test billing edge cases</span><span class="who">a4</span></div>
+          <div class="cmt deny"><span class="x">✗</span><span>write into a1's claimed function</span><span class="who">denied</span></div>
         </div>
       </div>
     </div>
     <p class="loom-caption"><b>Each color is an agent.</b> Every commit is exactly its author's lines, and the fifth write bounced off a1's claimed code on line 8 without changing a byte.</p>
+    </div>
+    </div>
 
   </header>
 
@@ -385,25 +381,57 @@
     threads.appendChild(row);
   });
 
-  var loom = document.querySelector(".loom-frame");
+  // The loom is scrubbed by scroll: one chapter per agent, then the denial.
   var reduced = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (loom && !reduced) {
-    loom.classList.add("play");
-    var loomInView = true;
-    if ("IntersectionObserver" in window) {
-      new IntersectionObserver(function (e) { loomInView = e[0].isIntersecting; }).observe(loom);
+  var stage = document.getElementById("loom-stage");
+  if (stage && !reduced) {
+    var yarnEls = [].slice.call(threads.querySelectorAll(".yarn"));
+    var cmts = [].slice.call(document.querySelectorAll(".commits .cmt"));
+    var dyarnEl = threads.querySelector(".dyarn");
+    var dxEl = threads.querySelector(".dx");
+    var agentRows = [[], [], [], []];
+    ROWS.forEach(function (r, i) { agentRows[r[0]].push(i); });
+
+    function seg(p, a, b) { return p <= a ? 0 : p >= b ? 1 : (p - a) / (b - a); }
+    function easeOut(t) { return 1 - Math.pow(1 - t, 3); }
+
+    function render(p) {
+      for (var a = 0; a < 4; a++) {
+        var base = a * 0.17;
+        agentRows[a].forEach(function (rowIdx, j) {
+          var v = easeOut(seg(p, base + j * 0.035, base + j * 0.035 + 0.095));
+          yarnEls[rowIdx].style.transform = "scaleX(" + v + ")";
+        });
+        var cv = easeOut(seg(p, base + 0.105, base + 0.165));
+        cmts[a].style.opacity = cv;
+        cmts[a].style.transform = "translateY(" + (1 - cv) * 6 + "px)";
+      }
+      // the denial: push in, mark, bounce back, denied row lands
+      var g = easeOut(seg(p, 0.68, 0.76));
+      var bounce = easeOut(seg(p, 0.79, 0.86));
+      dyarnEl.style.transform = "scaleX(" + g * (1 - bounce * 0.76) + ")";
+      dyarnEl.style.opacity = g === 0 ? "0" : String(0.95 - 0.25 * bounce);
+      dxEl.style.opacity = easeOut(seg(p, 0.78, 0.82));
+      var dv = easeOut(seg(p, 0.82, 0.9));
+      cmts[4].style.opacity = dv;
+      cmts[4].style.transform = "translateY(" + (1 - dv) * 6 + "px)";
     }
-    // one full scene (~2.6s) + a calm hold, then a gentle unweave and replay
-    setInterval(function () {
-      if (!loomInView || document.hidden) return;
-      loom.classList.add("fading");
-      setTimeout(function () {
-        loom.classList.remove("play");
-        void loom.offsetWidth; // style flush so the animations restart
-        loom.classList.remove("fading");
-        loom.classList.add("play");
-      }, 460);
-    }, 8500);
+
+    var ticking = false;
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function () {
+        ticking = false;
+        var r = stage.getBoundingClientRect();
+        var span = r.height - window.innerHeight;
+        var p = span > 0 ? Math.min(1, Math.max(0, -r.top / span)) : 1;
+        render(p);
+      });
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    onScroll();
   }
 
   if ("IntersectionObserver" in window) {
