@@ -205,6 +205,19 @@ the difference between process-per-agent and many-agents-in-one-process setups.
 - [bench/](bench/): the scenario ladder Quilt is tested against, run with and
   without Quilt on the same metrics.
 
+## Telemetry
+
+Off by default, and opt-in for real: `quilt setup` asks once, on an
+interactive terminal only, and no answer means no. If you say yes, Quilt
+sends anonymous usage counts (which commands run, how many claims were
+granted/denied/queued, quilt version, OS) under a random id generated on
+your machine. It never sends code, file paths, repo names, actor names,
+branch names, or commit messages, and events are posted by a detached
+process so no command ever waits on the network. Change your mind any
+time with `quilt telemetry on|off`, or set `QUILT_TELEMETRY=0` to force
+it off for any process (useful in CI). The full event list is in
+[docs/reference.md](docs/reference.md).
+
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
