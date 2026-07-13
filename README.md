@@ -53,6 +53,27 @@ WITH quilt      6 clean commits, one per agent, each exactly its own lines.
                 bytes changed, with a1's stated intent in the denial.
 ```
 
+## The numbers
+
+Quilt is tested against a six-scenario ladder of real multi-agent failure
+modes (disjoint fan-out, same-line conflict, dependency cascade, refactor
+underfoot, emergent overlap, mixed human/agent churn). Every scenario runs
+twice on the same tasks: plain git on a shared checkout, then Quilt on the
+same shared checkout. From the [latest run](bench/RESULTS.md) (18 intended
+changes, 2 to 4 concurrent actors):
+
+| across all six scenarios | without Quilt | with Quilt |
+| --- | --- | --- |
+| changes silently lost | 3 | **0** |
+| changes misattributed | 9 | **0** |
+| broken final states | 1 | **0** |
+| collisions surfaced for a human | 0 | 3 |
+
+Same tasks, same tree: the three collisions that plain git turned into silent
+losses became surfaced decisions instead. Full per-scenario tables, metric
+definitions, and the honest caveats live in [bench/](bench/). Reproduce with
+`npm run bench`; the same assertions gate every CI run under `npm test`.
+
 ## When two agents want the same file
 
 Fanning out on disjoint files is the easy case. The real test is contention.
