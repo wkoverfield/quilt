@@ -14,7 +14,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. Optional — agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. Scopes only the CLI commands run in your terminal; it never binds other agents' captured edits (the pointer is checkout-global, capture identity is per-edit). |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
 | `quilt fleet [--json] [--watch]` | Mission control: every actor, their claims, overlaps, and collisions in one view. JSON includes `files`, the per-file who-wrote-what rows (per-actor line counts). |
-| `quilt ui [--port <n>] [--no-open]` | The fleet view as a live local web page: who wrote what (per-actor line counts per file), active claims, blocked/queued actors, and the "Needs you" queue. Binds 127.0.0.1 only, read-only over `.quilt/`, refreshes every 2s; falls back to a free port when the default (4747) is taken. |
+| `quilt ui [--port <n>] [--no-open]` | The fleet view as a live local web page: who wrote what, expandable per-line provenance review, active claims, blocked/queued actors, and the "Needs you" queue. Binds 127.0.0.1 only, read-only over `.quilt/`, refreshes every 2s; falls back to a free port when the default (4747) is taken. |
 | `quilt status [--json]` | Show who owns which working-tree changes. |
 | `quilt mine [--json]` | Summarize the changes you own. |
 | `quilt conflicts [--json]` | Show shared changes: same-line clashes vs adjacent edits that commit cleanly. |
@@ -36,6 +36,24 @@ agents, see [orchestrators.md](orchestrators.md).
 A global `--as <id>` sets your actor for any command (the per-command form of `QUILT_ACTOR=<id>`). An explicit `QUILT_ACTOR` env var wins over `--as`; `QUILT_SESSION=<session>` pins a live session. Actor-sensitive mutation refuses a checkout-global pointer when another actor owns dirty work.
 
 Run `quilt --help` or `quilt <command> --help` for the full flag list.
+
+## Provenance review: `quilt ui`
+
+In the **Who wrote what** table, select a changed file to expand its live
+`HEAD` to worktree diff. Each changed line shows its Quilt actor, conflicts
+list every credited actor, and edits without recorded ownership are marked
+unattributed.
+
+For auto-derived Claude Code and Codex actors, Quilt can also show the latest
+user prompt before the captured edit. Prompt matching is a time-based inference,
+not a hard link. Transcripts are read from local agent storage only after the
+file is expanded. Prompt text never leaves the loopback-only dashboard and is
+never included in telemetry. Other actor types continue to show reliable
+per-agent attribution without a prompt.
+
+An actor represents a session or subagent run, not necessarily one person or
+one prompt. Raw shell writes, generated files, and pre-existing dirty changes
+can legitimately remain unattributed.
 
 ## Live attribution: `quilt watch`
 

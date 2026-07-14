@@ -3,7 +3,9 @@ import { spawn } from "node:child_process";
 import { basename } from "node:path";
 import type { Store } from "./state.js";
 import { fleetSnapshot } from "./fleet.js";
+import { fileBlame } from "./blame.js";
 import { shortHead } from "./git.js";
+import { repoRelative } from "./paths.js";
 import { initSymbols } from "./symbols.js";
 import { VERSION } from "./version.js";
 
@@ -47,7 +49,8 @@ export async function startUiServer(store: Store, preferredPort: number): Promis
       res.end("quilt ui is local-only\n");
       return;
     }
-    const url = (req.url ?? "/").split("?")[0];
+    const parsedUrl = new URL(req.url ?? "/", "http://127.0.0.1");
+    const url = parsedUrl.pathname;
     if (url === "/") {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
       res.end(PAGE);
@@ -67,6 +70,29 @@ export async function startUiServer(store: Store, preferredPort: number): Promis
         res.end(body);
       } catch (err) {
         res.writeHead(500, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      }
+      return;
+    }
+    if (url === "/api/blame") {
+      const requested = parsedUrl.searchParams.get("path");
+      const relPath = requested ? repoRelative(store.paths.repoRoot, requested) : null;
+      if (!relPath || relPath !== requested) {
+        res.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify({ error: "path must be a normalized file inside the repository" }));
+        return;
+      }
+      try {
+        const blame = fileBlame(store, relPath);
+        if (!blame) {
+          res.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+          res.end(JSON.stringify({ error: "file has no uncommitted changes" }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+        res.end(JSON.stringify(blame));
+      } catch (err) {
+        res.writeHead(500, { "content-type": "application/json", "cache-control": "no-store" });
         res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
       }
       return;
@@ -180,6 +206,29 @@ const PAGE = `<!doctype html>
   .badge.new { color: var(--green); border: 1px solid color-mix(in srgb, var(--green) 40%, transparent); }
   .badge.deleted, .badge.binary { color: var(--faint); border: 1px solid var(--border); }
   .un { color: var(--faint); font-size: 11.5px; }
+  .review-toggle { appearance: none; border: 0; background: none; color: var(--text); padding: 0; cursor: pointer;
+                   font: inherit; font-family: var(--mono); text-align: left; }
+  .review-toggle::before { content: "▸"; color: var(--faint); display: inline-block; width: 15px; }
+  .review-toggle.open::before { content: "▾"; }
+  .review-cell { padding: 0 10px 12px; background: color-mix(in srgb, var(--bg) 38%, var(--panel)); }
+  .review { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .review-state { padding: 14px; color: var(--dim); font-size: 12px; }
+  .diff-line { display: grid; grid-template-columns: 42px 42px 18px minmax(0, 1fr) auto; align-items: start;
+               min-height: 25px; border-top: 1px solid color-mix(in srgb, var(--border) 65%, transparent); font-family: var(--mono); font-size: 11.5px; }
+  .diff-line:first-child { border-top: 0; }
+  .diff-line.add { background: color-mix(in srgb, var(--green) 7%, transparent); }
+  .diff-line.del { background: color-mix(in srgb, var(--red) 7%, transparent); }
+  .diff-line.conflict { box-shadow: inset 3px 0 var(--red); }
+  .ln { color: var(--faint); text-align: right; padding: 4px 7px 4px 2px; user-select: none; }
+  .sign { color: var(--faint); padding: 4px 3px; }
+  .code { white-space: pre-wrap; overflow-wrap: anywhere; padding: 4px 8px 4px 2px; }
+  .line-meta { padding: 2px 6px; max-width: 360px; text-align: right; }
+  .prompt { display: inline-block; text-align: left; margin-left: 4px; vertical-align: top; }
+  .prompt summary { color: var(--cyan); cursor: pointer; list-style: none; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 10.5px; }
+  .prompt summary::-webkit-details-marker { display: none; }
+  .prompt pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 340px; max-height: 180px; overflow: auto;
+                color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px; margin: 4px 0; }
+  .review-notes { padding: 9px 11px; color: var(--faint); font-size: 10.5px; border-top: 1px solid var(--border); }
 
   .kv { font-family: var(--mono); font-size: 12.5px; }
   .kv b { font-weight: 600; }
@@ -212,6 +261,9 @@ const PAGE = `<!doctype html>
 (function () {
   "use strict";
   var PALETTE = ["#e06c75","#e5a06b","#e3c46b","#8fc46f","#56c2a8","#5aa9e6","#8a7fe8","#d074c4"];
+  var OPEN_REVIEWS = Object.create(null);
+  var OPEN_PROMPTS = Object.create(null);
+  var REVIEW_CACHE = Object.create(null);
   function colorFor(id) {
     var h = 0;
     for (var i = 0; i < id.length; i++) h = ((h << 5) - h + id.charCodeAt(i)) | 0;
@@ -257,6 +309,56 @@ const PAGE = `<!doctype html>
       p.appendChild(i % 2 ? el("code", null, parts[i]) : document.createTextNode(parts[i]));
     }
     return p;
+  }
+
+  function renderReviewData(d, panel) {
+    panel.replaceChildren();
+    if (d.binary) {
+      panel.appendChild(el("div", "review-state", "Binary file: line review is unavailable."));
+      return;
+    }
+    d.lines.forEach(function (line, lineIndex) {
+      var meta = el("div", "line-meta");
+      if (line.actors.length) line.actors.forEach(function (actor) { meta.appendChild(chip(actor)); });
+      else if (line.type !== "eq") meta.appendChild(el("span", "un", "unattributed"));
+      if (line.conflicted) meta.appendChild(badge("contended", "conflict"));
+      line.provenance.forEach(function (p, provenanceIndex) {
+        if (!p.prompt) return;
+        var details = el("details", "prompt");
+        var promptKey = d.path + ":" + lineIndex + ":" + provenanceIndex;
+        details.open = !!OPEN_PROMPTS[promptKey];
+        details.addEventListener("toggle", function () { OPEN_PROMPTS[promptKey] = details.open; });
+        details.appendChild(el("summary", null, "prompt"));
+        details.appendChild(el("pre", null, p.prompt));
+        meta.appendChild(details);
+      });
+      var kind = line.type === "add" ? "add" : line.type === "del" ? "del" : "eq";
+      var sign = line.type === "add" ? "+" : line.type === "del" ? "−" : " ";
+      panel.appendChild(el("div", "diff-line " + kind + (line.conflicted ? " conflict" : ""),
+        el("span", "ln", line.oldLineNumber == null ? "" : String(line.oldLineNumber)),
+        el("span", "ln", line.newLineNumber == null ? "" : String(line.newLineNumber)),
+        el("span", "sign", sign), el("span", "code", line.text), meta));
+    });
+    panel.appendChild(el("div", "review-notes",
+      "Actor means a Quilt session or subagent, not necessarily a person or a single prompt. Prompt matches are inferred by time. " +
+      "Local prompts are read only when this panel opens and never leave this server. Claude Code and Codex transcripts are supported; other actors remain per-agent only. Unattributed lines can be legitimate."));
+  }
+
+  function loadReview(path, panel) {
+    if (REVIEW_CACHE[path]) {
+      renderReviewData(REVIEW_CACHE[path], panel);
+      return;
+    }
+    panel.replaceChildren(el("div", "review-state", "Loading local provenance…"));
+    fetch("/api/blame?path=" + encodeURIComponent(path)).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (d) {
+      REVIEW_CACHE[path] = d;
+      if (OPEN_REVIEWS[path]) renderReviewData(d, panel);
+    }).catch(function () {
+      panel.replaceChildren(el("div", "review-state", "Could not load this review."));
+    });
   }
 
   function render(d) {
@@ -347,7 +449,26 @@ const PAGE = `<!doctype html>
         if (f.isNew) badges.appendChild(badge("new", "new"));
         if (f.isDeleted) badges.appendChild(badge("deleted", "deleted"));
         if (f.binary) badges.appendChild(badge("binary", "binary"));
-        table.appendChild(el("tr", null, el("td", "path", f.path), authors, badges));
+        var toggle = el("button", "review-toggle" + (OPEN_REVIEWS[f.path] ? " open" : ""), f.path);
+        toggle.type = "button";
+        toggle.setAttribute("aria-expanded", OPEN_REVIEWS[f.path] ? "true" : "false");
+        var fileRow = el("tr", null, el("td", "path", toggle), authors, badges);
+        table.appendChild(fileRow);
+        var reviewCell = el("td", "review-cell");
+        reviewCell.colSpan = 3;
+        var reviewPanel = el("div", "review");
+        reviewCell.appendChild(reviewPanel);
+        var reviewRow = el("tr", null, reviewCell);
+        reviewRow.hidden = !OPEN_REVIEWS[f.path];
+        table.appendChild(reviewRow);
+        toggle.addEventListener("click", function () {
+          OPEN_REVIEWS[f.path] = !OPEN_REVIEWS[f.path];
+          reviewRow.hidden = !OPEN_REVIEWS[f.path];
+          toggle.classList.toggle("open", OPEN_REVIEWS[f.path]);
+          toggle.setAttribute("aria-expanded", OPEN_REVIEWS[f.path] ? "true" : "false");
+          if (OPEN_REVIEWS[f.path]) loadReview(f.path, reviewPanel);
+        });
+        if (OPEN_REVIEWS[f.path]) loadReview(f.path, reviewPanel);
       });
       var wrap = el("div", "card", table);
       wrap.style.padding = "2px 0";
