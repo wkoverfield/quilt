@@ -15,6 +15,7 @@
 <link href="https://api.fontshare.com/v2/css?f[]=gambetta@500,600,700&f[]=switzer@400,500,600&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
+  @view-transition { navigation: auto; }
   /* ---- tokens: product surface shared with quilt ui ---- */
   :root {
     --paper: #f5f5f6; --paper2: #eeeef0; --card: #ffffff; --border: #e4e4e7; --stitch: #d4d4d8;
@@ -39,7 +40,7 @@
 
   .navbar .wrap { max-width: 1168px; padding: 0 24px; }
   .navbar { position: sticky; top: 0; z-index: 50; padding: 14px 0; }
-  .navbar nav { position: relative; }
+  .navbar nav { position: relative; view-transition-name: site-navigation; }
   nav { display: flex; align-items: center; gap: 22px; padding: 9px 12px 9px 16px; line-height: 1.4;
         background: rgba(255,255,255,.7); border: 1px solid #e8e8ec; border-radius: 12px;
         -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%);
@@ -233,7 +234,7 @@
 
   @media (max-width: 900px) {
     .whygrid { grid-template-columns: 1fr; }
-    .links > a:not(.gh) { display: none; }
+    .gh .ghc { display: none; }
   }
   @media (max-width: 640px) {
     .hero-squares { opacity: .55; }
@@ -249,6 +250,10 @@
   @media (prefers-reduced-motion: no-preference) {
     .reveal { opacity: 0; transform: translateY(14px); transition: opacity .5s var(--ease), transform .5s var(--ease); }
     .reveal.in { opacity: 1; transform: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    ::view-transition-group(*) { animation-duration: .01ms; }
   }
 </style>
 </head>
@@ -289,7 +294,7 @@
       and you see exactly who wrote what before you merge.
     </p>
     <div class="ctas">
-      <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
+      <a class="btn primary" href="docs.html#quickstart">Get started</a>
       <a class="btn ghost" href="#proof">See a review</a>
     </div>
     <div class="install">
@@ -358,7 +363,7 @@
       <p class="section-kicker">the review</p>
       <h2>See who wrote each line, with local prompt context.</h2>
       <p>Select any changed file in the Review workspace to read its diff with per-line authorship. Conflicts and unattributed lines are labeled plainly. For supported Claude Code and Codex sessions, Quilt can show the latest local prompt before a captured edit. Matching is inferred by time. Prompt text is read on your machine and sent nowhere.</p>
-      <p><a href="https://github.com/wkoverfield/quilt#quickstart">Watch your agents live</a> with one command: <code>quilt ui</code>.</p>
+      <p><a href="docs.html#quickstart">Watch your agents live</a> with one command: <code>quilt ui</code>.</p>
     </div>
     <div class="diff-card" aria-label="Quilt UI review preview">
       <div class="diff-head">
@@ -425,7 +430,7 @@
   <div class="fin reveal">
     <h2>Know who wrote <em>what</em>, before you merge.</h2>
     <div class="ctas" style="margin-top:24px">
-      <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
+      <a class="btn primary" href="docs.html#quickstart">Get started</a>
       <a class="btn ghost" href="https://github.com/wkoverfield/quilt">Star on GitHub</a>
     </div>
   </div>
