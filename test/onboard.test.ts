@@ -11,6 +11,8 @@ import {
   appendCoordination,
   detect,
   planSetup,
+  mergeGitignore,
+  newToGit,
   COORDINATION_MARKER,
   HOOK_PRE_COMMAND,
   HOOK_POST_COMMAND,
@@ -338,4 +340,192 @@ You share this checkout with other agents. Coordinate through Quilt:
   assert.equal(r.changed, true);
   assert.ok(r.content.includes("keep this line"), "content after the pre-0.4 tail survives");
   assert.ok(!r.content.includes("Before you edit a file, claim"), "old body gone");
+});
+
+// --- gitignore hint / --gitignore ---
+
+/**
+ * Neutralize the developer's own git config for these tests. A machine whose
+ * global excludes already ignore CLAUDE.md (a reasonable thing to do, and
+ * exactly what this feature exists to respect) would otherwise see zero exposed
+ * files and silently pass every assertion below.
+ *
+ * core.excludesFile must be overridden explicitly: git reads
+ * $XDG_CONFIG_HOME/git/ignore by DEFAULT, so blanking the global config file
+ * alone leaves that path live.
+ */
+const NO_GLOBAL_GIT = {
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_SYSTEM: "/dev/null",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "core.excludesFile",
+  GIT_CONFIG_VALUE_0: "/dev/null",
+} as const;
+
+function withNoGlobalGit<T>(fn: () => T): T {
+  const prev: Record<string, string | undefined> = {};
+  for (const k of Object.keys(NO_GLOBAL_GIT)) prev[k] = process.env[k];
+  Object.assign(process.env, NO_GLOBAL_GIT);
+  try {
+    return fn();
+  } finally {
+    for (const [k, v] of Object.entries(prev)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+/** Env for a spawned CLI: hermetic (no network, no gh) and blind to global excludes. */
+const CLI_ENV = { ...NO_GLOBAL_GIT, NO_COLOR: "1", QUILT_NO_UPDATE_CHECK: "1", QUILT_NO_GH: "1" };
+
+test("mergeGitignore appends entries, preserves existing content, and is idempotent", () => {
+  const first = mergeGitignore("node_modules/\n", ["/.mcp.json", "/CLAUDE.md"]);
+  assert.equal(first.changed, true);
+  assert.ok(first.content.startsWith("node_modules/\n"), "existing rules preserved");
+  assert.ok(first.content.includes("/.mcp.json"));
+  assert.ok(first.content.includes("/CLAUDE.md"));
+
+  const second = mergeGitignore(first.content, ["/.mcp.json", "/CLAUDE.md"]);
+  assert.equal(second.changed, false, "re-running adds nothing");
+  assert.equal(second.content, first.content);
+
+  const partial = mergeGitignore(first.content, ["/.mcp.json", "/.claude/settings.json"]);
+  assert.equal(partial.changed, true);
+  assert.equal(partial.content.match(/\/\.mcp\.json/g)?.length, 1, "already-present entry not duplicated");
+});
+
+test("newToGit reports only files git has never seen", () => {
+  const dir = tmpRepo();
+  try {
+    withNoGlobalGit(() => {
+      // A repo that deliberately commits its CLAUDE.md: appending to it exposes
+      // nothing new, so it must not be reported.
+      writeFileSync(join(dir, "CLAUDE.md"), "# house rules\n");
+      spawnSync("git", ["add", "CLAUDE.md"], { cwd: dir, env: { ...process.env } });
+
+      const files = newToGit(dir, planSetup(dir)).map((s) => s.file);
+      assert.ok(!files.includes("CLAUDE.md"), "a tracked CLAUDE.md is not flagged");
+      assert.ok(files.includes(".mcp.json"), "a brand-new .mcp.json is flagged");
+      assert.ok(files.includes(".claude/settings.json"), "brand-new hook settings are flagged");
+
+      // Once ignored, it stops being reported.
+      writeFileSync(join(dir, ".gitignore"), "/.mcp.json\n");
+      const after = newToGit(dir, planSetup(dir)).map((s) => s.file);
+      assert.ok(!after.includes(".mcp.json"), "an ignored file is not flagged");
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup warns that the config it wrote is new to git, and names the escape hatch", () => {
+  const dir = tmpRepo();
+  try {
+    const r = spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8", env: { ...process.env, ...CLI_ENV } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /not tracked by git yet/);
+    assert.match(r.stdout, /\.mcp\.json/);
+    assert.match(r.stdout, /quilt setup --gitignore/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup --gitignore keeps the wired config out of git, and stops advising a commit", () => {
+  const dir = tmpRepo();
+  try {
+    // The real flow: wire first, read the warning, THEN opt out. On this second
+    // run every step is a skip (already wired), which must still ignore the files.
+    const wire = spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8", env: { ...process.env, ...CLI_ENV } });
+    assert.equal(wire.status, 0, wire.stderr);
+
+    const r = spawnSync("node", [CLI, "setup", "--gitignore"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(r.status, 0, r.stderr);
+
+    const ignore = readFileSync(join(dir, ".gitignore"), "utf8");
+    for (const entry of ["/.mcp.json", "/CLAUDE.md", "/.claude/settings.json"]) {
+      assert.ok(ignore.includes(entry), `${entry} ignored`);
+    }
+    // Ignoring .claude/settings.json must not swallow the whole .claude/ dir.
+    assert.ok(!/^\.claude\/$/m.test(ignore), ".claude/ is not blanket-ignored");
+
+    // The real proof: git itself now ignores them.
+    const status = spawnSync("git", ["status", "--porcelain"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...NO_GLOBAL_GIT },
+    }).stdout;
+    assert.ok(!status.includes(".mcp.json"), "git no longer sees .mcp.json");
+    assert.ok(!status.includes("CLAUDE.md"), "git no longer sees CLAUDE.md");
+
+    // The wiring still happened, and the contradictory "commit these" advice is gone.
+    assert.ok(existsSync(join(dir, ".mcp.json")), "still wired");
+    assert.ok(!/Commit the generated config files/.test(r.stdout), "no commit advice when gitignoring");
+    assert.ok(!/not tracked by git yet/.test(r.stdout), "no exposure warning when gitignoring");
+
+    // Second run: nothing left to ignore, no duplicate entries.
+    const again = spawnSync("node", [CLI, "setup", "--gitignore"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(again.status, 0, again.stderr);
+    assert.match(again.stdout, /Nothing to ignore/);
+    assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), ignore, ".gitignore unchanged on re-run");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup stays quiet when the repo already tracks its agent config", () => {
+  const dir = tmpRepo();
+  try {
+    // Every file setup would touch is already committed: this project shares its
+    // wiring on purpose and must not be nagged about it.
+    writeFileSync(join(dir, "CLAUDE.md"), "# house rules\n");
+    writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: {} }));
+    mkdirSync(join(dir, ".claude"), { recursive: true });
+    writeFileSync(join(dir, ".claude", "settings.json"), "{}\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir, env: { ...process.env, ...NO_GLOBAL_GIT } });
+
+    const r = spawnSync("node", [CLI, "setup"], { cwd: dir, encoding: "utf8", env: { ...process.env, ...CLI_ENV } });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!/not tracked by git yet/.test(r.stdout), "no warning for a repo that commits its config");
+    assert.match(r.stdout, /Commit the generated config files/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup --gitignore reaches child repos in workspace mode", () => {
+  // A workspace: not a repo itself, with repos inside. The flag must not be
+  // silently dropped just because setup took the workspace branch.
+  const ws = mkdtempSync(join(tmpdir(), "quilt-ws-"));
+  try {
+    const child = join(ws, "app");
+    mkdirSync(child, { recursive: true });
+    spawnSync("git", ["init", "-q"], { cwd: child });
+
+    const plain = spawnSync("node", [CLI, "setup"], { cwd: ws, encoding: "utf8", env: { ...process.env, ...CLI_ENV } });
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.match(plain.stdout, /not tracked by git yet/);
+    assert.match(plain.stdout, /app\/\.mcp\.json/, "exposed files are named per child repo");
+
+    const r = spawnSync("node", [CLI, "setup", "--gitignore"], {
+      cwd: ws,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    const ignore = readFileSync(join(child, ".gitignore"), "utf8");
+    assert.ok(ignore.includes("/.mcp.json"), "child repo's config is ignored");
+    assert.ok(!/not tracked by git yet/.test(r.stdout), "nothing left exposed");
+  } finally {
+    rmSync(ws, { recursive: true, force: true });
+  }
 });

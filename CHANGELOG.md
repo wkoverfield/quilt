@@ -6,6 +6,25 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`quilt setup --gitignore`.** Keeps the config Quilt wires in (`.mcp.json`,
+  `CLAUDE.md`, `.claude/settings.json`) out of git instead of committing it.
+  Entries are added per file, so ignoring `.claude/settings.json` never swallows
+  the rest of a `.claude/` directory. The default is unchanged: commit the wiring
+  so every checkout and teammate shares it.
+
+### Changed
+
+- **`quilt setup` now says when the files it wired in are new to git.** It lists
+  the ones git neither tracks nor ignores, the files a later `git add -A` would
+  sweep into a commit, and points at `--gitignore` as the way to keep them local.
+  When `gh` reports the repo public, the notice names that, because publishing
+  agent instructions and local MCP config is a decision worth making on purpose.
+  A file the repo already tracks or already ignores is never mentioned, so a
+  project that commits its agent config (or a user whose global excludes cover
+  it) sees nothing new.
+
 ## [0.5.2] - 2026-07-13
 
 ### Added

@@ -32,7 +32,18 @@ import { runMcpServer } from "./mcp.js";
 import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
 import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, parseCodexHookInput, codexActorId, runCodexHookPre, runCodexHookPost, type CodexHookInput } from "./hooks.js";
-import { detect, planSetup, applySetup, mergeHookSettings, appendCoordination, type SetupStep } from "./onboard.js";
+import {
+  detect,
+  planSetup,
+  applySetup,
+  mergeHookSettings,
+  appendCoordination,
+  newToGit,
+  planGitignore,
+  repoVisibility,
+  type RepoVisibility,
+  type SetupStep,
+} from "./onboard.js";
 import { adoptClaimHolder, recordAuthorship, capturedBySelf, readAuthorship, settleCommittedAuthorship } from "./authorship.js";
 import type { ActiveContext } from "./session.js";
 import { repoRelative } from "./paths.js";
@@ -238,6 +249,44 @@ function applySetupAttributed(root: string, steps: SetupStep[]): SetupStep[] {
   return written;
 }
 
+/**
+ * Printed when setup introduced files git has never seen. Quilt's default advice
+ * is still to COMMIT the wiring — that is how a fleet shares it — but the files
+ * land at the repo root and the next `git add -A` takes them whether or not the
+ * user meant it. On a repo `gh` reports as public, that lands agent instructions
+ * and local MCP config in public view, so name the stakes and name the way out.
+ * Silent either way is the one option that isn't defensible.
+ */
+function printExposureNotice(labels: string[], visibility: RepoVisibility): void {
+  if (labels.length === 0) return;
+  const lead =
+    visibility === "public"
+      ? pc.yellow("⚠ ") + "This repo is PUBLIC. These files are wired in but not tracked by git yet:\n"
+      : pc.cyan("→ ") + "These files are wired in but not tracked by git yet:\n";
+  process.stdout.write(
+    "\n" +
+      lead +
+      labels.map((l) => "    " + l + "\n").join("") +
+      pc.dim("  Commit them to share the wiring with every checkout and teammate (Quilt's\n") +
+      pc.dim("  default, and what a fleet needs), or keep them local with:\n") +
+      pc.dim("    quilt setup --gitignore\n"),
+  );
+}
+
+/**
+ * The exposure/opt-out decision for ONE repo, shared by the single-repo and
+ * workspace paths: fold in a .gitignore step when the user asked for one, and
+ * otherwise report what git would newly pick up. Returns the labels to warn
+ * about (empty when --gitignore handled them), prefixed for workspace output.
+ */
+function applyGitignoreChoice(root: string, steps: SetupStep[], gitignore: boolean, prefix = ""): string[] {
+  const exposed = newToGit(root, steps);
+  if (!gitignore) return exposed.map((s) => prefix + s.file);
+  const step = planGitignore(root, exposed);
+  if (step) steps.push(step);
+  return [];
+}
+
 /** Printed when setup just WROTE the Codex hooks: Codex skips new hooks until
  * a one-time interactive approval, and silence here would recreate the exact
  * wired-but-not-working trap this release removes elsewhere. */
@@ -295,8 +344,14 @@ function planWorkspaceRoot(wsRoot: string): SetupStep[] {
  * as a workspace. Sessions started here load hooks/instructions from HERE, and
  * the hooks attribute each edit to the repo its file lives in — so the root
  * gets hooks + snippet, and every child repo gets the full per-repo wiring.
+ *
+ * The workspace root itself is outside any repo, so its files are invisible to
+ * git and can't be exposed by it. Each CHILD repo can, and is judged on its own.
+ * The public/private probe is skipped here: it costs a `gh` call per repo, and a
+ * 50-repo workspace would pay it 50 times. The notice still names every exposed
+ * file and the way out.
  */
-async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolean): Promise<void> {
+async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolean, gitignore: boolean): Promise<void> {
   process.stdout.write(
     pc.dim(`Not a git repo, but ${children.length} ${children.length === 1 ? "repo lives" : "repos live"} inside — wiring this directory as a workspace.\n`) +
       pc.dim("Sessions started here are captured into whichever repo each edit belongs to.\n\n"),
@@ -308,13 +363,17 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
   for (const s of rootSteps) printSetupStep(s, dryRun);
   const written: SetupStep[] = [];
 
+  const exposed: string[] = [];
+
   for (const child of children) {
     const childRoot = join(wsRoot, child);
     process.stdout.write("\n" + pc.bold(child + "/") + "\n");
     const initNeeded = !new Store(childRoot).initialized;
     if (dryRun) {
       if (initNeeded) process.stdout.write(pc.cyan("  would ") + "initialize Quilt (.quilt/)\n");
-      for (const s of planSetup(childRoot)) printSetupStep(s, true);
+      const planned = planSetup(childRoot);
+      exposed.push(...applyGitignoreChoice(childRoot, planned, gitignore, child + "/"));
+      for (const s of planned) printSetupStep(s, true);
       continue;
     }
     if (initNeeded) {
@@ -322,15 +381,19 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
       process.stdout.write(pc.green("  ✓ ") + "initialized Quilt (.quilt/)\n");
     }
     const childSteps = planSetup(childRoot);
+    exposed.push(...applyGitignoreChoice(childRoot, childSteps, gitignore, child + "/"));
     applySetupAttributed(childRoot, childSteps);
     for (const s of childSteps) printSetupStep(s, false);
     written.push(...childSteps);
   }
 
   if (dryRun) {
+    printExposureNotice(exposed, null);
     process.stdout.write("\n" + pc.dim("Run `quilt setup` to apply.\n"));
     return;
   }
+
+  printExposureNotice(exposed, null);
 
   process.stdout.write(
     "\n" +
@@ -535,8 +598,10 @@ program
   .command("setup")
   .description("Wire Quilt into this repo's agent orchestrator (.mcp.json + CLAUDE.md + capture hooks)")
   .option("--dry-run", "show what would change without writing")
+  .option("--gitignore", "gitignore the config files this wires in, instead of committing them")
   .action(async (opts) => {
     const dryRun = Boolean(opts.dryRun);
+    const gitignore = Boolean(opts.gitignore);
     // Workspace shape: not a repo, but repos inside. Sessions start HERE (this
     // is where their hooks and instructions load from), so wire here + each
     // child, instead of refusing and sending the user one level down.
@@ -544,7 +609,7 @@ program
     if (!repoRoot(cwd)) {
       const children = childGitRepos(cwd, 50);
       if (children.length > 0) {
-        await workspaceSetup(cwd, children, dryRun);
+        await workspaceSetup(cwd, children, dryRun, gitignore);
         return;
       }
     }
@@ -556,6 +621,13 @@ program
 
     const d = detect(root);
     const steps = planSetup(root);
+    // Which of these files git has never seen. Writing a file doesn't track it,
+    // so this set is the same before and after apply — --dry-run can report it.
+    const stepCount = steps.length;
+    const exposed = applyGitignoreChoice(root, steps, gitignore);
+    if (gitignore && steps.length === stepCount) {
+      process.stdout.write(pc.dim("Nothing to ignore — git already tracks or ignores the wired files.\n"));
+    }
     const willChange = steps.some((s) => s.action !== "skip");
 
     if (d.orchestrator) {
@@ -571,6 +643,7 @@ program
         process.stdout.write(pc.cyan("  would ") + "initialize Quilt (.quilt/)\n");
       }
       for (const s of steps) printSetupStep(s, true);
+      if (exposed.length > 0) printExposureNotice(exposed, repoVisibility(root));
       process.stdout.write(
         "\n" + pc.dim(willChange || initNeeded ? "Run `quilt setup` to apply.\n" : "Already wired — nothing to do.\n"),
       );
@@ -592,8 +665,11 @@ program
           pc.dim("  for prevention.\n") +
           pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
           pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
-          pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
-          pc.dim("  the wiring (.quilt/ stays local and is already ignored).\n") +
+          (gitignore
+            ? pc.dim("  The generated config stays local (gitignored) — every checkout that wants\n") +
+              pc.dim("  the wiring runs `quilt setup` for itself.\n")
+            : pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
+              pc.dim("  the wiring (.quilt/ stays local and is already ignored).\n")) +
           pc.dim("  Run `quilt doctor` to confirm capture is flowing.\n") +
           pc.dim("  Docs: https://github.com/wkoverfield/quilt/blob/main/docs/orchestrators.md\n"),
       );
@@ -613,6 +689,8 @@ program
         "  the server (/mcp shows it). Any agent can still use the CLI to inspect and\n" +
         "  commit its own captured lines with quilt commit --mine.\n",
     );
+
+    if (exposed.length > 0) printExposureNotice(exposed, repoVisibility(root));
 
     // The generated config invokes plain `quilt` — if that doesn't resolve on
     // PATH (local/npx install), hooks and the MCP server would fail silently
