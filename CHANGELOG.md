@@ -6,6 +6,8 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-13
+
 ### Added
 
 - **Provenance review in `quilt ui`.** Expand any changed file to review its
