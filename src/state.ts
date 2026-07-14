@@ -9,6 +9,7 @@ import {
   closeSync,
   statSync,
   rmSync,
+  renameSync,
 } from "node:fs";
 import { join } from "node:path";
 import { QuiltPaths } from "./paths.js";
@@ -35,7 +36,9 @@ function readJson<T>(file: string, fallback: T): T {
 }
 
 function writeJson(file: string, value: unknown): void {
-  writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n");
+  renameSync(tmp, file);
 }
 
 /** Reads and writes everything under .quilt/ for a repo. */
@@ -72,11 +75,21 @@ export class Store {
     return readJson<ActorsFile>(this.paths.actors, { actors: [] }).actors;
   }
   upsertActor(actor: Actor): void {
-    const actors = this.readActors();
-    const idx = actors.findIndex((a) => a.id === actor.id);
-    if (idx >= 0) actors[idx] = actor;
-    else actors.push(actor);
-    writeJson(this.paths.actors, { actors } satisfies ActorsFile);
+    this.withLock(() => {
+      const actors = this.readActors();
+      const idx = actors.findIndex((a) => a.id === actor.id);
+      if (idx >= 0) {
+        const existing = actors[idx]!;
+        actors[idx] = {
+          ...existing,
+          ...actor,
+          createdAt: existing.createdAt,
+          email: actor.email ?? existing.email,
+        };
+      }
+      else actors.push(actor);
+      writeJson(this.paths.actors, { actors } satisfies ActorsFile);
+    });
   }
   findActor(id: string): Actor | null {
     return this.readActors().find((a) => a.id === id) ?? null;

@@ -15,6 +15,7 @@ import {
 } from "./engine.js";
 import { symbolLocator, opKeyer, OWN_KEY_SEP } from "./symbols.js";
 import type { Actor, FileOwnership, OwnershipFile } from "./types.js";
+import { commitMessageWithProvenance, type CommitProvenanceV1 } from "./provenance.js";
 
 export interface SelectedFile {
   path: string;
@@ -343,7 +344,6 @@ export function selectOwned(
       continue;
     }
     if (built.added === 0 && built.removed === 0) {
-      if (built.hasOther) blockedFiles.push(file.path);
       continue;
     }
 
@@ -371,7 +371,6 @@ export function selectOwned(
     });
     totalAdded += built.added;
     totalRemoved += built.removed;
-    if (built.hasOther) blockedFiles.push(file.path);
   }
 
   return {
@@ -405,7 +404,7 @@ export function commitSelection(
   selection: Selection,
   actor: Actor,
   message: string,
-  opts: { dryRun?: boolean; defaultAuthorEmail?: string } = {},
+  opts: { dryRun?: boolean; defaultAuthorEmail?: string; provenance?: CommitProvenanceV1 } = {},
 ): CommitResult {
   if (!selection.patch.trim() && selection.wholeFiles.length === 0) {
     return { committed: false, reason: "no owned changes to commit" };
@@ -481,9 +480,12 @@ export function commitSelection(
       GIT_COMMITTER_EMAIL: email,
     };
     const parentArgs = base ? ["-p", base] : [];
+    const commitMessage = opts.provenance
+      ? commitMessageWithProvenance(message, { ...opts.provenance, tree, parent: base })
+      : message;
     const commitSha = git(
-      ["commit-tree", tree, ...parentArgs, "-m", message],
-      { cwd: repoRoot, env: identityEnv },
+      ["commit-tree", tree, ...parentArgs, "-F", "-"],
+      { cwd: repoRoot, env: identityEnv, input: commitMessage },
     ).stdout.trim();
 
     // Move the branch with a compare-and-swap on the old value. If another actor

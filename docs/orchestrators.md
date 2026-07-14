@@ -6,9 +6,10 @@ code it's about to change, sees the others' in-flight work, and commits only its
 own, so the history stays clean and correctly attributed instead of one agent's
 commit swallowing everyone else's work.
 
-The whole integration is: **`quilt setup` once, and every agent is captured and
-protected by the hooks with zero ceremony.** The shared MCP server adds the
-optional claim tools on top, with each agent naming itself per call.
+The whole integration is: **`quilt setup` once, and every supported agent is
+captured by the hooks with zero ceremony.** Claude Code hooks also enforce
+claims. Codex hooks are capture-only, and the shared MCP server adds claim-aware
+prevention, with each agent naming itself per call.
 
 ## Quick start: `quilt setup`
 
@@ -201,26 +202,27 @@ Run `quilt init` once in the repo first.
 
 ## 2. Tell your agents to coordinate
 
-Drop this into `CLAUDE.md` (or each subagent's instructions). The framing
-matters: the hooks protect agents with zero ceremony and zero approvals, and
-the MCP claim tools are the optional prevention layer on top. An agent that
-finds no quilt tools in its MCP list is still fully protected.
+Drop this into `CLAUDE.md` (or each subagent's instructions). Hooks capture
+edits with zero ceremony. Claude Code hooks also enforce claims; Codex hooks do
+not. The MCP claim tools provide prevention across supported clients.
 
 ```md
-You share this checkout with other agents. Quilt protects your work
+You share this checkout with other agents. Quilt captures who changed what
 automatically:
 
-- Your edits are captured and protected by the quilt hooks: nothing to
-  approve, nothing to call. Identity is automatic (each session gets its own
-  id), and every line you edit is attributed to you as you write it.
+- Your edits are captured by the quilt hooks: nothing to call. Identity is
+  automatic (each session gets its own id), and every line you edit is
+  attributed to you as you write it. Claude Code hooks also deny edits into
+  claimed code. Codex hooks are capture-only, so use claim-aware MCP tools when
+  you need prevention there.
 - To commit only your lines, run `quilt commit --mine -m "<message>"` from
   the shell. It works with or without the MCP server, and it leaves everyone
   else's uncommitted work untouched. `quilt status` shows who owns what.
 - The quilt MCP tools (claim, commit_mine, get_status, ...) are an optional
   prevention layer, available when the quilt MCP server is connected and
   approved in your client. If the quilt tools are NOT in your MCP list you
-  are still protected: capture and attribution run in the hooks. Just commit
-  with the CLI.
+  still keep capture and attribution through the hooks. Just commit with the
+  CLI. Codex still needs MCP tools for claim enforcement.
 
 Optional, when the quilt MCP tools are connected:
 

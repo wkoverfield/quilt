@@ -16,7 +16,7 @@ lives in a `.quilt/` sidecar you can delete without touching your repo.
 
 ```bash
 npm install -g @quilt-dev/cli
-quilt setup     # capture hooks wired, protection live, ~5 seconds
+quilt setup     # capture hooks wired; claim enforcement via Claude hooks or MCP
 ```
 
 ## The problem
@@ -41,8 +41,9 @@ coordinated handoff instead of a silent loss.
   when they share a hunk with another actor's.
 - **Symbol-level claims.** Reserve `utils.js#formatPrice`, not the whole file.
   Ten languages via tree-sitter; whole-file claims for the rest.
-- **Collision prevention.** A write into code another agent has claimed is
-  denied, with the holder's stated intent, before any bytes change.
+- **Collision prevention.** Claude Code hooks and Quilt's MCP edit tools deny a
+  write into code another agent has claimed, with the holder's stated intent,
+  before any bytes change. Codex hooks currently capture but do not deny.
 - **Push-awareness.** Claim a symbol that depends on a function another actor
   is changing, and Quilt warns you at claim time.
 - **Detect and preserve.** If one actor overwrites another's uncommitted

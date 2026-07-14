@@ -6,6 +6,32 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-13
+
+### Added
+
+- **Durable Git provenance.** Every `commit --mine` embeds a versioned
+  provenance record directly in the commit message. The record travels through
+  ordinary pushes and clones and includes the actor, session, committed files,
+  hunk ranges, capture mode, parent, and committed tree. Prompt correlation
+  remains in the local review UI and is not published into Git history.
+- **`quilt provenance [commit]`.** Inspect the readable summary or use `--json`
+  for the complete machine-readable record. This works in a fresh clone without
+  local `.quilt/` state.
+
+### Fixed
+
+- Concurrent actor registration is locked and JSON state updates are atomic, so
+  parallel starts no longer drop actors or their configured author emails.
+- Telemetry disables PostHog person profiles. A forced telemetry run before a
+  stored decision now uses an ephemeral random id instead of grouping unrelated
+  installations under `undecided`.
+- Generated coordination instructions now state the enforcement boundary
+  accurately: Claude Code hooks capture and enforce claims, while Codex hooks
+  are capture-only and use MCP tools for prevention.
+- CI now installs from the lockfile and checks that npm, lockfile, and MCP
+  release versions agree.
+
 ## [0.5.1] - 2026-07-13
 
 ### Added

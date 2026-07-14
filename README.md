@@ -20,7 +20,7 @@ a `.quilt/` sidecar you can delete without touching your repo.
 
 ```bash
 npm install -g @quilt-dev/cli
-quilt setup     # capture hooks wired, protection live (MCP tools optional, on top)
+quilt setup     # capture hooks wired; claim enforcement via Claude hooks or MCP
 ```
 
 ## The problem
@@ -148,7 +148,12 @@ Then each agent commits only its own lines:
 quilt status                     # who owns what
 quilt preview --mine             # exact patch that would be committed
 quilt commit --mine -m "fix auth redirect"
+quilt provenance HEAD            # actor, session, files, hunks, tree
 ```
+
+Quilt writes that provenance into the Git commit itself, so it survives normal
+pushes and fresh clones. Prompt correlation stays local in `quilt ui`; it is not
+published into Git history.
 
 In a shared shell, make the committer explicit (`quilt --as auth-agent commit
 --mine ...`). Quilt refuses a checkout-global session identity when the dirty

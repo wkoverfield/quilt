@@ -179,6 +179,9 @@ test("two actors editing DIFFERENT symbols in one file: parallel, no contention,
     assert.doesNotMatch(quilt(dir, ["preview", "--mine"], "A").stdout, /return 20/);
     assert.match(quilt(dir, ["preview", "--mine"], "B").stdout, /return 20/);
     assert.doesNotMatch(quilt(dir, ["preview", "--mine"], "B").stdout, /return 10/);
+    const aPreview = JSON.parse(quilt(dir, ["preview", "--mine", "--json"], "A").stdout);
+    assert.equal(aPreview.completeForActor, true, "foreign adjacent work is not falsely reported as withheld");
+    assert.deepEqual(aPreview.blockedFiles, []);
 
     // Each commits its own symbol cleanly; the other's change stays in the tree.
     assert.equal(quilt(dir, ["commit", "--mine", "-m", "A: foo"], "A").status, 0);

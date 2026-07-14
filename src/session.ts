@@ -18,9 +18,13 @@ export function activeContext(store: Store): ActiveContext {
   const envActor = process.env.QUILT_ACTOR;
   const envSession = process.env.QUILT_SESSION;
   const sessionId = envSession ?? store.readCurrentSessionId();
-  const session = sessionId ? store.readSession(sessionId) : null;
+  const foundSession = sessionId ? store.readSession(sessionId) : null;
 
-  const actorId = envActor ?? session?.actorId ?? null;
+  const actorId = envActor ?? foundSession?.actorId ?? null;
+  // An explicit actor must never inherit another actor's checkout-global
+  // session. Besides confusing whoami, that would attach the wrong session and
+  // prompt lineage to a durable provenance record.
+  const session = envActor && foundSession?.actorId !== envActor ? null : foundSession;
   const actor = actorId ? store.findActor(actorId) : null;
   const source = envActor
     ? "actor-env"

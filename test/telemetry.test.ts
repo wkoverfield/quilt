@@ -73,12 +73,24 @@ test("event payload carries counts and environment facts, never content", () => 
     assert.equal(payload.event, "quilt_claim");
     assert.equal(payload.distinct_id, readTelemetryConfig()!.anonymousId);
     assert.equal(payload.properties.granted, 2);
+    assert.equal(payload.properties.$process_person_profile, false);
     assert.equal(typeof payload.properties.quilt_version, "string");
     assert.equal(payload.properties.platform, process.platform);
     // Nothing path-like or repo-like sneaks into the serialized payload.
     const text = JSON.stringify(payload);
     assert.ok(!text.includes(process.cwd()));
     assert.ok(!text.includes("/Users/") && !text.includes("/home/"));
+  });
+});
+
+test("forced telemetry before a stored decision uses one process-scoped anonymous identity", () => {
+  const dir = tempDir();
+  withEnv({ QUILT_TELEMETRY_DIR: dir, QUILT_TELEMETRY: "1" }, () => {
+    const first = buildEventPayload("first") as any;
+    const second = buildEventPayload("second") as any;
+    assert.notEqual(first.distinct_id, "undecided");
+    assert.notEqual(second.distinct_id, "undecided");
+    assert.equal(first.distinct_id, second.distinct_id);
   });
 });
 

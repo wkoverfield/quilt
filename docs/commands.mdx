@@ -49,8 +49,9 @@ A global `--as <id>` sets your actor for any command (the per-command form of
 
 | Command | Purpose |
 | --- | --- |
-| `quilt commit --mine [paths...] -m <msg> [--dry-run]` | Commit only your owned patch. Path args are a hard allow-list. Auto-releases your claims on the committed files. |
+| `quilt commit --mine [paths...] -m <msg> [--dry-run]` | Commit only your owned patch. Path args are a hard allow-list. Auto-releases claims and embeds durable Git provenance. |
 | `quilt preview --mine [paths...] [--json]` | Print the exact patch `commit --mine` would create. |
+| `quilt provenance [commit] [--json]` | Read the versioned Quilt provenance embedded in a commit. Works in a fresh clone without local Quilt state. |
 | `quilt undo <actor> [--dry-run]` | Back out one actor's uncommitted changes, leaving everyone else's untouched. |
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor (both versions are preserved on detection). |
 

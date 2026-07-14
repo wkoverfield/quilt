@@ -1,6 +1,6 @@
 {
   "name": "@quilt-dev/cli",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "mcpName": "io.github.wkoverfield/quilt",
   "description": "Actor-owned patches for Git. Same repo. Many agents. Clean commits.",
   "type": "module",
@@ -31,9 +31,10 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "test": "npm run build && QUILT_CODEX_DIR=$PWD/.no-codex-in-tests QUILT_NO_UPDATE_CHECK=1 node --import tsx --test test/*.test.ts",
+    "check:release": "node scripts/check-release-version.mjs",
+    "test": "npm run check:release && npm run build && QUILT_CODEX_DIR=$PWD/.no-codex-in-tests QUILT_NO_UPDATE_CHECK=1 node --import tsx --test test/*.test.ts",
     "bench": "npm run build && node --import tsx bench/run.ts",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run check:release && npm run build"
   },
   "keywords": [
     "git",
