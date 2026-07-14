@@ -33,7 +33,7 @@ import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doc
 import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, parseCodexHookInput, codexActorId, runCodexHookPre, runCodexHookPost, type CodexHookInput } from "./hooks.js";
 import { detect, planSetup, applySetup, mergeHookSettings, appendCoordination, type SetupStep } from "./onboard.js";
-import { recordAuthorship, capturedBySelf, readAuthorship, settleCommittedAuthorship } from "./authorship.js";
+import { adoptClaimHolder, recordAuthorship, capturedBySelf, readAuthorship, settleCommittedAuthorship } from "./authorship.js";
 import type { ActiveContext } from "./session.js";
 import { repoRelative } from "./paths.js";
 import { VERSION } from "./version.js";
@@ -1621,9 +1621,11 @@ function hookStoreFor(filePath: string | null): Store | null {
  */
 function runCodexHook(kind: "pre" | "post", codex: CodexHookInput): void {
   const base = codex.cwd ?? process.cwd();
-  const id = process.env.QUILT_ACTOR || (codex.sessionId ? codexActorId(codex.sessionId) : null);
-  if (!id) return;
-  const groups = new Map<string, { store: Store; files: Array<{ rel: string; moveRel?: string }> }>();
+  const explicit = process.env.QUILT_ACTOR;
+  const derived = codex.sessionId ? codexActorId(codex.sessionId) : null;
+  const caller = explicit || derived;
+  if (!caller) return;
+  const groups = new Map<string, { store: Store; actor: string; files: Array<{ rel: string; moveRel?: string }> }>();
   const resolveIn = (p: string): { store: Store; rel: string } | null => {
     const abs = resolve(base, p);
     const store = hookStoreFor(abs);
@@ -1632,8 +1634,15 @@ function runCodexHook(kind: "pre" | "post", codex: CodexHookInput): void {
     return rel ? { store, rel } : null;
   };
   const addFile = (entry: { rel: string; moveRel?: string }, store: Store) => {
-    let g = groups.get(store.paths.repoRoot);
-    if (!g) groups.set(store.paths.repoRoot, (g = { store, files: [] }));
+    // Codex's patch envelope names files but does not expose a trustworthy
+    // per-hunk deny surface yet. Whole-file and directory claims are still an
+    // unambiguous identity signal: bind an auto-derived codex-* caller to the
+    // sole live holder, just as Claude hooks bind native edits to MCP claims.
+    // Never adopt an explicit QUILT_ACTOR; an explicit identity always wins.
+    const actor = explicit ? caller : adoptClaimHolder(store, caller, entry.rel, []);
+    const key = `${store.paths.repoRoot}\0${actor}`;
+    let g = groups.get(key);
+    if (!g) groups.set(key, (g = { store, actor, files: [] }));
     if (!g.files.some((f) => f.rel === entry.rel)) g.files.push(entry);
   };
   for (const f of codex.files) {
@@ -1652,11 +1661,11 @@ function runCodexHook(kind: "pre" | "post", codex: CodexHookInput): void {
     if (dest) addFile({ rel: dest.rel }, dest.store);
   }
   for (const g of groups.values()) {
-    if (!g.store.findActor(id)) {
-      g.store.upsertActor({ id, type: "agent", displayName: id, createdAt: nowIso() });
+    if (!g.store.findActor(g.actor)) {
+      g.store.upsertActor({ id: g.actor, type: "agent", displayName: g.actor, createdAt: nowIso() });
     }
-    if (kind === "pre") runCodexHookPre(g.store, id, g.files, codex.invocationId);
-    else runCodexHookPost(g.store, id, g.files, codex.invocationId);
+    if (kind === "pre") runCodexHookPre(g.store, g.actor, g.files, codex.invocationId);
+    else runCodexHookPost(g.store, g.actor, g.files, codex.invocationId);
   }
 }
 

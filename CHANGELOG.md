@@ -6,6 +6,12 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex native `apply_patch` capture adopts the sole live whole-file or
+  directory claim holder, keeping a named builder's claims, authorship,
+  preview, and commit identity aligned. An explicit `QUILT_ACTOR` still wins.
+
 ## [0.5.0] - 2026-07-13
 
 ### Added
