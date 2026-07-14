@@ -159,6 +159,104 @@ test("a multi-file apply_patch round-trip captures per-file authorship under the
   }
 });
 
+test("Codex native capture adopts the sole live whole-file claim holder", () => {
+  const dir = repo();
+  try {
+    writeFileSync(join(dir, "x.js"), "export const value = 1;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+    spawnSync("node", [CLI, "init"], { cwd: dir, encoding: "utf8" });
+    let r = spawnSync(
+      "node",
+      [CLI, "start", "--actor", "interaction-audit", "--type", "agent", "--email", "builder@example.com"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    assert.equal(r.status, 0, r.stderr);
+    r = spawnSync("node", [CLI, "claim", "x.js", "--intent", "interaction audit"], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    assert.equal(r.status, 0, r.stderr);
+
+    const payload = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      session_id: "019f4e1f-0000-0000-0000-000000000000",
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: {
+        command:
+          "*** Begin Patch\n*** Update File: x.js\n@@\n-export const value = 1;\n+export const value = 2;\n*** End Patch\n",
+      },
+    });
+    const env = { ...process.env, NO_COLOR: "1" };
+    r = spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", env, input: payload });
+    assert.equal(r.status, 0, r.stderr);
+    writeFileSync(join(dir, "x.js"), "export const value = 2;\n");
+    r = spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", env, input: payload });
+    assert.equal(r.status, 0, r.stderr);
+
+    const events = readFileSync(join(dir, ".quilt", "authorship.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.ok(events.length > 0);
+    assert.ok(events.every((event) => event.actor === "interaction-audit"));
+
+    const actors = JSON.parse(readFileSync(join(dir, ".quilt", "actors.json"), "utf8")).actors;
+    assert.ok(
+      actors.some(
+        (actor: { id: string; email?: string }) =>
+          actor.id === "interaction-audit" && actor.email === "builder@example.com",
+      ),
+    );
+    assert.ok(!actors.some((actor: { id: string }) => actor.id === "codex-019f4e1f"));
+
+    r = spawnSync("node", [CLI, "preview", "--mine"], { cwd: dir, encoding: "utf8", env });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /value = 2/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an explicit QUILT_ACTOR still wins over a Codex claim holder", () => {
+  const dir = repo();
+  try {
+    writeFileSync(join(dir, "x.js"), "export const value = 1;\n");
+    spawnSync("git", ["add", "-A"], { cwd: dir });
+    spawnSync("git", ["commit", "-qm", "init"], { cwd: dir });
+    spawnSync("node", [CLI, "init"], { cwd: dir, encoding: "utf8" });
+    let r = spawnSync("node", [CLI, "start", "--actor", "claim-holder", "--type", "agent"], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    assert.equal(r.status, 0, r.stderr);
+    r = spawnSync("node", [CLI, "claim", "x.js"], { cwd: dir, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+
+    const payload = JSON.stringify({
+      session_id: "019f4e1f-0000-0000-0000-000000000000",
+      cwd: dir,
+      tool_name: "apply_patch",
+      tool_input: { command: "*** Begin Patch\n*** Update File: x.js\n*** End Patch\n" },
+    });
+    const env = { ...process.env, NO_COLOR: "1", QUILT_ACTOR: "explicit-codex" };
+    r = spawnSync("node", [CLI, "hook-pre"], { cwd: dir, encoding: "utf8", env, input: payload });
+    assert.equal(r.status, 0, r.stderr);
+    writeFileSync(join(dir, "x.js"), "export const value = 2;\n");
+    r = spawnSync("node", [CLI, "hook-post"], { cwd: dir, encoding: "utf8", env, input: payload });
+    assert.equal(r.status, 0, r.stderr);
+
+    const events = readFileSync(join(dir, ".quilt", "authorship.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.ok(events.every((event) => event.actor === "explicit-codex"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a FAILED apply_patch (disk unchanged) records nothing", () => {
   const dir = repo();
   try {

@@ -42,7 +42,10 @@ Quilt captures who wrote which lines through either path, and you can use both:
   included. One Codex reality to know: Codex skips newly added hooks until
   you approve them once in an interactive session (it prompts); until then
   Codex edits are not captured, and `quilt doctor` says so. Capture only for
-  now: prevention (claim denial) on Codex is a later effort.
+  now: prevention (claim denial) on Codex is a later effort. When an unnamed
+  Codex session edits a file or directory held by exactly one live actor,
+  capture adopts that claim holder's identity. This keeps a named builder's
+  claims, authorship, preview, and commit identity continuous.
 - **MCP (explicit).** The `quilt_edit` / `quilt_write` tools, and the
   `claim` → `commit_mine` loop below, work anywhere an agent can reach an MCP
   server, Codex, Cursor, Aider, your own harness, including runtimes that
