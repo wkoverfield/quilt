@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { dirname, join, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
-import { changedPaths, repoRoot, shortHead, headSha } from "./git.js";
+import { changedPaths, repoRoot, shortHead, headSha, pathIsTracked } from "./git.js";
 import { activeContext } from "./session.js";
 import { reconcile, buildModel } from "./engine.js";
 import { initSymbols } from "./symbols.js";
@@ -261,8 +261,8 @@ function printExposureNotice(labels: string[], visibility: RepoVisibility): void
   if (labels.length === 0) return;
   const lead =
     visibility === "public"
-      ? pc.yellow("⚠ ") + "This repo is PUBLIC. These files are wired in but not tracked by git yet:\n"
-      : pc.cyan("→ ") + "These files are wired in but not tracked by git yet:\n";
+      ? pc.yellow("⚠ ") + "This repo is PUBLIC. These Quilt setup files are not tracked by git yet:\n"
+      : pc.cyan("→ ") + "These Quilt setup files are not tracked by git yet:\n";
   process.stdout.write(
     "\n" +
       lead +
@@ -273,18 +273,39 @@ function printExposureNotice(labels: string[], visibility: RepoVisibility): void
   );
 }
 
+function printTrackedConfigNotice(labels: string[], dryRun: boolean): void {
+  if (labels.length === 0) return;
+  const state = dryRun ? "would update" : "updated";
+  process.stdout.write(
+    "\n" +
+      pc.yellow("⚠ ") +
+      `Git cannot ignore tracked files. Setup ${state}:\n` +
+      labels.map((l) => "    " + l + "\n").join("") +
+      pc.dim("  These files remain part of the repository. Review their changes with git diff.\n"),
+  );
+}
+
 /**
  * The exposure/opt-out decision for ONE repo, shared by the single-repo and
  * workspace paths: fold in a .gitignore step when the user asked for one, and
  * otherwise report what git would newly pick up. Returns the labels to warn
  * about (empty when --gitignore handled them), prefixed for workspace output.
  */
-function applyGitignoreChoice(root: string, steps: SetupStep[], gitignore: boolean, prefix = ""): string[] {
+interface GitignoreChoice {
+  exposed: string[];
+  tracked: string[];
+}
+
+function applyGitignoreChoice(root: string, steps: SetupStep[], gitignore: boolean, prefix = ""): GitignoreChoice {
   const exposed = newToGit(root, steps);
-  if (!gitignore) return exposed.map((s) => prefix + s.file);
+  if (!gitignore) return { exposed: exposed.map((s) => prefix + s.file), tracked: [] };
+  const rootPrefix = resolve(root) + sep;
+  const tracked = steps
+    .filter((s) => s.content !== undefined && resolve(s.path).startsWith(rootPrefix) && pathIsTracked(root, s.file))
+    .map((s) => prefix + s.file);
   const step = planGitignore(root, exposed);
   if (step) steps.push(step);
-  return [];
+  return { exposed: [], tracked };
 }
 
 /** Printed when setup just WROTE the Codex hooks: Codex skips new hooks until
@@ -364,6 +385,7 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
   const written: SetupStep[] = [];
 
   const exposed: string[] = [];
+  const tracked: string[] = [];
 
   for (const child of children) {
     const childRoot = join(wsRoot, child);
@@ -372,7 +394,9 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
     if (dryRun) {
       if (initNeeded) process.stdout.write(pc.cyan("  would ") + "initialize Quilt (.quilt/)\n");
       const planned = planSetup(childRoot);
-      exposed.push(...applyGitignoreChoice(childRoot, planned, gitignore, child + "/"));
+      const choice = applyGitignoreChoice(childRoot, planned, gitignore, child + "/");
+      exposed.push(...choice.exposed);
+      tracked.push(...choice.tracked);
       for (const s of planned) printSetupStep(s, true);
       continue;
     }
@@ -381,7 +405,9 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
       process.stdout.write(pc.green("  ✓ ") + "initialized Quilt (.quilt/)\n");
     }
     const childSteps = planSetup(childRoot);
-    exposed.push(...applyGitignoreChoice(childRoot, childSteps, gitignore, child + "/"));
+    const choice = applyGitignoreChoice(childRoot, childSteps, gitignore, child + "/");
+    exposed.push(...choice.exposed);
+    tracked.push(...choice.tracked);
     applySetupAttributed(childRoot, childSteps);
     for (const s of childSteps) printSetupStep(s, false);
     written.push(...childSteps);
@@ -389,11 +415,13 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
 
   if (dryRun) {
     printExposureNotice(exposed, null);
+    printTrackedConfigNotice(tracked, true);
     process.stdout.write("\n" + pc.dim("Run `quilt setup` to apply.\n"));
     return;
   }
 
   printExposureNotice(exposed, null);
+  printTrackedConfigNotice(tracked, false);
 
   process.stdout.write(
     "\n" +
@@ -598,7 +626,7 @@ program
   .command("setup")
   .description("Wire Quilt into this repo's agent orchestrator (.mcp.json + CLAUDE.md + capture hooks)")
   .option("--dry-run", "show what would change without writing")
-  .option("--gitignore", "gitignore the config files this wires in, instead of committing them")
+  .option("--gitignore", "gitignore newly untracked config files; existing tracked config stays tracked")
   .action(async (opts) => {
     const dryRun = Boolean(opts.dryRun);
     const gitignore = Boolean(opts.gitignore);
@@ -624,8 +652,9 @@ program
     // Which of these files git has never seen. Writing a file doesn't track it,
     // so this set is the same before and after apply — --dry-run can report it.
     const stepCount = steps.length;
-    const exposed = applyGitignoreChoice(root, steps, gitignore);
-    if (gitignore && steps.length === stepCount) {
+    const gitChoice = applyGitignoreChoice(root, steps, gitignore);
+    const exposed = gitChoice.exposed;
+    if (gitignore && steps.length === stepCount && gitChoice.tracked.length === 0) {
       process.stdout.write(pc.dim("Nothing to ignore — git already tracks or ignores the wired files.\n"));
     }
     const willChange = steps.some((s) => s.action !== "skip");
@@ -644,6 +673,7 @@ program
       }
       for (const s of steps) printSetupStep(s, true);
       if (exposed.length > 0) printExposureNotice(exposed, repoVisibility(root));
+      printTrackedConfigNotice(gitChoice.tracked, true);
       process.stdout.write(
         "\n" + pc.dim(willChange || initNeeded ? "Run `quilt setup` to apply.\n" : "Already wired — nothing to do.\n"),
       );
@@ -653,6 +683,7 @@ program
     const written = applySetupAttributed(root, steps);
     if (initNeeded) process.stdout.write(pc.green("✓ ") + "initialized Quilt (.quilt/)\n");
     for (const s of steps) printSetupStep(s, false);
+    printTrackedConfigNotice(gitChoice.tracked, false);
 
     if (written.length === 0 && !initNeeded) {
       process.stdout.write("\n" + pc.green("✓ ") + "Already wired up. Your fleet is ready.\n");
@@ -666,8 +697,8 @@ program
           pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
           pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
           (gitignore
-            ? pc.dim("  The generated config stays local (gitignored) — every checkout that wants\n") +
-              pc.dim("  the wiring runs `quilt setup` for itself.\n")
+            ? pc.dim("  --gitignore keeps newly untracked config out of git; existing tracked\n") +
+              pc.dim("  config stays tracked. Each checkout runs setup for local-only wiring.\n")
             : pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
               pc.dim("  the wiring (.quilt/ stays local and is already ignored).\n")) +
           pc.dim("  Run `quilt doctor` to confirm capture is flowing.\n") +

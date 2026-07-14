@@ -8,11 +8,12 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
-- **`quilt setup --gitignore`.** Keeps the config Quilt wires in (`.mcp.json`,
-  `CLAUDE.md`, `.claude/settings.json`) out of git instead of committing it.
-  Entries are added per file, so ignoring `.claude/settings.json` never swallows
-  the rest of a `.claude/` directory. The default is unchanged: commit the wiring
-  so every checkout and teammate shares it.
+- **`quilt setup --gitignore`.** Keeps newly untracked config files Quilt wires
+  in out of git. Entries are added per file, so ignoring
+  `.claude/settings.json` never swallows the rest of a `.claude/` directory.
+  Existing tracked config stays tracked, and setup names any tracked files it
+  changes because gitignore cannot hide them. The default is unchanged: commit
+  the wiring so every checkout and teammate shares it.
 
 ### Changed
 

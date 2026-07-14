@@ -482,6 +482,8 @@ export interface SetupStep {
   detail: string;
   content?: string; // present when action !== skip
   path: string;
+  /** False when setup deliberately left an existing file untouched. */
+  wired?: boolean;
 }
 
 /** Compute the setup plan for a repo without writing anything. */
@@ -497,6 +499,7 @@ export function planSetup(root: string): SetupStep[] {
       action: "skip",
       detail: `left untouched (${mcp.error}) — add the "quilt" server by hand`,
       path: d.mcpJsonPath,
+      wired: false,
     });
   } else if (!mcp.changed) {
     steps.push({ file: ".mcp.json", action: "skip", detail: "quilt server already present", path: d.mcpJsonPath });
@@ -536,6 +539,7 @@ export function planSetup(root: string): SetupStep[] {
       action: "skip",
       detail: `left untouched (${hooks.error}) — add the quilt hooks by hand`,
       path: d.settingsPath,
+      wired: false,
     });
   } else if (!hooks.changed) {
     steps.push({ file: ".claude/settings.json", action: "skip", detail: "capture hooks already present", path: d.settingsPath });
@@ -560,6 +564,7 @@ export function planSetup(root: string): SetupStep[] {
         action: "skip",
         detail: `left untouched (${cursor.error}) — add the "quilt" server by hand`,
         path: d.cursorMcpPath,
+        wired: false,
       });
     } else if (!cursor.changed) {
       steps.push({ file: ".cursor/mcp.json", action: "skip", detail: "quilt server already present", path: d.cursorMcpPath });
@@ -604,6 +609,7 @@ export function planSetup(root: string): SetupStep[] {
         action: "skip",
         detail: `left untouched (${codex.error}) — add the quilt hooks by hand`,
         path: codexHooksPath(),
+        wired: false,
       });
     } else if (!codex.changed) {
       steps.push({ file: "~/.codex/hooks.json", action: "skip", detail: "capture hooks already present", path: codexHooksPath() });
@@ -650,6 +656,9 @@ export function applySetup(steps: SetupStep[]): SetupStep[] {
 export function newToGit(root: string, steps: SetupStep[]): SetupStep[] {
   const rootPrefix = resolve(root) + sep;
   return steps.filter((s) => {
+    // A malformed config can produce a skip step even though Quilt is not
+    // present in that file. Do not call it wired or hide it from git.
+    if (s.wired === false) return false;
     // Files this run writes, AND files a previous run already wired (a "skip"
     // step whose file is sitting on disk). The second case is the one that
     // matters: a user who reads the warning and then runs `setup --gitignore`
@@ -691,13 +700,15 @@ export const GITIGNORE_HEADER = "# Local agent config, wired by `quilt setup` (d
 
 /**
  * Append `entries` to a .gitignore, additively and idempotently. Entries already
- * present as an exact line are left alone, and an entry list that is fully
- * covered produces no change at all, so re-running setup never grows the file.
+ * present as an exact line are normally left alone. Callers that already proved
+ * a path is not effectively ignored can append the rule at EOF, after any later
+ * negation. Re-running setup still stays idempotent because git then reports the
+ * path ignored before this function is called again.
  */
-export function mergeGitignore(existing: string | null, entries: string[]): MergeResult {
+export function mergeGitignore(existing: string | null, entries: string[], appendAtEnd = false): MergeResult {
   const base = existing ?? "";
   const lines = new Set(base.split("\n").map((l) => l.trim()));
-  const missing = entries.filter((e) => !lines.has(e));
+  const missing = appendAtEnd ? [...new Set(entries)] : entries.filter((e) => !lines.has(e));
   if (missing.length === 0) return { content: base, changed: false };
   const sep = base === "" ? "" : base.endsWith("\n") ? "\n" : "\n\n";
   return { content: base + sep + GITIGNORE_HEADER + "\n" + missing.join("\n") + "\n", changed: true };
@@ -715,7 +726,9 @@ export function planGitignore(root: string, exposed: SetupStep[]): SetupStep | n
   const path = join(root, ".gitignore");
   const existing = existsSync(path) ? safeRead(path) : null;
   const entries = exposed.map((s) => "/" + s.file);
-  const merged = mergeGitignore(existing, entries);
+  // `exposed` came from git check-ignore and is not effectively ignored. Append
+  // at EOF even if an identical earlier rule is cancelled by a later negation.
+  const merged = mergeGitignore(existing, entries, true);
   if (!merged.changed) {
     return { file: ".gitignore", action: "skip", detail: "already ignores the wired files", path };
   }

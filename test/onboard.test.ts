@@ -419,6 +419,28 @@ test("newToGit reports only files git has never seen", () => {
   }
 });
 
+test("newToGit excludes malformed config that setup leaves untouched", () => {
+  const dir = tmpRepo();
+  try {
+    withNoGlobalGit(() => {
+      writeFileSync(join(dir, ".mcp.json"), "not json\n");
+      mkdirSync(join(dir, ".claude"));
+      writeFileSync(join(dir, ".claude", "settings.json"), "[]\n");
+
+      const plan = planSetup(dir);
+      assert.equal(plan.find((s) => s.file === ".mcp.json")?.wired, false);
+      assert.equal(plan.find((s) => s.file === ".claude/settings.json")?.wired, false);
+
+      const files = newToGit(dir, plan).map((s) => s.file);
+      assert.ok(!files.includes(".mcp.json"), "malformed MCP config is not called wired");
+      assert.ok(!files.includes(".claude/settings.json"), "malformed hook config is not called wired");
+      assert.ok(files.includes("CLAUDE.md"), "files setup can safely wire are still reported");
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("quilt setup warns that the config it wrote is new to git, and names the escape hatch", () => {
   const dir = tmpRepo();
   try {
@@ -427,6 +449,46 @@ test("quilt setup warns that the config it wrote is new to git, and names the es
     assert.match(r.stdout, /not tracked by git yet/);
     assert.match(r.stdout, /\.mcp\.json/);
     assert.match(r.stdout, /quilt setup --gitignore/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup --dry-run uses a tense-neutral exposure notice", () => {
+  const dir = tmpRepo();
+  try {
+    const r = spawnSync("node", [CLI, "setup", "--dry-run"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Quilt setup files are not tracked by git yet/);
+    assert.ok(!/would be wired in|are wired in/.test(r.stdout), "notice is accurate before and after wiring");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup --dry-run stays accurate after untracked config is already wired", () => {
+  const dir = tmpRepo();
+  try {
+    const wire = spawnSync("node", [CLI, "setup"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(wire.status, 0, wire.stderr);
+
+    const r = spawnSync("node", [CLI, "setup", "--dry-run"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Quilt setup files are not tracked by git yet/);
+    assert.match(r.stdout, /Already wired/);
+    assert.ok(!/would be wired in/.test(r.stdout), "already-wired files are not described as future writes");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -447,7 +509,8 @@ test("quilt setup --gitignore keeps the wired config out of git, and stops advis
     });
     assert.equal(r.status, 0, r.stderr);
 
-    const ignore = readFileSync(join(dir, ".gitignore"), "utf8");
+    const ignorePath = join(dir, ".gitignore");
+    const ignore = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
     for (const entry of ["/.mcp.json", "/CLAUDE.md", "/.claude/settings.json"]) {
       assert.ok(ignore.includes(entry), `${entry} ignored`);
     }
@@ -477,6 +540,72 @@ test("quilt setup --gitignore keeps the wired config out of git, and stops advis
     assert.equal(again.status, 0, again.stderr);
     assert.match(again.stdout, /Nothing to ignore/);
     assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), ignore, ".gitignore unchanged on re-run");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup --gitignore appends after a later negation", () => {
+  const dir = tmpRepo();
+  try {
+    writeFileSync(join(dir, ".gitignore"), "/.mcp.json\n!/.mcp.json\n");
+    const r = spawnSync("node", [CLI, "setup", "--gitignore"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(r.status, 0, r.stderr);
+
+    const ignored = spawnSync("git", ["check-ignore", "-q", "--", ".mcp.json"], {
+      cwd: dir,
+      env: { ...process.env, ...NO_GLOBAL_GIT },
+    });
+    assert.equal(ignored.status, 0, "the final rule effectively ignores .mcp.json");
+
+    const rules = readFileSync(join(dir, ".gitignore"), "utf8");
+    assert.ok(rules.lastIndexOf("/.mcp.json") > rules.lastIndexOf("!/.mcp.json"), "ignore rule lands after its negation");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("quilt setup --gitignore names tracked config changes that git cannot hide", () => {
+  const dir = tmpRepo();
+  try {
+    writeFileSync(join(dir, "CLAUDE.md"), "# shared rules\n");
+    writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: {} }));
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(join(dir, ".claude", "settings.json"), "{}\n");
+    spawnSync("git", ["add", "CLAUDE.md", ".mcp.json", ".claude/settings.json"], {
+      cwd: dir,
+      env: { ...process.env, ...NO_GLOBAL_GIT },
+    });
+
+    const r = spawnSync("node", [CLI, "setup", "--gitignore"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...CLI_ENV },
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Git cannot ignore tracked files/);
+    assert.match(r.stdout, /CLAUDE\.md/);
+    assert.match(r.stdout, /\.mcp\.json/);
+    assert.match(r.stdout, /\.claude\/settings\.json/);
+    assert.ok(!/generated config stays local/.test(r.stdout), "does not promise tracked changes are local");
+
+    const changed = spawnSync("git", ["diff", "--name-only"], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, ...NO_GLOBAL_GIT },
+    }).stdout;
+    assert.match(changed, /CLAUDE\.md/);
+    assert.match(changed, /\.mcp\.json/);
+    assert.match(changed, /\.claude\/settings\.json/);
+
+    const ignorePath = join(dir, ".gitignore");
+    const ignore = existsSync(ignorePath) ? readFileSync(ignorePath, "utf8") : "";
+    assert.ok(!ignore.includes("/.mcp.json"), "tracked config is not added to gitignore");
+    assert.ok(!ignore.includes("/CLAUDE.md"), "tracked instructions are not added to gitignore");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
