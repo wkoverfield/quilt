@@ -10,8 +10,9 @@ direction. They use a cool paper field, white raised surfaces, Gambetta display
 serif, Switzer body text, and IBM Plex Mono for agent and terminal data. The
 four agent colors form the Quilt mark, authorship chips, diff states, and docs
 reading path. The darker color cuts are used for text on light surfaces, with
-the original colors kept for fills. The worldview page retains the earlier
-Workshop treatment until it receives its own redesign pass.
+the original colors kept for fills. The Quilt mark always reads clockwise from
+the top left as amber, green, magenta, then blue. The worldview page retains the
+earlier Workshop treatment until it receives its own redesign pass.
 
 No build step, no framework, no dependencies; every page is self-contained
 HTML with inline CSS/JS. Fonts load from Fontshare (Gambetta, Switzer) and
