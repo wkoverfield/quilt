@@ -15,6 +15,7 @@ import { VERSION } from "./version.js";
 import { dependencyWarnings } from "./push.js";
 import { repoRelative } from "./paths.js";
 import type { Actor, ActorType, Session } from "./types.js";
+import { buildCommitProvenance } from "./provenance.js";
 
 /**
  * The Quilt MCP server (stdio). Attribution is per-agent. Two ways to identify:
@@ -335,8 +336,11 @@ export async function runMcpServer(store: Store): Promise<void> {
             : {}),
         });
       }
+      const sessionId = active?.actorId === actorId ? active.session?.id ?? null : null;
+      const provenance = buildCommitProvenance(sel, actor, sessionId, includeUnclaimed);
       const res = commitSelection(repoRoot, sel, actor, message, {
         defaultAuthorEmail: store.readConfig()?.defaultAuthorEmail,
+        provenance,
       });
       let releasedClaims = 0;
       if (res.committed) {
@@ -366,8 +370,12 @@ export async function runMcpServer(store: Store): Promise<void> {
               wholeFiles: sel.wholeFiles,
               skippedBinary: sel.skippedBinary,
               skippedUnowned: sel.skippedUnowned,
+              provenance: {
+                version: provenance.version,
+                capture: provenance.capture,
+              },
               note:
-                "committed files' claims were auto-released — no separate release call needed" +
+                "committed files' claims were auto-released; durable provenance was embedded in the Git commit" +
                 (sel.skippedBinary.length
                   ? "; WARNING: unclaimed binary/too-large files were SKIPPED (claim them to commit them whole): " +
                     sel.skippedBinary.join(", ")

@@ -603,7 +603,7 @@ test("hooks capture into the repo the FILE lives in, not the hook's cwd", () => 
   }
 });
 
-test("setup prints the MCP-approval reality and the hooks-protect-you-anyway note", () => {
+test("setup prints the MCP approval and per-client enforcement reality", () => {
   const dir = makeRepo();
   try {
     const r = spawnSync("node", [CLI, "setup"], {
@@ -612,7 +612,8 @@ test("setup prints the MCP-approval reality and the hooks-protect-you-anyway not
       env: { ...process.env, NO_COLOR: "1", QUILT_NO_UPDATE_CHECK: "1" },
     });
     assert.equal(r.status, 0, r.stderr);
-    assert.match(r.stdout, /already protected/, "protection-first: hooks are live before any approval");
+    assert.match(r.stdout, /Capture is already live/, "capture is live before any approval");
+    assert.match(r.stdout, /Codex hooks are capture-only/, "Codex prevention is not overstated");
     assert.match(r.stdout, /restarts and approves/, "the restart+approval is a stated non-event, not a silent trap");
     assert.match(r.stdout, /\/mcp/);
     assert.match(r.stdout, /quilt commit --mine/, "names the CLI fallback an agent can always use");

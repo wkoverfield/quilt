@@ -75,15 +75,13 @@ test("appendCoordination creates content with the marker when none exists", () =
   for (const term of ["intent", "holderIntent", "escalate", "resolve"]) {
     assert.ok(r.content.includes(term), `coordination snippet should mention ${term}`);
   }
-  // MCP-optional framing leads: the zero-approval hook path is the product,
-  // the claim tools are the optional layer. (The first external fleet read the
-  // old MCP-first snippet and concluded Quilt was unusable when the MCP server
-  // wasn't approved — while the hooks were protecting every edit.)
+  // Capture leads, while the prevention boundary stays honest per client.
   assert.ok(r.content.includes("quilt commit --mine"), "the CLI commit path is taught");
-  assert.ok(r.content.includes("captured and protected by the quilt hooks"), "leads with the zero-approval path");
-  assert.ok(/NOT in your MCP list[\s\S]*still protected/.test(r.content), "says missing MCP tools still means protected");
+  assert.ok(r.content.includes("captured by the quilt hooks"), "leads with automatic capture");
+  assert.ok(r.content.includes("Codex hooks are capture-only"), "states the Codex enforcement boundary");
+  assert.ok(/NOT in your MCP list[\s\S]*still keep capture and attribution/.test(r.content), "says what remains without MCP tools");
   assert.ok(
-    r.content.indexOf("captured and protected by the quilt hooks") < r.content.indexOf("CLAIM before editing"),
+    r.content.indexOf("captured by the quilt hooks") < r.content.indexOf("CLAIM before editing"),
     "hooks lead, claims are the optional-advanced section",
   );
 });

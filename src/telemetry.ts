@@ -35,6 +35,10 @@ const POSTHOG_ENDPOINT = "https://us.i.posthog.com/i/v0/e/";
 // PostHog write-only project token: safe to ship in an OSS client by design
 // (it can only ingest events, never read anything back).
 const POSTHOG_KEY = "phc_7aGIe4BBqxv2qxtftFdi83so2t5LrV0UBFqZaYsOz9w";
+/** Process-scoped fallback when QUILT_TELEMETRY=1 opts in without a stored
+ * decision. It avoids grouping unrelated installs without writing consent
+ * state or minting a different identity for every event in one process. */
+const ephemeralAnonymousId = randomUUID();
 
 /** Config dir override for tests; XDG-respecting default otherwise. */
 function configDir(): string {
@@ -93,8 +97,9 @@ export function buildEventPayload(event: string, props: EventProps = {}): object
   return {
     api_key: POSTHOG_KEY,
     event,
-    distinct_id: readTelemetryConfig()?.anonymousId ?? "undecided",
+    distinct_id: readTelemetryConfig()?.anonymousId ?? ephemeralAnonymousId,
     properties: {
+      $process_person_profile: false,
       quilt_version: VERSION,
       platform: process.platform,
       node_major: Number(process.versions.node.split(".")[0]),

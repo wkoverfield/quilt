@@ -36,6 +36,7 @@ import { detect, planSetup, applySetup, mergeHookSettings, appendCoordination, t
 import { adoptClaimHolder, recordAuthorship, capturedBySelf, readAuthorship, settleCommittedAuthorship } from "./authorship.js";
 import type { ActiveContext } from "./session.js";
 import { repoRelative } from "./paths.js";
+import { buildCommitProvenance, readCommitProvenance } from "./provenance.js";
 import { VERSION } from "./version.js";
 import type { Actor, ActorType, Config, Session } from "./types.js";
 
@@ -335,7 +336,8 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
     "\n" +
       pc.green("✓ ") +
       "Workspace wired. Start sessions here (or in any repo) — edits are captured\n" +
-      "  and protected by the hooks automatically, per repo.\n" +
+      "  by the hooks automatically, per repo. Claude hooks enforce claims;\n" +
+      "  Codex uses claim-aware MCP edit tools for prevention.\n" +
       pc.dim("  Run quilt commands (status, fleet, commit --mine) inside a repo.\n") +
       pc.dim("  Note: the optional MCP claim tools load per repo, so sessions started at\n") +
       pc.dim("  the workspace root won't have them — the hooks and CLI carry everything.\n"),
@@ -585,7 +587,9 @@ program
       process.stdout.write(
         "\n" +
           pc.green("✓ ") +
-          "Quilt is wired in. Edits are captured and protected by the hooks automatically.\n" +
+          "Quilt is wired in. Edits are captured by the hooks automatically.\n" +
+          pc.dim("  Claude hooks enforce claims; Codex uses claim-aware MCP edit tools\n") +
+          pc.dim("  for prevention.\n") +
           pc.dim("  Agents are named automatically (per session/connection). Set QUILT_ACTOR\n") +
           pc.dim("  on an agent's process for a stable id that persists across sessions.\n") +
           pc.dim("  Commit the generated config files so every checkout and teammate shares\n") +
@@ -603,10 +607,11 @@ program
     process.stdout.write(
       "\n" +
         pc.cyan("→ ") +
-        "You're already protected: the capture hooks are live and need nothing else.\n" +
+        "Capture is already live and needs nothing else. Claude hooks enforce claims.\n" +
+        "  Codex hooks are capture-only; use Quilt's MCP edit tools for prevention.\n" +
         "  The optional MCP claim tools appear once Claude Code restarts and approves\n" +
-        "  the server (/mcp shows it). An agent without them still coordinates fine:\n" +
-        "  quilt claim to reserve, quilt commit --mine to commit its own lines.\n",
+        "  the server (/mcp shows it). Any agent can still use the CLI to inspect and\n" +
+        "  commit its own captured lines with quilt commit --mine.\n",
     );
 
     // The generated config invokes plain `quilt` — if that doesn't resolve on
@@ -1075,8 +1080,15 @@ program
       return;
     }
 
+    const provenance = buildCommitProvenance(
+      selection,
+      ctx.actor!,
+      ctx.session?.id ?? null,
+      opts.includeUnclaimed,
+    );
     const res = commitSelection(root, selection, ctx.actor!, opts.message, {
       defaultAuthorEmail: store.readConfig()?.defaultAuthorEmail,
+      provenance,
     });
     if (!res.committed) fail(res.reason ?? "commit failed");
 
@@ -1110,6 +1122,7 @@ program
         `Committed ${committedCount} file(s) as ${pc.bold(ctx.actor!.displayName)} ` +
         `(${res.commitSha!.slice(0, 7)}).\n` +
         pc.dim("  Other actors' changes remain in the working tree.\n") +
+        pc.dim("  Durable provenance embedded; inspect with `quilt provenance HEAD`.\n") +
         (rel.released > 0
           ? pc.dim(`  Auto-released ${rel.released} claim(s) on the committed files.\n`)
           : ""),
@@ -1139,6 +1152,38 @@ program
       );
     }
     recordEvent("quilt_commit_mine", { files: committedCount });
+  });
+
+program
+  .command("provenance")
+  .description("Show durable Quilt provenance embedded in a Git commit")
+  .argument("[commit]", "commit to inspect", "HEAD")
+  .option("--json", "emit the complete versioned provenance record")
+  .action((commit: string, opts: { json?: boolean }) => {
+    const root = repoRoot(process.cwd());
+    if (!root) fail("not inside a git repository");
+    const provenance = readCommitProvenance(root, commit);
+    if (!provenance) fail(`no readable Quilt provenance on ${commit}`);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(provenance, null, 2) + "\n");
+      return;
+    }
+    const hunkCount = provenance.files.reduce((sum, file) => sum + file.hunks.length, 0);
+    process.stdout.write(
+      `\n${pc.bold(commit)}  ${pc.cyan(provenance.actor.id)} (${provenance.actor.type})\n` +
+      `  ${provenance.files.length} file(s), ${hunkCount} hunk(s), ${provenance.capture}\n`,
+    );
+    if (provenance.sessionId) process.stdout.write(pc.dim(`  session ${provenance.sessionId}\n`));
+    for (const file of provenance.files) {
+      process.stdout.write(`\n  ${pc.bold(file.path)}\n`);
+      if (file.hunks.length === 0) process.stdout.write(pc.dim("    whole file\n"));
+      for (const hunk of file.hunks) {
+        process.stdout.write(
+          pc.dim(`    -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines}`) + "\n",
+        );
+      }
+    }
+    process.stdout.write("\n");
   });
 
 program

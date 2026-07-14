@@ -23,7 +23,8 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt resolve <target> [--note] [--take --from <actor>]` | Mark a collision handled. Plain resolve is audit-only; `--take` transfers the named actor's dirty operations to the resolver. |
 | `quilt restore [path] [--json]` | List or recover work overwritten by another actor. |
 | `quilt preview --mine [paths...] [--json] [--include-unclaimed]` | Print the exact patch `commit --mine` would create. Path args (files or directory prefixes) scope the preview. |
-| `quilt commit --mine [paths...] -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch. Path args are a hard allow-list: name a file or directory and nothing else rides along. When another actor holds a live claim, a NEW file you never claimed or edited is left out loudly (`skippedUnowned`): claim it, or pass `--include-unclaimed` if it's yours. |
+| `quilt commit --mine [paths...] -m <msg> [--dry-run] [--include-unclaimed]` | Commit only your owned patch and embed durable provenance. Path args are a hard allow-list. `--include-unclaimed` is recorded as mixed capture. Prompt correlation remains local and is not published into Git. |
+| `quilt provenance [commit] [--json]` | Read the portable, versioned Quilt provenance embedded in a commit. Defaults to `HEAD` and works without local `.quilt/` state. |
 | `quilt claim [targets...] [--json] [--creating] [--wait [s]] [--queue]` | Reserve files (`src/auth.ts`), directories (`convex/_generated/`), or symbols (`file#symbol`) for editing, BEFORE you edit; the claim is what binds external edits to you. A symbol missing from the file is denied unless `--creating` (you are about to add it). `--wait` blocks until denied targets free up; `--queue` is the async alternative: register interest, return now, get auto-granted when it frees (surfaced in `quilt status` as "granted while you waited"). With no targets, lists claims. A conflicting claim whose holder shows no sign of life for 5+ minutes (or whose session ended) and has no uncommitted work in the target is reclaimed automatically; the grant reports `reclaimedFrom`. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). Also cancels your queued interest in the released targets. |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
@@ -54,6 +55,29 @@ per-agent attribution without a prompt.
 An actor represents a session or subagent run, not necessarily one person or
 one prompt. Raw shell writes, generated files, and pre-existing dirty changes
 can legitimately remain unattributed.
+
+## Durable provenance in Git
+
+`quilt commit --mine` writes a compact, versioned provenance envelope into the
+commit message. It records the actor, Quilt session when safely available,
+every file and hunk range in the owned patch, whether unclaimed changes were
+explicitly included, and the exact parent and tree objects. Because the record
+is part of the commit, ordinary pushes, fetches, and clones carry it.
+
+Prompt matching remains a time-based inference in the local review UI. Prompt
+text and fingerprints are not written into Git history.
+
+This is self-reported commit metadata, not a cryptographic signature. Quilt
+verifies that the embedded parent and tree match the commit before displaying
+the record. A future signed attestation layer can add authenticity for policy
+enforcement.
+
+Inspect a record as text or JSON:
+
+```bash
+quilt provenance HEAD
+quilt provenance HEAD --json
+```
 
 ## Live attribution: `quilt watch`
 
@@ -171,6 +195,8 @@ instrumented.
 
 Environment variables: `QUILT_TELEMETRY=0` forces telemetry off for a process
 regardless of the stored decision (set it in CI); `QUILT_TELEMETRY=1` forces
-it on the same way. Events are posted to PostHog by a short-lived detached
+it on the same way. Before a stored decision exists, forced telemetry uses an
+ephemeral id scoped to that CLI process and does not write consent state. Events
+are posted to PostHog by a short-lived detached
 process, so no quilt command ever waits on the network, and delivery failures
 are silent.

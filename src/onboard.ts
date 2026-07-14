@@ -35,7 +35,7 @@ export function codexHooksPath(): string {
  * no-opped forever, freezing whatever framing it first shipped with.
  * Bump the version whenever COORDINATION_BLOCK's content changes.
  */
-export const COORDINATION_VERSION = 2;
+export const COORDINATION_VERSION = 3;
 export const COORDINATION_MARKER = `<!-- quilt:coordination v${COORDINATION_VERSION} -->`;
 /** Closes the block so a future refresh can replace exactly the marked region. */
 export const COORDINATION_END_MARKER = "<!-- /quilt:coordination -->";
@@ -52,20 +52,22 @@ const COORDINATION_MARKER_ANY = /<!--\s*quilt:coordination(?:\s+v\d+)?\s*-->/;
 export const COORDINATION_BLOCK = `${COORDINATION_MARKER}
 ## Coordinating with other agents (Quilt)
 
-You share this checkout with other agents. Quilt protects your work
+You share this checkout with other agents. Quilt captures who changed what
 automatically:
 
-- Your edits are captured and protected by the quilt hooks: nothing to
-  approve, nothing to call. Identity is automatic (each session gets its own
-  id), and every line you edit is attributed to you as you write it.
+- Your edits are captured by the quilt hooks: nothing to call. Identity is
+  automatic (each session gets its own id), and every line you edit is
+  attributed to you as you write it. Claude Code hooks also deny edits into
+  claimed code. Codex hooks are capture-only, so use claim-aware MCP tools when
+  you need prevention there.
 - To commit only your lines, run \`quilt commit --mine -m "<message>"\` from
   the shell. It works with or without the MCP server, and it leaves everyone
   else's uncommitted work untouched. \`quilt status\` shows who owns what.
 - The quilt MCP tools (claim, commit_mine, get_status, ...) are an optional
   prevention layer, available when the quilt MCP server is connected and
   approved in your client. If the quilt tools are NOT in your MCP list you
-  are still protected: capture and attribution run in the hooks. Just commit
-  with the CLI.
+  still keep capture and attribution through the hooks. Just commit with the
+  CLI. Codex still needs MCP tools for claim enforcement.
 
 Optional, when the quilt MCP tools are connected (CLI equivalents in
 parentheses):
