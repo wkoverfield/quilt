@@ -40,6 +40,10 @@
   nav { display: flex; align-items: center; gap: 26px; padding: 14px 0; line-height: 1.5; }
   .mark { display: grid; grid-template-columns: 9px 9px; gap: 2.5px; }
   .mark i { width: 9px; height: 9px; border-radius: 2.5px; }
+  .mark i:nth-child(1) { background: var(--amber); }
+  .mark i:nth-child(2) { background: var(--green); }
+  .mark i:nth-child(3) { background: var(--blue); }
+  .mark i:nth-child(4) { background: var(--magenta); }
   .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 20px; color: var(--ink); }
   .brand:hover { text-decoration: none; }
   nav .links { margin-left: auto; display: flex; gap: 22px; font-size: 14.5px; align-items: center; }
@@ -95,8 +99,7 @@
     <nav>
       <a class="brand" href="index.html">
         <span class="mark" aria-hidden="true">
-          <i style="background:var(--amber)"></i><i style="background:var(--green)"></i>
-          <i style="background:var(--blue)"></i><i style="background:var(--magenta)"></i>
+          <i></i><i></i><i></i><i></i>
         </span>
         Quilt
       </a>

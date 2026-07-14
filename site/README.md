@@ -5,13 +5,14 @@ The static site: landing page (`index.html`), the worldview argument
 references stay canonical in the repo's docs/), and `llms.txt`. No separate
 benchmarks page by design; bench numbers live in the repo.
 
-Design: the landing page and `quilt ui` share the "Product Surface" direction.
-They use a cool paper field, white raised surfaces, Gambetta display serif,
-Switzer body text, and IBM Plex Mono for agent and terminal data. The four
-agent colors form the Quilt mark, authorship chips, and diff states. The darker
-color cuts are used for text on light surfaces, with the original colors kept
-for fills. The docs and worldview pages retain the earlier Workshop treatment
-until they receive their own redesign pass.
+Design: the landing page, docs, and `quilt ui` share the "Product Surface"
+direction. They use a cool paper field, white raised surfaces, Gambetta display
+serif, Switzer body text, and IBM Plex Mono for agent and terminal data. The
+four agent colors form the Quilt mark, authorship chips, diff states, and docs
+reading path. The darker color cuts are used for text on light surfaces, with
+the original colors kept for fills. The Quilt mark always reads clockwise from
+the top left as amber, green, magenta, then blue. The worldview page retains the
+earlier Workshop treatment until it receives its own redesign pass.
 
 No build step, no framework, no dependencies; every page is self-contained
 HTML with inline CSS/JS. Fonts load from Fontshare (Gambetta, Switzer) and

@@ -261,6 +261,7 @@ const PAGE = `<!doctype html>
   :root {
     --bg: #f5f5f6; --ink: #1c1c1f; --ink2: #26262a; --ink-sec: #52525b; --ink-mute: #a1a1aa;
     --card: #ffffff; --border: #e4e4e7; --divider: #ececef; --panel: #e8eaef; --panel-border: #d7d8de;
+    --brand-amber: #e5a06b; --brand-green: #8fc46f; --brand-blue: #5aa9e6; --brand-magenta: #d074c4;
     --caret: #b8b8bf; --footer-dash: #d4d4d8; --link: #4664a6; --sel: rgba(70,100,166,.20);
     --add-bg: #eff4e6; --add-edge: rgba(143,196,111,.7); --add-sign: #4a7a34;
     --del-bg: #f8eae7; --del-edge: rgba(224,108,117,.55); --del-sign: #a83e4c;
@@ -295,6 +296,10 @@ const PAGE = `<!doctype html>
   .brand-lockup { display: flex; align-items: center; gap: 10px; }
   .mark { grid-template-columns: 10px 10px; gap: 2.5px; padding: 7px; background: var(--card); border: 1px solid var(--border); border-radius: 11px; }
   .mark i { width: 10px; height: 10px; border-radius: 3px; }
+  .mark i:nth-child(1) { background: var(--brand-amber); }
+  .mark i:nth-child(2) { background: var(--brand-green); }
+  .mark i:nth-child(3) { background: var(--brand-blue); }
+  .mark i:nth-child(4) { background: var(--brand-magenta); }
   h1 { font-family: var(--display); font-size: 21px; font-weight: 600; letter-spacing: .005em; }
   .repo-chip, .live, .theme-toggle { background: var(--card); border: 1px solid var(--border); border-radius: 8px; color: var(--ink-sec); }
   .repo-chip { display: inline-flex; gap: 7px; padding: 4px 12px; font: 12px var(--mono); }
@@ -1603,10 +1608,6 @@ const PAGE = `<!doctype html>
     document.getElementById("repo").textContent = d.repo;
     document.getElementById("headsha").textContent = d.head;
     document.getElementById("ver").textContent = d.version;
-    var marks = document.getElementById("mark").children;
-    var brandColors = ["#5aa9e6", "#d074c4", "#8fc46f", "#e5a06b"];
-    for (var i = 0; i < marks.length; i++) marks[i].style.background = brandColors[i];
-
     var entries = attentionEntries(d);
     document.getElementById("counts").textContent = entries.length + " attention · " + d.files.length + " files";
     var main = el("main", null, viewTabs());
