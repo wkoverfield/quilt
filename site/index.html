@@ -15,14 +15,14 @@
 <link href="https://api.fontshare.com/v2/css?f[]=gambetta@500,600,700&f[]=switzer@400,500,600&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* ---- tokens: the workshop (warm paper, dark artifacts) ---- */
+  /* ---- tokens: product surface shared with quilt ui ---- */
   :root {
-    --paper: #f7f2e6; --paper2: #efe8d7; --card: #fdfaf2; --border: #ddd3bd; --stitch: #cfc3a9;
-    --ink: #262019; --dim: #5f564a; --faint: #776d5e;
-    --thread: #e3b34c; --thread-ink: #8a650c;
+    --paper: #f5f5f6; --paper2: #eeeef0; --card: #ffffff; --border: #e4e4e7; --stitch: #d4d4d8;
+    --ink: #1c1c1f; --dim: #52525b; --faint: #71717a;
+    --thread: #5aa9e6; --thread-ink: #4664a6;
     --coral: #e06c75; --coral-ink: #a83e4c; --amber: #e5a06b; --gold: #e3c46b; --gold-ink: #8a650c;
     --green: #8fc46f; --green-ink: #426a2d; --teal: #56c2a8; --blue: #5aa9e6; --violet: #8a7fe8; --magenta: #d074c4;
-    --dpanel: #211b12; --dpanel2: #1a1510; --dborder: #3a3226; --dink: #ece5d8; --ddim: #a89f8d; --dfaint: #847c6e;
+    --dpanel: #ffffff; --dpanel2: #f4f4f6; --dborder: #e4e4e7; --dink: #26262a; --ddim: #71717a; --dfaint: #a1a1aa;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     --sans: "Switzer", -apple-system, sans-serif;
     --display: "Gambetta", Georgia, serif;
@@ -31,23 +31,20 @@
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body { margin: 0; background: var(--paper); color: var(--ink); font: 17px/1.65 var(--sans); }
-  /* one whisper of paper grain, unifying every surface */
-  body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 2000; opacity: .04;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E"); }
-  .wrap { max-width: 1060px; margin: 0 auto; padding: 0 24px; }
+  .wrap { max-width: 1168px; margin: 0 auto; padding: 0 24px; }
   a { color: var(--thread-ink); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 3px; }
   code, .mono { font-family: var(--mono); }
-  ::selection { background: color-mix(in srgb, var(--thread) 35%, transparent); }
+  ::selection { background: rgba(70,100,166,.20); }
 
-  .navbar .wrap { max-width: 1060px; padding: 0 24px; }
-  .navbar { position: sticky; top: 0; z-index: 50; border-bottom: 1px dashed transparent;
-            background: color-mix(in srgb, var(--paper) 80%, transparent);
-            -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-            transition: border-color .2s var(--ease); }
-  .navbar.scrolled { border-bottom-color: var(--stitch); }
+  .navbar .wrap { max-width: 1168px; padding: 0 24px; }
+  .navbar { position: sticky; top: 0; z-index: 50; padding: 14px 0; }
   .navbar nav { position: relative; }
-  nav { display: flex; align-items: center; gap: 26px; padding: 14px 0; line-height: 1.5; }
+  nav { display: flex; align-items: center; gap: 22px; padding: 9px 12px 9px 16px; line-height: 1.4;
+        background: rgba(255,255,255,.7); border: 1px solid #e8e8ec; border-radius: 12px;
+        -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%);
+        box-shadow: 0 1px 2px rgba(24,24,27,.04); transition: box-shadow .2s var(--ease), background .2s var(--ease); }
+  .navbar.scrolled nav { background: rgba(255,255,255,.82); box-shadow: 0 10px 34px -18px rgba(24,24,27,.28); }
   .mark { display: grid; grid-template-columns: 9px 9px; gap: 2.5px; }
   .mark i { width: 9px; height: 9px; border-radius: 2.5px; }
   .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 600; font-size: 20px; color: var(--ink); }
@@ -57,64 +54,79 @@
   nav .links a:hover { color: var(--ink); text-decoration: none; }
   nav .links a[aria-current] { color: var(--ink); }
   @media (max-width: 860px) { nav .links { gap: 15px; font-size: 13.5px; } }
-  .gh { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--stitch); border-radius: 8px; padding: 6px 13px; color: var(--ink) !important; transition: border-color .15s var(--ease); }
+  .gh { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 10px; padding: 7px 13px; color: var(--ink) !important; transition: border-color .15s var(--ease); }
   .gh:hover { border-color: var(--ink); }
   .gh .ghc { color: var(--faint); font-family: var(--mono); font-size: 12px; padding-left: 8px; border-left: 1px solid var(--stitch); }
   section, .teams { scroll-margin-top: 76px; }
 
 
-  .hero { padding: 84px 0 0; text-align: center; }
-  .eyebrow { font-family: var(--mono); font-size: 13px; color: var(--thread-ink); margin: 0 0 18px; }
-  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(44px, 6.4vw, 74px); line-height: 1.04; letter-spacing: -.012em; margin: 0 auto 22px; max-width: 12em; }
-  .lede { color: var(--dim); font-size: 19px; max-width: 32em; margin: 0 auto 32px; }
+  .hero { position: relative; padding: 76px 0 0; text-align: center; }
+  .hero-copy { position: relative; z-index: 1; }
+  .hero-squares { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .hero-squares i { position: absolute; display: block; border-radius: 12px; opacity: .16; }
+  .hero-squares i:nth-child(1) { top: 52px; left: 8%; width: 46px; height: 46px; background: var(--blue); transform: rotate(-8deg); }
+  .hero-squares i:nth-child(2) { top: 120px; right: 11%; width: 60px; height: 60px; background: var(--magenta); opacity: .14; transform: rotate(10deg); }
+  .hero-squares i:nth-child(3) { top: 280px; left: 15%; width: 38px; height: 38px; background: var(--green); transform: rotate(6deg); }
+  .hero-squares i:nth-child(4) { top: 250px; right: 18%; width: 34px; height: 34px; background: var(--amber); opacity: .18; transform: rotate(-12deg); }
+  .eyebrow { display: inline-flex; align-items: center; gap: 9px; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+              padding: 6px 14px 6px 8px; font-family: var(--mono); font-size: 12.5px; color: var(--thread-ink); margin: 0 0 26px; }
+  .eyebrow-mark { display: grid; grid-template-columns: 7px 7px; gap: 2px; }
+  .eyebrow-mark i { width: 7px; height: 7px; border-radius: 2px; }
+  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(46px, 6.8vw, 80px); line-height: 1.02; letter-spacing: -.016em; margin: 0 auto 24px; max-width: 14em; }
+  h1 em, .fin em { color: var(--thread-ink); font-style: italic; }
+  .lede { color: var(--dim); font-size: 19.5px; max-width: 33em; margin: 0 auto 34px; text-wrap: pretty; }
   .lede strong { color: var(--ink); font-weight: 500; }
   .ctas { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: center; }
-  .btn { display: inline-block; border-radius: 10px; padding: 12px 22px; font-size: 15.5px; font-weight: 500; transition: transform .12s var(--ease), background .15s var(--ease), border-color .15s var(--ease); }
+  .btn { display: inline-block; border-radius: 8px; padding: 13px 26px; font-size: 15.5px; font-weight: 500; transition: transform .12s var(--ease), background .15s var(--ease), border-color .15s var(--ease); }
   .btn:active { transform: scale(.98); }
   .btn.primary { background: var(--ink); color: var(--paper); }
-  .btn.primary:hover { text-decoration: none; background: #3b3327; }
-  .btn.ghost { border: 1px solid var(--stitch); color: var(--ink); }
+  .btn.primary:hover { text-decoration: none; background: #33333a; }
+  .btn.ghost { border: 1px solid var(--stitch); color: var(--ink); background: var(--card); }
   .btn.ghost:hover { text-decoration: none; border-color: var(--ink); }
   .install { display: inline-flex; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--border);
-             border-radius: 10px; padding: 11px 16px; font-family: var(--mono); font-size: 13.5px; margin-top: 24px; max-width: 100%; }
+             border-radius: 8px; padding: 10px 12px 10px 18px; font-family: var(--mono); font-size: 13.5px; margin-top: 28px; max-width: 100%;
+             flex-wrap: wrap; justify-content: center; box-shadow: 0 1px 2px rgba(24,24,27,.04); }
   .install .p { color: var(--faint); user-select: none; }
-  .install button { background: none; border: 1px solid var(--border); color: var(--dim); border-radius: 6px;
-                    font-family: var(--mono); font-size: 11px; padding: 3px 9px; cursor: pointer; transition: color .15s, border-color .15s; }
+  .install button { background: var(--paper); border: 1px solid var(--border); color: var(--dim); border-radius: 8px;
+                    font-family: var(--mono); font-size: 11px; padding: 4px 11px; cursor: pointer; transition: color .15s, border-color .15s; }
   .install button:hover { color: var(--ink); border-color: var(--ink); }
   .hero-note { color: var(--faint); font-size: 13.5px; margin-top: 16px; }
 
-  /* the loom: a dark instrument, scrubbed by scroll */
-  .loom-stage { height: 300vh; position: relative; margin-top: 56px; }
+  /* the loom: a shared working tree, scrubbed by scroll */
+  .loom-stage { height: 300vh; position: relative; margin-top: 60px; z-index: 1; }
   @media (max-width: 800px) { .loom-stage { height: 260vh; } }
-  .loom-sticky { position: sticky; top: 90px; }
-  .loom-frame { margin: 0 auto; border: 1px solid var(--dborder); border-radius: 16px; background: var(--dpanel);
-                box-shadow: 0 32px 70px -30px rgba(38,32,25,.45); overflow: hidden; }
+  .loom-sticky { position: sticky; top: 96px; }
+  .loom-frame { margin: 0 auto; border: 1px solid var(--dborder); border-radius: 12px; background: linear-gradient(#ffffff,#f4f4f6);
+                box-shadow: 0 34px 70px -34px rgba(24,24,27,.36); overflow: hidden; }
   @media (prefers-reduced-motion: reduce) {
     .loom-stage { height: auto; }
     .loom-sticky { position: static; }
   }
-  .loom-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--dborder); }
-  .loom-bar i { width: 9px; height: 9px; border-radius: 50%; background: #3b3220; }
+  .loom-bar { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-bottom: 1px dashed var(--dborder); }
+  .loom-bar > i { width: 9px; height: 9px; border-radius: 50%; }
+  .loom-bar > i:nth-child(1) { background: var(--coral); }
+  .loom-bar > i:nth-child(2) { background: var(--gold); }
+  .loom-bar > i:nth-child(3) { background: var(--green); }
   .loom-bar .t { font-family: var(--mono); font-size: 11.5px; color: var(--ddim); margin-left: 8px; }
   .loom-bar .r { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--dfaint); }
   .loom { display: grid; grid-template-columns: 1.5fr 1fr; }
   .loom > * { min-width: 0; }
   @media (max-width: 800px) { .loom { grid-template-columns: 1fr; } .commits { border-left: none !important; border-top: 1px dashed var(--dborder); } }
-  .threads { padding: 22px 24px; }
+  .threads { padding: 24px; background-image: repeating-linear-gradient(90deg,rgba(212,212,216,.2) 0 1px,transparent 1px 13px); }
   .thread { display: flex; align-items: center; gap: 12px; height: 24px; }
-  .thread .ln { font-family: var(--mono); font-size: 10.5px; color: #5a5140; width: 18px; text-align: right; flex: none; }
-  .thread .track { flex: 1; height: 8px; border-radius: 4px; background: repeating-linear-gradient(90deg, #2f2818 0 8px, transparent 8px 14px); position: relative; overflow: hidden; }
+  .thread .ln { font-family: var(--mono); font-size: 10.5px; color: #a1a1aa; width: 18px; text-align: right; flex: none; }
+  .thread .track { flex: 1; height: 8px; border-radius: 4px; background: repeating-linear-gradient(90deg, #e4e4e7 0 8px, transparent 8px 14px); position: relative; overflow: hidden; }
   .thread .yarn { position: absolute; inset: 0; border-radius: 4px; transform-origin: left center; }
   .thread .dyarn { position: absolute; top: 0; bottom: 0; left: 30%; width: 34%; border-radius: 4px;
                    border: 1.5px dashed var(--amber); background: color-mix(in srgb, var(--amber) 26%, transparent);
                    transform-origin: right center; transform: scaleX(.24); opacity: .7; }
   .thread .dx { position: absolute; left: calc(31% - 7px); top: 50%; margin-top: -7px; width: 14px; height: 14px;
-                border-radius: 50%; background: var(--dpanel); border: 1px solid var(--coral); color: var(--coral);
+                border-radius: 50%; background: var(--card); border: 1px solid var(--coral); color: var(--coral);
                 font: 600 9px/12px var(--mono); text-align: center; }
-  .commits { border-left: 1px dashed var(--dborder); padding: 22px 24px; display: flex; flex-direction: column; justify-content: center; gap: 9px; color: var(--dink); }
+  .commits { border-left: 1px dashed var(--dborder); padding: 24px; display: flex; flex-direction: column; justify-content: center; gap: 9px; color: var(--dink); }
   .cmt { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 12px;
          padding: 3px 8px; margin: -3px -8px; border-radius: 6px; transition: background .2s var(--ease); }
-  .cmt.active { background: rgba(236,229,216,.07); }
+  .cmt.active { background: rgba(70,100,166,.08); }
   .cmt i { width: 9px; height: 9px; border-radius: 3px; flex: none; }
   .cmt .sha { color: var(--dfaint); }
   .cmt .who { margin-left: auto; color: var(--ddim); }
@@ -131,7 +143,7 @@
   }
 
 
-  section { padding: 108px 0 0; }
+  section { padding: 112px 0 0; }
   h2 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 3.8vw, 42px); line-height: 1.08; letter-spacing: -.008em; margin: 0 auto 16px; max-width: 18em; text-align: center; }
   .sub { color: var(--dim); font-size: 17px; margin: 0 auto; max-width: 38em; text-align: center; }
   .sub strong { color: var(--ink); font-weight: 500; }
@@ -139,19 +151,22 @@
   .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 48px; }
   @media (max-width: 860px) { .steps { grid-template-columns: 1fr; } }
   .steps > * { min-width: 0; }
-  .step { position: relative; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--card); padding: 24px; }
-  .step::before { content: ""; position: absolute; top: 0; right: 0; border-style: solid; border-width: 0 30px 30px 0; }
-  .step:nth-child(1)::before { border-color: transparent var(--blue) transparent transparent; }
-  .step:nth-child(2)::before { border-color: transparent var(--amber) transparent transparent; }
-  .step:nth-child(3)::before { border-color: transparent var(--green) transparent transparent; }
-  .step .n { font-family: var(--mono); font-size: 12px; color: var(--faint); }
-  .step h3 { font-family: var(--display); font-size: 21px; font-weight: 600; margin: 9px 0 7px; }
+  .step { position: relative; border: 1px solid var(--border); border-radius: 12px; background: var(--card); padding: 26px; box-shadow: 0 1px 2px rgba(24,24,27,.03); }
+  .step .n { display: inline-flex; width: 34px; height: 34px; border-radius: 10px; align-items: center; justify-content: center; font-family: var(--mono); font-size: 13px; }
+  .step:nth-child(1) .n { color: #2f6d9e; background: color-mix(in srgb,var(--blue) 16%,var(--card)); border: 1px solid color-mix(in srgb,var(--blue) 40%,var(--card)); }
+  .step:nth-child(2) .n { color: #a5651f; background: color-mix(in srgb,var(--amber) 18%,var(--card)); border: 1px solid color-mix(in srgb,var(--amber) 42%,var(--card)); }
+  .step:nth-child(3) .n { color: #4a7a34; background: color-mix(in srgb,var(--green) 18%,var(--card)); border: 1px solid color-mix(in srgb,var(--green) 42%,var(--card)); }
+  .step .kicker { font-family: var(--mono); font-size: 11.5px; color: var(--faint); margin-top: 14px; }
+  .step h3 { font-family: var(--display); font-size: 21px; font-weight: 600; margin: 5px 0 8px; }
   .step p { color: var(--dim); font-size: 15px; margin: 0; }
   .step code { color: var(--ink); font-size: 13.5px; }
 
 
-  .whygrid { text-align: center; }
-  .receipt { border: 1px dashed var(--stitch); border-radius: 14px; background: var(--card); padding: 20px 22px; max-width: 620px; margin: 48px auto 0; text-align: left; }
+  .section-kicker { font-family: var(--mono); font-size: 13px; color: var(--thread-ink); margin: 0 0 14px; }
+  .whygrid { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: center; text-align: left; }
+  .whygrid h2, .proof h2 { text-align: left; margin-inline: 0; }
+  .whygrid .sub { text-align: left; margin-inline: 0; }
+  .receipt { border: 1px dashed var(--stitch); border-radius: 12px; background: var(--card); padding: 24px 26px; text-align: left; }
   .receipt .rt { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); margin-bottom: 10px; }
   .receipt .hd { display: flex; font-family: var(--mono); font-size: 11px; color: var(--faint); padding-bottom: 7px; }
   .receipt .hd span:first-child { flex: 1; }
@@ -162,8 +177,8 @@
   .receipt .wt { color: var(--coral-ink); }
   .receipt .q { color: var(--green-ink); }
 
-  .teams { margin-top: 104px; border: 1px dashed var(--stitch); border-radius: 18px; background: var(--paper2);
-           padding: 52px 32px; text-align: center; }
+  .teams { margin-top: 0; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(#ffffff,#eeeef0);
+           padding: 58px 32px; text-align: center; box-shadow: 0 18px 42px -34px rgba(24,24,27,.48); }
   .teams h2 { margin-bottom: 12px; }
   .waitlist { display: flex; gap: 10px; max-width: 460px; margin: 32px auto 0; }
   @media (max-width: 560px) { .waitlist { flex-direction: column; } }
@@ -172,7 +187,7 @@
   .waitlist input:focus { outline: none; border-color: var(--thread-ink); }
   .waitlist button { background: var(--ink); color: var(--paper); border: none; border-radius: 10px;
                      padding: 12px 22px; font: 500 15px var(--sans); cursor: pointer; transition: background .15s, transform .12s var(--ease); }
-  .waitlist button:hover { background: #3b3327; }
+  .waitlist button:hover { background: #33333a; }
   .waitlist button:active { transform: scale(.98); }
   .waitlist button:disabled { opacity: .6; cursor: default; }
   .wl-done { display: none; font-size: 15px; color: var(--green-ink); font-family: var(--mono); }
@@ -187,6 +202,49 @@
            color: var(--faint); font-size: 14px; flex-wrap: wrap; }
   footer a { color: var(--dim); }
   footer .spacer { flex: 1; }
+
+  .proof { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 36px; }
+  .proof-copy { max-width: 40em; }
+  .proof h2 { text-align: center; }
+  .proof-copy p:not(.section-kicker) { color: var(--dim); font-size: 16.5px; margin: 0 0 16px; text-wrap: pretty; }
+  .diff-card { width: 100%; max-width: 860px; text-align: left; border: 1px solid var(--border); border-radius: 12px; background: var(--card); overflow: hidden;
+               box-shadow: 0 1px 2px rgba(24,24,27,.04),0 30px 60px -36px rgba(24,24,27,.42); }
+  .diff-head { display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid #ececef; }
+  .diff-path { font-family: var(--mono); font-size: 12.5px; color: #26262a; }
+  .diff-badge { font-size: 10px; font-weight: 500; color: var(--coral-ink); background: #f7e0e2; border: 1px solid #e6b0b6; border-radius: 6px; padding: 2px 7px; }
+  .proof-chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 11px; border-radius: 8px; padding: 2px 9px 2px 7px; }
+  .proof-chip i { width: 7px; height: 7px; border-radius: 2px; }
+  .proof-chip.claude { margin-left: auto; color: #2f6d9e; background: color-mix(in srgb,var(--blue) 15%,var(--card)); border: 1px solid color-mix(in srgb,var(--blue) 40%,var(--card)); }
+  .proof-chip.codex { color: #9c3f90; background: color-mix(in srgb,var(--magenta) 15%,var(--card)); border: 1px solid color-mix(in srgb,var(--magenta) 40%,var(--card)); }
+  .proof-lines { font-family: var(--mono); font-size: 11.5px; line-height: 1.5; }
+  .proof-line { display: grid; grid-template-columns: 40px 16px 1fr auto; align-items: center; }
+  .proof-line .num { color: #b8b8bf; text-align: right; padding: 5px 8px 5px 4px; }
+  .proof-line .sign { text-align: center; }
+  .proof-line .code { padding: 5px 8px 5px 4px; color: #26262a; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  .proof-line .author { padding: 4px 10px; text-align: right; font-size: 10.5px; }
+  .proof-line.del { background: #f8eae7; box-shadow: inset 3px 0 rgba(224,108,117,.55); }
+  .proof-line.del .sign { color: var(--coral-ink); }
+  .proof-line.add { background: #eff4e6; box-shadow: inset 3px 0 rgba(143,196,111,.7); }
+  .proof-line.add .sign { color: #4a7a34; }
+  .proof-line.conflict { box-shadow: inset 3px 0 #d0596a; }
+  .prompt-proof { margin: 0 14px 14px; background: #eef6f7; border: 1px solid #cbe4e6; border-radius: 9px; padding: 10px 12px; }
+  .prompt-proof .label { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #5f8a90; margin-bottom: 5px; }
+  .prompt-proof .text { color: #26262a; font-size: 12.5px; line-height: 1.5; }
+
+  @media (max-width: 900px) {
+    .whygrid { grid-template-columns: 1fr; }
+    .links > a:not(.gh) { display: none; }
+  }
+  @media (max-width: 640px) {
+    .hero-squares { opacity: .55; }
+    .install { width: 100%; }
+    .install #install-cmd { width: 100%; overflow-wrap: anywhere; }
+    .diff-head { flex-wrap: wrap; }
+    .proof-chip.claude { margin-left: 0; }
+    .proof-line { grid-template-columns: 32px 14px minmax(0,1fr); }
+    .proof-line .author { display: none; }
+    footer .spacer { display: none; }
+  }
 
   @media (prefers-reduced-motion: no-preference) {
     .reveal { opacity: 0; transform: translateY(14px); transition: opacity .5s var(--ease), transform .5s var(--ease); }
@@ -214,17 +272,25 @@
 </div>
 <div class="wrap">
 
-  <header class="hero">
-    <p class="eyebrow">for teams shipping agent-written code</p>
-    <h1>Coordinate your agents. Trust the merge.</h1>
+  <header class="hero" id="top">
+    <div class="hero-squares" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="hero-copy">
+    <p class="eyebrow">
+      <span class="eyebrow-mark" aria-hidden="true">
+        <i style="background:var(--blue)"></i><i style="background:var(--magenta)"></i>
+        <i style="background:var(--green)"></i><i style="background:var(--amber)"></i>
+      </span>
+      for teams shipping agent-written code
+    </p>
+    <h1>Coordinate your agents.<br>Trust the <em>merge.</em></h1>
     <p class="lede">
       Quilt records who wrote every line while your agents work together in one
-      repo. They don't overwrite each other, each ships a <strong>clean commit</strong>,
+      repo. Claims surface collisions early, each agent can ship a <strong>clean commit</strong>,
       and you see exactly who wrote what before you merge.
     </p>
     <div class="ctas">
       <a class="btn primary" href="https://github.com/wkoverfield/quilt#quickstart">Get started</a>
-      <a class="btn ghost" href="#why">Why not worktrees?</a>
+      <a class="btn ghost" href="#proof">See a review</a>
     </div>
     <div class="install">
       <span class="p">$</span>
@@ -233,6 +299,7 @@
       <button id="copy-prompt" aria-label="copy a setup prompt for your coding agent">copy agent prompt</button>
     </div>
     <p class="hero-note">Free and open source (MIT) · macOS and Linux · no account, no daemon</p>
+    </div>
 
     <div class="loom-stage" id="loom-stage">
     <div class="loom-sticky">
@@ -245,10 +312,10 @@
       <div class="loom" aria-hidden="true">
         <div class="threads" id="threads"></div>
         <div class="commits">
-          <div class="cmt"><i style="background:var(--coral)"></i><span class="sha">b41e7a2</span><span>fix getUser redirect</span><span class="who">a1</span></div>
-          <div class="cmt"><i style="background:var(--green)"></i><span class="sha">7c5f2e8</span><span>migrate config schema</span><span class="who">a2</span></div>
-          <div class="cmt"><i style="background:var(--blue)"></i><span class="sha">51b6d37</span><span>wire webhook retries</span><span class="who">a3</span></div>
-          <div class="cmt"><i style="background:var(--magenta)"></i><span class="sha">a9042fe</span><span>test billing edge cases</span><span class="who">a4</span></div>
+          <div class="cmt"><i style="background:var(--blue)"></i><span class="sha">b41e7a2</span><span>fix getUser redirect</span><span class="who">a1</span></div>
+          <div class="cmt"><i style="background:var(--magenta)"></i><span class="sha">7c5f2e8</span><span>migrate config schema</span><span class="who">a2</span></div>
+          <div class="cmt"><i style="background:var(--green)"></i><span class="sha">51b6d37</span><span>wire webhook retries</span><span class="who">a3</span></div>
+          <div class="cmt"><i style="background:var(--amber)"></i><span class="sha">a9042fe</span><span>test billing edge cases</span><span class="who">a4</span></div>
           <div class="cmt deny"><span class="x">✗</span><span>write into a1's claimed function</span><span class="who">denied</span></div>
         </div>
       </div>
@@ -259,21 +326,25 @@
 
   </header>
 
-  <section class="reveal">
+  <section id="how" class="reveal">
+    <p class="section-kicker" style="text-align:center">how it works</p>
     <h2>Attribute every edit. Claim before you collide. Commit only your lines.</h2>
     <div class="steps">
       <div class="step">
-        <span class="n">01 · capture</span>
+        <span class="n">01</span>
+        <div class="kicker">capture</div>
         <h3>Every edit is attributed</h3>
-        <p>Hooks record each edit's author as it happens. Agents are named automatically; nothing to call, nothing to approve.</p>
+        <p>Hooks record each edit's author as it happens. Agents are named automatically. Nothing to call, nothing to approve.</p>
       </div>
       <div class="step">
-        <span class="n">02 · coordinate</span>
+        <span class="n">02</span>
+        <div class="kicker">coordinate</div>
         <h3>Claims prevent collisions</h3>
         <p>A write through your agent's edit tools into claimed code is denied before any bytes change. Beyond those tools claims are advisory: claim first and the edit binds to you.</p>
       </div>
       <div class="step">
-        <span class="n">03 · commit</span>
+        <span class="n">03</span>
+        <div class="kicker">commit</div>
         <h3><code>commit --mine</code></h3>
         <p>Each agent commits exactly its own lines as an ordinary Git commit. Everyone else's work stays untouched.</p>
       </div>
@@ -282,15 +353,41 @@
   </section>
 
 
+  <section id="proof" class="reveal proof">
+    <div class="proof-copy">
+      <p class="section-kicker">the review</p>
+      <h2>See who wrote each line, with local prompt context.</h2>
+      <p>Select any changed file in the Review workspace to read its diff with per-line authorship. Conflicts and unattributed lines are labeled plainly. For supported Claude Code and Codex sessions, Quilt can show the latest local prompt before a captured edit. Matching is inferred by time. Prompt text is read on your machine and sent nowhere.</p>
+      <p><a href="https://github.com/wkoverfield/quilt#quickstart">Watch your agents live</a> with one command: <code>quilt ui</code>.</p>
+    </div>
+    <div class="diff-card" aria-label="Quilt UI review preview">
+      <div class="diff-head">
+        <span class="diff-path">src/auth/session.ts</span>
+        <span class="diff-badge">contended</span>
+        <span class="proof-chip claude"><i style="background:var(--blue)"></i>claude</span>
+        <span class="proof-chip codex"><i style="background:var(--magenta)"></i>codex</span>
+      </div>
+      <div class="proof-lines">
+        <div class="proof-line del"><span class="num">40</span><span class="sign">−</span><span class="code">    const legacy = this.cookies.get(sid)</span><span class="author" style="color:#2f6d9e">claude</span></div>
+        <div class="proof-line add"><span class="num">41</span><span class="sign">+</span><span class="code">    const token = await this.tokens.read(sid)</span><span class="author" style="color:#2f6d9e">claude</span></div>
+        <div class="proof-line add"><span class="num">44</span><span class="sign">+</span><span class="code">    const next = await this.rotate(token, 900)</span><span class="author" style="color:#9c3f90">codex</span></div>
+        <div class="proof-line add conflict"><span class="num">46</span><span class="sign">+</span><span class="code">    return { token: next.value }</span><span class="author" style="color:#a83e4c">conflict</span></div>
+      </div>
+      <div class="prompt-proof">
+        <div class="label">local prompt · claude</div>
+        <div class="text">Refactor refreshSession to read from the new token store and drop the legacy cookie fallback.</div>
+      </div>
+    </div>
+  </section>
+
+
   <section id="why" class="reveal">
     <div class="whygrid">
       <div>
+        <p class="section-kicker">the argument</p>
         <h2>Worktrees isolate. They don't coordinate.</h2>
-        <p class="sub">
-          Every worktree is another install, build, and dev server, and its agent is blind
-          to everyone else's in-flight work, so collisions just wait for merge time.
-          Quilt keeps all your agents on one checkout, accounting for each other as they go.
-        </p>
+        <p class="sub">Every worktree is another install, build, and dev server, and its agent is blind to everyone else's in-flight work, so collisions just wait for merge time.</p>
+        <p class="sub" style="margin-top:16px">Quilt keeps all your agents on one checkout, accounting for each other as they go. <a href="why.html">Read the full argument</a>.</p>
       </div>
       <div class="receipt" aria-label="comparison: worktree per agent versus one checkout with Quilt">
         <div class="rt">The running tab, per agent added</div>
@@ -334,11 +431,17 @@
   </div>
 
   <footer>
+    <span class="mark" aria-hidden="true">
+      <i style="background:var(--blue)"></i><i style="background:var(--magenta)"></i>
+      <i style="background:var(--green)"></i><i style="background:var(--amber)"></i>
+    </span>
     <span>MIT</span>
     <a href="why.html">Why</a>
     <a href="docs.html">Docs</a>
     <a href="https://github.com/wkoverfield/quilt">GitHub</a>
     <a href="https://www.npmjs.com/package/@quilt-dev/cli">npm</a>
+    <span class="spacer"></span>
+    <span class="mono">v0.5.2</span>
   </footer>
 </div>
 
@@ -346,7 +449,7 @@
 (function () {
   "use strict";
 
-  var AGENTS = ["var(--coral)", "var(--green)", "var(--blue)", "var(--magenta)"];
+  var AGENTS = ["var(--blue)", "var(--magenta)", "var(--green)", "var(--amber)"];
   // Each thread: [agent index, start %, width %] — hand-laid so rows read as
   // interleaved per-agent edits in one file, some sharing a region.
   var ROWS = [
@@ -455,7 +558,18 @@
     }
 
     var ticking = false;
+    var userScrolled = false;
+    var autoplayFrame = 0;
+    var autoplayStarted = 0;
+    function autoplay(now) {
+      if (userScrolled) return;
+      if (!autoplayStarted) autoplayStarted = now;
+      render(((now - autoplayStarted) % 12000) / 12000);
+      autoplayFrame = requestAnimationFrame(autoplay);
+    }
     function onScroll() {
+      userScrolled = true;
+      if (autoplayFrame) cancelAnimationFrame(autoplayFrame);
       if (ticking) return;
       ticking = true;
       requestAnimationFrame(function () {
@@ -469,6 +583,10 @@
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll);
     onScroll();
+    userScrolled = false;
+    setTimeout(function () {
+      if (!userScrolled) autoplayFrame = requestAnimationFrame(autoplay);
+    }, 1200);
   }
 
   if ("IntersectionObserver" in window) {

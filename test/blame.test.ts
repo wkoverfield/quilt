@@ -59,6 +59,63 @@ test("fileBlame retains disjoint line owners in separate symbols", async () => {
   }
 });
 
+test("fileBlame exposes exact sections for disjoint unified-diff hunks", async () => {
+  const dir = repo();
+  try {
+    const before = Array.from({ length: 24 }, (_, index) => `line ${index + 1}`).join("\n") + "\n";
+    const afterLines = before.trimEnd().split("\n");
+    afterLines[1] = "line two changed";
+    afterLines[20] = "line twenty-one changed";
+    writeFileSync(join(dir, "spread.txt"), before);
+    commit(dir);
+    writeFileSync(join(dir, "spread.txt"), afterLines.join("\n") + "\n");
+
+    const store = new Store(dir);
+    store.ensureDirs();
+    const blame = fileBlame(store, "spread.txt", {
+      claudeDir: join(dir, "none"),
+      codexDir: join(dir, "none"),
+    });
+
+    assert.ok(blame);
+    assert.equal(blame!.sections.length, 2);
+    assert.deepEqual(blame!.sections, [
+      { oldStart: 1, oldLines: 5, newStart: 1, newLines: 5, startLineIndex: 0, lineCount: 6 },
+      { oldStart: 18, oldLines: 7, newStart: 18, newLines: 7, startLineIndex: 6, lineCount: 8 },
+    ]);
+    assert.equal(
+      blame!.sections.reduce((count, section) => count + section.lineCount, 0),
+      blame!.lines.length,
+    );
+    assert.equal(blame!.lines[blame!.sections[1]!.startLineIndex]?.text, "line 18");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fileBlame returns empty lines and sections for binary files", () => {
+  const dir = repo();
+  try {
+    writeFileSync(join(dir, "asset.bin"), Buffer.from([0, 1, 2, 3]));
+    commit(dir);
+    writeFileSync(join(dir, "asset.bin"), Buffer.from([0, 1, 2, 4]));
+
+    const store = new Store(dir);
+    store.ensureDirs();
+    const blame = fileBlame(store, "asset.bin", {
+      claudeDir: join(dir, "none"),
+      codexDir: join(dir, "none"),
+    });
+
+    assert.ok(blame);
+    assert.equal(blame!.binary, true);
+    assert.deepEqual(blame!.lines, []);
+    assert.deepEqual(blame!.sections, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("fileBlame lists every actor for a conflicted identical line", async () => {
   const dir = repo();
   try {

@@ -75,6 +75,8 @@ export interface FleetFileView {
   isNew: boolean;
   isDeleted: boolean;
   binary: boolean;
+  /** Unique changed diff operations. Contended ownership never duplicates this count. */
+  changedLines: number;
   /** Changed lines per actor, descending by count. */
   actors: Array<{ id: string; lines: number }>;
   /** Non-trivial changed lines with no recorded owner. */
@@ -121,6 +123,7 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
   for (const f of model.files) {
     let owned = false;
     let changed = false;
+    let changedLines = 0;
     const lineCounts = new Map<string, number>();
     let unownedLines = 0;
     // An overlap = a hunk owned by more than one actor (engine marks it
@@ -132,7 +135,9 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
     let overlapLines = 0;
     let contended = false;
     for (const h of f.hunks) {
-      if (h.hunk.ops.some((o) => o.type !== "eq")) changed = true;
+      const hunkChangedLines = h.hunk.ops.filter((o) => o.type !== "eq").length;
+      if (hunkChangedLines) changed = true;
+      changedLines += hunkChangedLines;
       for (const a of h.actors) {
         owned = true;
         (filesByActor.get(a) ?? filesByActor.set(a, new Set()).get(a)!).add(f.path);
@@ -154,6 +159,7 @@ export function fleetSnapshot(store: Store, now: number): FleetView {
         isNew: f.isNew,
         isDeleted: f.isDeleted,
         binary: f.binary,
+        changedLines,
         actors: [...lineCounts.entries()]
           .map(([id, lines]) => ({ id, lines }))
           .sort((a, b) => b.lines - a.lines || a.id.localeCompare(b.id)),

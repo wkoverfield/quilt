@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Store } from "../src/state.js";
 import { fleetSnapshot } from "../src/fleet.js";
 import { initSymbols, ownKey, symbolLocator } from "../src/symbols.js";
-import { startUiServer, type UiServer } from "../src/ui.js";
+import { shellArg, startUiServer, type UiServer } from "../src/ui.js";
 
 const CLI = resolve(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js");
 
@@ -33,6 +33,13 @@ function commit(dir: string, m: string): void {
   spawnSync("git", ["add", "-A"], { cwd: dir });
   spawnSync("git", ["commit", "-q", "-m", m], { cwd: dir });
 }
+
+test("ui shell-quotes user-controlled command arguments", () => {
+  assert.equal(shellArg("src/ui.ts"), "src/ui.ts");
+  assert.equal(shellArg("#root-file"), "'#root-file'");
+  assert.equal(shellArg("file name; $(touch owned)"), "'file name; $(touch owned)'");
+  assert.equal(shellArg("O'Brien"), "'O'\"'\"'Brien'");
+});
 
 /** A repo with two actors, disjoint edits in one file, reconciled. */
 function fixture(): string {
@@ -187,6 +194,7 @@ test("who-wrote-what credits every contender on a conflicted identical line", as
   const byId = Object.fromEntries(row!.actors.map((a) => [a.id, a.lines]));
   assert.equal(byId["actor-a"], 1);
   assert.equal(byId["actor-b"], 1, "the second contender must not be dropped");
+  assert.equal(row!.changedLines, 1, "contenders must not duplicate the physical changed-line count");
   assert.equal(row!.overlap, "contended");
 });
 

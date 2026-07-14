@@ -20,12 +20,23 @@ export interface BlameLine extends OwnedLine {
   provenance: LineProvenance[];
 }
 
+/** Stable boundaries for one unified-diff hunk within the flattened lines array. */
+export interface BlameSection {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  startLineIndex: number;
+  lineCount: number;
+}
+
 export interface FileBlame {
   path: string;
   isNew: boolean;
   isDeleted: boolean;
   binary: boolean;
   lines: BlameLine[];
+  sections: BlameSection[];
 }
 
 function matchingEvent(
@@ -59,10 +70,32 @@ export function fileBlame(
 ): FileBlame | null {
   const file = buildModel(store, null, { ledgerOverlay: true }).files.find((candidate) => candidate.path === relPath);
   if (!file) return null;
-  if (file.binary) return { path: file.path, isNew: file.isNew, isDeleted: file.isDeleted, binary: true, lines: [] };
+  if (file.binary) {
+    return {
+      path: file.path,
+      isNew: file.isNew,
+      isDeleted: file.isDeleted,
+      binary: true,
+      lines: [],
+      sections: [],
+    };
+  }
 
   const events = readAuthorship(store);
   const transcriptCache = new Map<string, ReturnType<typeof locateTranscript>>();
+  let startLineIndex = 0;
+  const sections = file.hunks.map((ownedHunk): BlameSection => {
+    const section = {
+      oldStart: ownedHunk.hunk.oldStart,
+      oldLines: ownedHunk.hunk.oldLines,
+      newStart: ownedHunk.hunk.newStart,
+      newLines: ownedHunk.hunk.newLines,
+      startLineIndex,
+      lineCount: ownedHunk.lines.length,
+    };
+    startLineIndex += section.lineCount;
+    return section;
+  });
   const lines = file.hunks.flatMap((hunk) => hunk.lines.map((line): BlameLine => {
     const provenance = line.actors.map((actor): LineProvenance => {
       const event = matchingEvent(events, file.path, line, actor);
@@ -88,5 +121,12 @@ export function fileBlame(
       provenance,
     };
   }));
-  return { path: file.path, isNew: file.isNew, isDeleted: file.isDeleted, binary: false, lines };
+  return {
+    path: file.path,
+    isNew: file.isNew,
+    isDeleted: file.isDeleted,
+    binary: false,
+    lines,
+    sections,
+  };
 }
