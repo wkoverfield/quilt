@@ -35,6 +35,20 @@ export type HunkOwnership =
  */
 export type HunkOverlap = "adjacent" | "contended";
 
+/** One rendered diff line with the ownership decision used by the engine. */
+export interface OwnedLine {
+  type: DiffOp["type"];
+  text: string;
+  key: string | null;
+  oldLineNumber: number | null;
+  newLineNumber: number | null;
+  /** Every actor credited for this operation. Conflicts can have more than one. */
+  actors: string[];
+  conflicted: boolean;
+  /** A changed line with no actor. Equal context is never unowned. */
+  unowned: boolean;
+}
+
 export interface OwnedHunk {
   hunk: Hunk;
   ownership: HunkOwnership;
@@ -48,6 +62,8 @@ export interface OwnedHunk {
   linesByActor: Record<string, number>;
   /** Non-trivial changed lines with no recorded owner. */
   unownedLines: number;
+  /** Per-operation ownership retained for provenance review. */
+  lines: OwnedLine[];
 }
 
 export interface FileModel {
@@ -614,18 +630,50 @@ function classifyHunk(
   let unowned = false;
   let unownedLines = 0;
   let conflicted = false;
+  const lines: OwnedLine[] = [];
+  let oldLine = hunk.oldStart;
+  let newLine = hunk.newStart;
 
   // A fresh keyer per hunk, started at the hunk's line offsets. Called on every
   // op (incl. eq/trivial) so the keys line up with what reconcile recorded.
   const keyOf = opKeyer(addLoc, delLoc, hunk.newStart, hunk.oldStart);
   for (const op of hunk.ops) {
     const key = keyOf(op);
-    if (op.type === "eq") continue;
+    const opOldLine = op.type === "add" ? null : oldLine;
+    const opNewLine = op.type === "del" ? null : newLine;
+    if (op.type !== "add") oldLine++;
+    if (op.type !== "del") newLine++;
+    if (op.type === "eq") {
+      lines.push({
+        type: op.type,
+        text: op.text,
+        key,
+        oldLineNumber: opOldLine,
+        newLineNumber: opNewLine,
+        actors: [],
+        conflicted: false,
+        unowned: false,
+      });
+      continue;
+    }
+    const map = op.type === "add" ? file?.added : file?.removed;
+    const owner = map?.[key!];
+    const lineActors = new Set<string>(owner ? [owner] : []);
+    const contenders = fileConflicts[key!] ?? [];
+    for (const actor of contenders) lineActors.add(actor);
+    lines.push({
+      type: op.type,
+      text: op.text,
+      key,
+      oldLineNumber: opOldLine,
+      newLineNumber: opNewLine,
+      actors: [...lineActors],
+      conflicted: contenders.length > 0,
+      unowned: lineActors.size === 0,
+    });
     // Trivial lines (braces, blanks) are neither owned nor counted as
     // unattributed — they ride along with the hunk's substantive changes.
     if (isTrivialLine(op.text)) continue;
-    const map = op.type === "add" ? file?.added : file?.removed;
-    const owner = map?.[key!];
     if (owner) {
       owners.add(owner);
       linesByActor[owner] = (linesByActor[owner] ?? 0) + 1;
@@ -663,6 +711,12 @@ function classifyHunk(
       // holder's", so line counts follow the same call the ownership label made.
       linesByActor[holder] = unownedLines;
       unownedLines = 0;
+      for (const line of lines) {
+        if (line.type !== "eq" && line.unowned) {
+          line.actors = [holder];
+          line.unowned = false;
+        }
+      }
     } else {
       ownership_ = "unclaimed";
     }
@@ -676,7 +730,7 @@ function classifyHunk(
     ownership_ === "shared"
       ? hunkOverlap(hunk, file, conflicted, opKeyer(addLoc, delLoc, hunk.newStart, hunk.oldStart))
       : undefined;
-  return { hunk, ownership: ownership_, actors, conflicted, overlap, linesByActor, unownedLines };
+  return { hunk, ownership: ownership_, actors, conflicted, overlap, linesByActor, unownedLines, lines };
 }
 
 /**

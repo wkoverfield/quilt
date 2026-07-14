@@ -6,6 +6,15 @@ All notable changes to Quilt are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Provenance review in `quilt ui`.** Expand any changed file to review its
+  `HEAD` to worktree diff with per-line actor attribution, multi-actor conflict
+  labels, and plainly marked unattributed lines. Claude Code and Codex actors
+  can also show the latest local user prompt before the captured edit. Prompt
+  text is read lazily from local transcripts, stays on the loopback-only
+  server, and is rendered as untrusted text.
+
 ### Fixed
 
 - Codex native `apply_patch` capture adopts the sole live whole-file or

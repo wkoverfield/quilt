@@ -86,6 +86,13 @@ test("ui: serves the dashboard page and a fleet JSON payload with per-file autho
     const byId = Object.fromEntries(f.actors.map((a: any) => [a.id, a.lines]));
     assert.ok(byId.codex >= 1, `codex should own lines, got ${JSON.stringify(f.actors)}`);
     assert.ok(byId.claude >= 1, `claude should own lines, got ${JSON.stringify(f.actors)}`);
+
+    const blameRes = await fetch(ui.url + "/api/blame?path=utils.js");
+    assert.equal(blameRes.status, 200);
+    const blame = await blameRes.json();
+    assert.equal(blame.path, "utils.js");
+    assert.equal(blame.binary, false);
+    assert.ok(blame.lines.some((line: any) => line.type === "add" && line.actors.length === 1));
   });
 });
 
@@ -108,6 +115,24 @@ test("ui: refuses non-loopback Host headers (DNS rebinding guard)", async () => 
     assert.equal(await status(ui.port, "evil.example.com"), 403);
     assert.equal(await status(ui.port, "localhost:9999"), 200);
     assert.equal(await status(ui.port, "127.0.0.1:" + ui.port), 200);
+    const blameStatus = (host: string) =>
+      new Promise<number>((resolvePromise, rejectPromise) => {
+        const req = request(
+          { host: "127.0.0.1", port: ui.port, path: "/api/blame?path=utils.js", headers: { host } },
+          (res) => { res.resume(); resolvePromise(res.statusCode ?? 0); },
+        );
+        req.on("error", rejectPromise);
+        req.end();
+      });
+    assert.equal(await blameStatus("evil.example.com"), 403);
+  });
+});
+
+test("ui: blame endpoint rejects paths outside the repository", async () => {
+  const dir = fixture();
+  await withServer(dir, async (ui) => {
+    assert.equal((await fetch(ui.url + "/api/blame?path=../etc/passwd")).status, 400);
+    assert.equal((await fetch(ui.url + "/api/blame?path=/etc/passwd")).status, 400);
   });
 });
 
