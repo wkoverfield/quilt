@@ -84,6 +84,26 @@ export function repoRoot(cwd: string): string | null {
   return res.stdout.trim() || null;
 }
 
+/** Is `relPath` ignored by git? Covers the repo's .gitignore, .git/info/exclude
+ * and the user's global excludesfile, so a user who already ignores agent config
+ * machine-wide is never told to ignore it again. */
+export function pathIsIgnored(cwd: string, relPath: string): boolean {
+  return git(["check-ignore", "-q", "--", relPath], { cwd, check: false }).status === 0;
+}
+
+/** Is `relPath` in the index? A tracked file is already part of the repo's
+ * committed surface, so writing to it exposes nothing new. */
+export function pathIsTracked(cwd: string, relPath: string): boolean {
+  return git(["ls-files", "--error-unmatch", "--", relPath], { cwd, check: false }).status === 0;
+}
+
+/** Does the repo have an `origin` remote? Gates the (slower) visibility probe:
+ * a repo with no remote can't be published, so there is nothing to look up. */
+export function hasOriginRemote(cwd: string): boolean {
+  const res = git(["remote", "get-url", "origin"], { cwd, check: false });
+  return res.status === 0 && res.stdout.trim() !== "";
+}
+
 /** Current HEAD commit SHA, or null on an unborn branch (no commits yet). */
 export function headSha(cwd: string): string | null {
   const res = git(["rev-parse", "HEAD"], { cwd, check: false });

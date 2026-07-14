@@ -4,9 +4,11 @@
 // Everything here is idempotent and non-destructive: existing config is parsed
 // and merged, never clobbered. If a file can't be safely merged (e.g. malformed
 // JSON), we leave it alone and tell the user what to add by hand.
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
+import { hasOriginRemote, pathIsIgnored, pathIsTracked } from "./git.js";
 
 /** The MCP server entry every agent in the fleet shares. */
 export const QUILT_SERVER = { command: "quilt", args: ["mcp"] } as const;
@@ -480,6 +482,8 @@ export interface SetupStep {
   detail: string;
   content?: string; // present when action !== skip
   path: string;
+  /** False when setup deliberately left an existing file untouched. */
+  wired?: boolean;
 }
 
 /** Compute the setup plan for a repo without writing anything. */
@@ -495,6 +499,7 @@ export function planSetup(root: string): SetupStep[] {
       action: "skip",
       detail: `left untouched (${mcp.error}) — add the "quilt" server by hand`,
       path: d.mcpJsonPath,
+      wired: false,
     });
   } else if (!mcp.changed) {
     steps.push({ file: ".mcp.json", action: "skip", detail: "quilt server already present", path: d.mcpJsonPath });
@@ -534,6 +539,7 @@ export function planSetup(root: string): SetupStep[] {
       action: "skip",
       detail: `left untouched (${hooks.error}) — add the quilt hooks by hand`,
       path: d.settingsPath,
+      wired: false,
     });
   } else if (!hooks.changed) {
     steps.push({ file: ".claude/settings.json", action: "skip", detail: "capture hooks already present", path: d.settingsPath });
@@ -558,6 +564,7 @@ export function planSetup(root: string): SetupStep[] {
         action: "skip",
         detail: `left untouched (${cursor.error}) — add the "quilt" server by hand`,
         path: d.cursorMcpPath,
+        wired: false,
       });
     } else if (!cursor.changed) {
       steps.push({ file: ".cursor/mcp.json", action: "skip", detail: "quilt server already present", path: d.cursorMcpPath });
@@ -602,6 +609,7 @@ export function planSetup(root: string): SetupStep[] {
         action: "skip",
         detail: `left untouched (${codex.error}) — add the quilt hooks by hand`,
         path: codexHooksPath(),
+        wired: false,
       });
     } else if (!codex.changed) {
       steps.push({ file: "~/.codex/hooks.json", action: "skip", detail: "capture hooks already present", path: codexHooksPath() });
@@ -629,4 +637,106 @@ export function applySetup(steps: SetupStep[]): SetupStep[] {
     written.push(step);
   }
   return written;
+}
+
+/**
+ * Which of a plan's files are NEW to git's view of the repo — untracked, and not
+ * matched by any ignore rule. These are the files a later `git add -A` would
+ * sweep into a commit purely because Quilt created them.
+ *
+ * A file that is already TRACKED is deliberately excluded: plenty of projects
+ * commit CLAUDE.md and .mcp.json on purpose, and appending Quilt's snippet to a
+ * file the repo already publishes exposes nothing that wasn't published already.
+ * A file already IGNORED is excluded for the same reason, which also covers the
+ * user whose global excludesfile handles agent config machine-wide.
+ *
+ * Paths outside the repo root (Codex's user-global ~/.codex/hooks.json) are
+ * invisible to git and never reported.
+ */
+export function newToGit(root: string, steps: SetupStep[]): SetupStep[] {
+  const rootPrefix = resolve(root) + sep;
+  return steps.filter((s) => {
+    // A malformed config can produce a skip step even though Quilt is not
+    // present in that file. Do not call it wired or hide it from git.
+    if (s.wired === false) return false;
+    // Files this run writes, AND files a previous run already wired (a "skip"
+    // step whose file is sitting on disk). The second case is the one that
+    // matters: a user who reads the warning and then runs `setup --gitignore`
+    // hits an already-wired repo, where every step is a skip. Judging exposure
+    // by what THIS run happens to write would no-op exactly when asked to help.
+    const onDisk = s.content !== undefined || existsSync(s.path);
+    if (!onDisk) return false;
+    if (!resolve(s.path).startsWith(rootPrefix)) return false;
+    return !pathIsTracked(root, s.file) && !pathIsIgnored(root, s.file);
+  });
+}
+
+export type RepoVisibility = "public" | "private" | null;
+
+/**
+ * The GitHub visibility of `origin`, or null when it can't be determined without
+ * bothering the user: no `gh`, not logged in, no origin remote, not a GitHub
+ * remote, or the call is slow. Null means "say the neutral thing" — a warning
+ * that only fires when we're SURE the repo is public would leave the common
+ * no-gh case silent, and one that assumes public would cry wolf on private work.
+ *
+ * Set QUILT_NO_GH=1 to skip the probe entirely.
+ */
+export function repoVisibility(root: string): RepoVisibility {
+  if (process.env.QUILT_NO_GH === "1") return null;
+  if (!hasOriginRemote(root)) return null;
+  const res = spawnSync("gh", ["repo", "view", "--json", "visibility", "-q", ".visibility"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 3000,
+  });
+  if (res.error || res.status !== 0) return null;
+  const v = res.stdout.trim().toLowerCase();
+  return v === "public" ? "public" : v === "private" || v === "internal" ? "private" : null;
+}
+
+/** Header written above the entries `quilt setup --gitignore` adds. */
+export const GITIGNORE_HEADER = "# Local agent config, wired by `quilt setup` (delete to commit and share it)";
+
+/**
+ * Append `entries` to a .gitignore, additively and idempotently. Entries already
+ * present as an exact line are normally left alone. Callers that already proved
+ * a path is not effectively ignored can append the rule at EOF, after any later
+ * negation. Re-running setup still stays idempotent because git then reports the
+ * path ignored before this function is called again.
+ */
+export function mergeGitignore(existing: string | null, entries: string[], appendAtEnd = false): MergeResult {
+  const base = existing ?? "";
+  const lines = new Set(base.split("\n").map((l) => l.trim()));
+  const missing = appendAtEnd ? [...new Set(entries)] : entries.filter((e) => !lines.has(e));
+  if (missing.length === 0) return { content: base, changed: false };
+  const sep = base === "" ? "" : base.endsWith("\n") ? "\n" : "\n\n";
+  return { content: base + sep + GITIGNORE_HEADER + "\n" + missing.join("\n") + "\n", changed: true };
+}
+
+/**
+ * The .gitignore step for `quilt setup --gitignore`: ignore exactly the files
+ * this run is introducing to git. Directory-shaped entries (`.claude/settings.json`
+ * lives under `.claude/`) are ignored by their full path, never by their parent
+ * directory — ignoring all of `.claude/` would silently swallow whatever else the
+ * user keeps there.
+ */
+export function planGitignore(root: string, exposed: SetupStep[]): SetupStep | null {
+  if (exposed.length === 0) return null;
+  const path = join(root, ".gitignore");
+  const existing = existsSync(path) ? safeRead(path) : null;
+  const entries = exposed.map((s) => "/" + s.file);
+  // `exposed` came from git check-ignore and is not effectively ignored. Append
+  // at EOF even if an identical earlier rule is cancelled by a later negation.
+  const merged = mergeGitignore(existing, entries, true);
+  if (!merged.changed) {
+    return { file: ".gitignore", action: "skip", detail: "already ignores the wired files", path };
+  }
+  return {
+    file: ".gitignore",
+    action: existing === null ? "create" : "update",
+    detail: `keep ${entries.join(", ")} out of git`,
+    content: merged.content,
+    path,
+  };
 }
