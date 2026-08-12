@@ -92,6 +92,40 @@ test("index-mutating git classifies, read-only git does not", () => {
   }
 });
 
+test("shell wrappers cannot smuggle mutating git past the classifier", () => {
+  assert.ok(classifyCommand('sh -c "git add ."'), "sh -c");
+  assert.ok(classifyCommand("bash -c 'git add -A && git commit -m x'"), "bash -c");
+  assert.ok(classifyCommand('bash -lc "git commit -m x"'), "combined -lc");
+  assert.ok(classifyCommand("git ls-files -z | xargs -0 git add"), "xargs");
+  assert.ok(classifyCommand("echo `git add .`"), "backtick substitution");
+  assert.equal(classifyCommand('sh -c "git status"'), null, "read-only stays read-only inside a wrapper");
+  assert.equal(classifyCommand("sh script.sh"), null, "a script path is not a -c string");
+});
+
+test("backslash-newline continuation does not hide the subcommand", () => {
+  assert.ok(classifyCommand("git \\\n  add -A"), "continuation before subcommand");
+  assert.ok(classifyCommand("git commit \\\n  -m 'long message'"), "continuation after subcommand");
+});
+
+test("stash is classified per subcommand", () => {
+  assert.equal(classifyCommand("git stash list"), null);
+  assert.equal(classifyCommand("git stash show -p"), null);
+  assert.equal(classifyTokens(["git", "stash"])?.destroysIndex, true);
+  assert.equal(classifyTokens(["git", "stash", "pop"])?.destroysIndex, true);
+  assert.equal(classifyTokens(["git", "stash", "drop"])?.destroysIndex, false);
+  assert.ok(classifyCommand("git stash clear"));
+});
+
+test("dry-run previews are not classified as mutations", () => {
+  assert.equal(classifyCommand("git add -n ."), null);
+  assert.equal(classifyCommand("git commit --dry-run"), null);
+  assert.equal(classifyCommand("git rm -rn f"), null);
+  // For commit, -n means --no-verify, not dry-run: still a real commit.
+  assert.ok(classifyCommand("git commit -n -m x"));
+  // -N (intent-to-add) writes the index: still a mutation.
+  assert.ok(classifyCommand("git add -N f"));
+});
+
 test("classification sees through compound commands, wrappers, and global options", () => {
   assert.ok(classifyCommand("cd sub && git add . && git commit -m x"));
   assert.ok(classifyCommand("GIT_TRACE=1 git add ."));
@@ -229,6 +263,53 @@ test("installPreCommitHook refuses when pre-commit.local is already taken", () =
   const res = installPreCommitHook(dir, false);
   assert.equal(res.action, "skip");
   assert.match(readFileSync(join(dir, ".git", "hooks", "pre-commit"), "utf8"), /echo theirs/);
+});
+
+test("core.hooksPath redirects installation to the effective hooks dir", () => {
+  const { dir, run } = newRepo();
+  const custom = join(dir, ".husky");
+  run(["config", "core.hooksPath", ".husky"]);
+  const res = installPreCommitHook(dir, false);
+  assert.equal(res.action, "create");
+  assert.ok(existsSync(join(custom, "pre-commit")), "shim lands where git will actually run it");
+  assert.ok(!existsSync(join(dir, ".git", "hooks", "pre-commit")), "nothing written to the ignored default dir");
+  assert.ok(preCommitInstalled(dir));
+  assert.ok(preCommitCurrent(dir));
+});
+
+test("a worktree checkout installs into the shared common hooks dir", () => {
+  const { dir, run } = newRepo();
+  const wt = join(dir, "..", "gitguard-wt-" + Date.now());
+  run(["worktree", "add", "-q", wt, "-b", "wt-branch"]);
+  try {
+    const res = installPreCommitHook(wt, false);
+    assert.equal(res.action, "create");
+    assert.ok(preCommitInstalled(wt), "the worktree sees the shim via the common dir");
+    assert.ok(existsSync(join(dir, ".git", "hooks", "pre-commit")), "hooks are shared at the main checkout's .git");
+  } finally {
+    spawnSync("git", ["worktree", "remove", "--force", wt], { cwd: dir });
+  }
+});
+
+test("concurrent snapshot appends do not lose entries", () => {
+  const { dir, store, run } = newRepo();
+  writeFileSync(join(dir, "s.txt"), "s\n");
+  run(["add", "s.txt"]);
+  for (let i = 0; i < 5; i++) recordIndexSnapshot(store, `burst-${i}`);
+  const contexts = readIndexSnapshots(store).map((s) => s.context);
+  for (let i = 0; i < 5; i++) assert.ok(contexts.includes(`burst-${i}`));
+});
+
+test("stagedActorSpan matches non-ASCII staged paths against ownership keys", () => {
+  const { dir, store, run } = newRepo();
+  const name = "café-ü.txt";
+  writeFileSync(join(dir, name), "accent\n");
+  writeFileSync(join(dir, "plain.txt"), "plain\n");
+  recordAuthorship(store, { actor: "actor-a", path: name, oldText: "", newText: "accent\n", whole: true });
+  recordAuthorship(store, { actor: "actor-b", path: "plain.txt", oldText: "", newText: "plain\n", whole: true });
+  run(["add", "-A"]);
+  const span = stagedActorSpan(store);
+  assert.deepEqual([...span.keys()].sort(), ["actor-a", "actor-b"], "quotePath must not hide the accented file");
 });
 
 test("a drifted quilt shim is reinstalled (content comparison, not the marker)", () => {

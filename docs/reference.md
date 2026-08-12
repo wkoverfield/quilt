@@ -133,14 +133,16 @@ keeps the raw path from racing it. Two layers:
 
 - **In agent sessions** (wired by `quilt setup` as a `Bash`-matcher hook in
   `.claude/settings.json`): index-mutating git commands (`add`, `commit`,
-  `reset`, `stash`, `rm`, `mv`, `update-index`, `read-tree`,
-  `restore --staged`, `apply --cached`, `checkout -- <paths>`) are denied
-  while two or more actors have uncommitted attributed work. With zero or one
+  `reset`, `stash` except `list`/`show`, `rm`, `mv`, `update-index`,
+  `read-tree`, `restore --staged`, `apply --cached`, `checkout -- <paths>`)
+  are denied while two or more actors have uncommitted attributed work,
+  including when wrapped in `sh -c`, `xargs`, or backticks. With zero or one
   such actor the command runs unguarded; before an allowed `reset`/`stash` the
-  index is snapshotted (see `quilt snapshots`). Read-only git and branch
-  switching are never touched.
-- **At commit time** (a `pre-commit` hook `quilt setup` installs and
-  re-verifies; re-clones wipe `.git/hooks`, so setup reinstalls it): a commit
+  index is snapshotted (see `quilt snapshots`). Read-only git, dry-run
+  previews, and branch switching are never touched.
+- **At commit time** (a `pre-commit` hook `quilt setup` installs into the
+  effective hooks directory, respecting `core.hooksPath` and worktrees, and
+  re-verifies on every run since re-clones wipe `.git/hooks`): a commit
   whose staged set spans two or more actors' lines is refused. This catches a
   `git add -A` sweep of a shared tree from any shell, agent or human. It
   cannot attribute the person committing, so a commit that contains exactly

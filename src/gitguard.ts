@@ -19,8 +19,8 @@
 //
 // Everything here fails open: a broken guard must never brick a shell or a
 // commit. Denials are loud; failures are silent allows.
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { foldedAuthorship } from "./authorship.js";
 import { changedPaths, git } from "./git.js";
 import type { Store } from "./state.js";
@@ -89,7 +89,10 @@ export function shellSegments(command: string): string[][] {
     const c = command[i];
     if (quote) {
       if (c === "\\" && quote === '"' && i + 1 < command.length) {
-        word += command[++i];
+        // Inside double quotes, backslash-newline is a line continuation and
+        // emits NOTHING (POSIX); any other escape emits the escaped character.
+        if (command[i + 1] !== "\n") word += command[i + 1];
+        i++;
       } else if (c === quote) {
         quote = null;
       } else {
@@ -105,6 +108,14 @@ export function shellSegments(command: string): string[][] {
       continue;
     }
     if (c === "\\" && i + 1 < command.length) {
+      // Backslash-newline is a line continuation: elide both characters, so
+      // `git \<newline> commit` still tokenizes as ["git", "commit"]. Routing
+      // it through the generic escape would glue the newline into the token
+      // and hide the subcommand from classification.
+      if (command[i + 1] === "\n") {
+        i++;
+        continue;
+      }
       word += command[++i];
       continue;
     }
@@ -114,9 +125,9 @@ export function shellSegments(command: string): string[][] {
       if ((c === "&" || c === "|") && command[i + 1] === c) i++;
       continue;
     }
-    if (c === "(" || c === ")") {
-      // Subshell delimiters: treat as segment boundaries so `(git add .)`
-      // still classifies.
+    if (c === "(" || c === ")" || c === "`") {
+      // Subshell and backtick-substitution delimiters: treat as segment
+      // boundaries so `(git add .)` and `` `git add .` `` still classify.
       endSegment();
       continue;
     }
@@ -144,10 +155,16 @@ export interface GitMutation {
 const GIT_GLOBAL_OPTS_WITH_ARG = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
 
 /** Subcommands that always write the shared index. */
-const ALWAYS_MUTATING = new Set(["add", "commit", "reset", "stash", "rm", "mv", "update-index", "read-tree"]);
+const ALWAYS_MUTATING = new Set(["add", "commit", "reset", "rm", "mv", "update-index", "read-tree"]);
 
 /** Subcommands whose allowed form can still destroy staged state. */
-const INDEX_DESTROYING = new Set(["reset", "stash", "read-tree"]);
+const INDEX_DESTROYING = new Set(["reset", "read-tree"]);
+
+/** stash subcommands that only read stash state. */
+const STASH_READ_ONLY = new Set(["list", "show"]);
+
+/** stash subcommands that delete stash entries without touching the index. */
+const STASH_DROPPING = new Set(["drop", "clear"]);
 
 /**
  * Classify one simple command's tokens. Returns the mutation when this is an
@@ -164,12 +181,33 @@ export function classifyTokens(tokens: string[]): GitMutation | null {
   // Skip leading env assignments (FOO=bar git ...) and benign wrappers.
   while (i < tokens.length) {
     const t = tokens[i] ?? "";
-    if (!(/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) || t === "env" || t === "command" || t === "nohup")) break;
+    if (!(/^[A-Za-z_][A-Za-z0-9_]*=/.test(t) || t === "env" || t === "command" || t === "nohup" || t === "time" || t === "sudo")) break;
     i++;
   }
   const head = tokens[i];
   if (head === undefined) return null;
   const base = head.replace(/\\/g, "/").split("/").pop() ?? head;
+  // A shell wrapper carrying a command string: `sh -c "git add ."`. The whole
+  // quoted command is one token; classify it recursively so wrapping git in a
+  // subshell doesn't slip past the guard.
+  if (base === "sh" || base === "bash" || base === "zsh" || base === "dash") {
+    for (let j = i + 1; j < tokens.length; j++) {
+      const t = tokens[j] ?? "";
+      if (/^-[a-zA-Z]*c$/.test(t)) {
+        const inner = tokens[j + 1];
+        return inner === undefined ? null : classifyCommand(inner);
+      }
+      if (!t.startsWith("-")) break; // a script path, not a -c string
+    }
+    return null;
+  }
+  // `xargs [flags] git ...`: skip xargs and its leading flags, classify what
+  // it would run.
+  if (base === "xargs") {
+    let j = i + 1;
+    while (j < tokens.length && (tokens[j] ?? "").startsWith("-")) j++;
+    return classifyTokens(tokens.slice(j));
+  }
   if (base !== "git") return null;
   i++;
   // Skip git's global options to find the subcommand.
@@ -182,10 +220,23 @@ export function classifyTokens(tokens: string[]): GitMutation | null {
   const sub = tokens[i];
   if (sub === undefined) return null;
   const rest = tokens.slice(i + 1);
+  if (sub === "stash") {
+    // Granular: `stash list`/`show` only read; `drop`/`clear` delete stash
+    // entries (another actor's parked work) without touching the index;
+    // everything else (push/pop/apply/save/branch/bare) rewrites the index.
+    const stashSub = rest[0] ?? "";
+    if (STASH_READ_ONLY.has(stashSub)) return null;
+    if (STASH_DROPPING.has(stashSub)) return { sub: `stash ${stashSub}`, destroysIndex: false };
+    return { sub: stashSub ? `stash ${stashSub}` : "stash", destroysIndex: true };
+  }
   if (ALWAYS_MUTATING.has(sub)) {
+    // Dry-run previews write nothing. `-n` means dry-run for add/rm/mv, but
+    // for commit it is --no-verify, so only the long flag exempts commit.
+    if (rest.includes("--dry-run")) return null;
+    if (sub !== "commit" && rest.some((t) => /^-[a-zA-Z]*n/.test(t))) return null;
     return { sub, destroysIndex: INDEX_DESTROYING.has(sub) };
   }
-  if (sub === "restore" && rest.some((t) => t === "--staged" || t === "-S" || /^-[a-zA-Z]*S/.test(t))) {
+  if (sub === "restore" && rest.some((t) => t === "--staged" || /^-[a-zA-Z]*S/.test(t))) {
     return { sub: "restore --staged", destroysIndex: true };
   }
   if (sub === "apply" && rest.some((t) => t === "--cached" || t === "--index")) {
@@ -283,20 +334,27 @@ export function recordIndexSnapshot(store: Store, context: string): string | nul
     if (!tree) return null;
     const entry: IndexSnapshot = { ts: new Date().toISOString(), tree, context };
     const p = snapshotsPath(store);
-    let lines: string[] = [];
-    if (existsSync(p)) {
-      lines = readFileSync(p, "utf8").split("\n").filter(Boolean);
+    // Append-only: concurrent hooks (the exact multi-actor scenario this guard
+    // exists for) must never lose each other's entries to a read-modify-write.
+    // The ring bound is enforced on read; the file is compacted only when it
+    // grows well past the ring, where losing a concurrent OLD entry is
+    // harmless because only the newest SNAPSHOT_RING entries are ever served.
+    appendFileSync(p, JSON.stringify(entry) + "\n");
+    try {
+      const lines = readFileSync(p, "utf8").split("\n").filter(Boolean);
+      if (lines.length > SNAPSHOT_RING * 5) {
+        writeFileSync(p, lines.slice(lines.length - SNAPSHOT_RING).join("\n") + "\n");
+      }
+    } catch {
+      /* compaction is best-effort */
     }
-    lines.push(JSON.stringify(entry));
-    if (lines.length > SNAPSHOT_RING) lines = lines.slice(lines.length - SNAPSHOT_RING);
-    writeFileSync(p, lines.join("\n") + "\n");
     return tree;
   } catch {
     return null;
   }
 }
 
-/** The recorded snapshots, oldest first. Unparseable lines are skipped. */
+/** The newest SNAPSHOT_RING snapshots, oldest first. Unparseable lines are skipped. */
 export function readIndexSnapshots(store: Store): IndexSnapshot[] {
   const p = snapshotsPath(store);
   if (!existsSync(p)) return [];
@@ -310,7 +368,7 @@ export function readIndexSnapshots(store: Store): IndexSnapshot[] {
       /* skip */
     }
   }
-  return out;
+  return out.slice(Math.max(0, out.length - SNAPSHOT_RING));
 }
 
 // ---------------------------------------------------------------------------
@@ -334,12 +392,14 @@ export const REFUSAL_EXIT = 65;
  * commit time.
  */
 export function stagedActorSpan(store: Store): Map<string, string[]> {
-  const res = git(["diff", "--cached", "--name-only", "--no-renames"], {
+  // -z: NUL-delimited, so non-ASCII paths come back verbatim instead of
+  // C-quoted and actually match the plain-text keys in ownership/authorship.
+  const res = git(["diff", "--cached", "--name-only", "--no-renames", "-z"], {
     cwd: store.paths.repoRoot,
     check: false,
   });
   if (res.status !== 0) return new Map();
-  const staged = new Set(res.stdout.split("\n").map((l) => l.trim()).filter(Boolean));
+  const staged = new Set(res.stdout.split("\0").filter(Boolean));
   if (staged.size === 0) return new Map();
   const byActor = new Map<string, Set<string>>();
   const add = (actor: string, path: string) => {
@@ -378,6 +438,19 @@ export function preCommitRefusal(span: Map<string, string[]>): string {
 // Pre-commit hook installation
 // ---------------------------------------------------------------------------
 
+/**
+ * The directory git will actually consult for hooks. `--git-path hooks`
+ * resolves both `core.hooksPath` (husky, lefthook, pre-commit framework) and
+ * worktrees (where `.git` is a file, not a directory) — installing to a
+ * hardcoded `.git/hooks` in either case would report success while git never
+ * runs the shim. Falls back to `.git/hooks` only if git itself is unrunnable.
+ */
+export function hooksDirFor(root: string): string {
+  const res = git(["rev-parse", "--git-path", "hooks"], { cwd: root, check: false });
+  const p = res.status === 0 ? res.stdout.trim() : "";
+  return p ? resolve(root, p) : join(root, ".git", "hooks");
+}
+
 /** Marker identifying the shim as Quilt's; bump the version to force reinstall. */
 export const PRE_COMMIT_MARKER = "# quilt pre-commit shim v1";
 
@@ -414,9 +487,9 @@ export interface PreCommitInstallResult {
   detail: string;
 }
 
-/** Is Quilt's shim (any version) present at `.git/hooks/pre-commit`? */
+/** Is Quilt's shim (any version) present at the effective pre-commit hook? */
 export function preCommitInstalled(root: string): boolean {
-  const p = join(root, ".git", "hooks", "pre-commit");
+  const p = join(hooksDirFor(root), "pre-commit");
   if (!existsSync(p)) return false;
   try {
     return readFileSync(p, "utf8").includes("quilt pre-commit shim");
@@ -428,7 +501,7 @@ export function preCommitInstalled(root: string): boolean {
 /** Is the CURRENT shim installed? Compares content, not the marker, so any
  * shim change redeploys on the next `quilt setup` without a marker bump. */
 export function preCommitCurrent(root: string): boolean {
-  const p = join(root, ".git", "hooks", "pre-commit");
+  const p = join(hooksDirFor(root), "pre-commit");
   if (!existsSync(p)) return false;
   try {
     return readFileSync(p, "utf8") === PRE_COMMIT_SHIM;
@@ -444,7 +517,7 @@ export function preCommitCurrent(root: string): boolean {
  * result says so. Idempotent: a current shim is a skip.
  */
 export function installPreCommitHook(root: string, dryRun: boolean): PreCommitInstallResult {
-  const hooksDir = join(root, ".git", "hooks");
+  const hooksDir = hooksDirFor(root);
   const hookPath = join(hooksDir, "pre-commit");
   const chainedPath = join(hooksDir, CHAINED_HOOK_NAME);
   const exists = existsSync(hookPath);

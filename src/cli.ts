@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
 import { changedPaths, repoRoot, shortHead, headSha, pathIsTracked } from "./git.js";
@@ -36,6 +36,7 @@ import {
   PASSTHROUGH_ENV,
   REFUSAL_EXIT,
   classifyCommand,
+  hooksDirFor,
   classifyTokens,
   denyReason,
   dirtyActors,
@@ -414,7 +415,8 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
       tracked.push(...choice.tracked);
       for (const s of planned) printSetupStep(s, true);
       const prePlanned = installPreCommitHook(childRoot, true);
-      printSetupStep({ file: ".git/hooks/pre-commit", action: prePlanned.action, detail: prePlanned.detail, path: join(childRoot, ".git", "hooks", "pre-commit") }, true);
+      const prePath = join(hooksDirFor(childRoot), "pre-commit");
+      printSetupStep({ file: relative(childRoot, prePath), action: prePlanned.action, detail: prePlanned.detail, path: prePath }, true);
       continue;
     }
     if (initNeeded) {
@@ -428,7 +430,8 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
     applySetupAttributed(childRoot, childSteps);
     for (const s of childSteps) printSetupStep(s, false);
     const preDone = installPreCommitHook(childRoot, false);
-    printSetupStep({ file: ".git/hooks/pre-commit", action: preDone.action, detail: preDone.detail, path: join(childRoot, ".git", "hooks", "pre-commit") }, false);
+    const preDonePath = join(hooksDirFor(childRoot), "pre-commit");
+    printSetupStep({ file: relative(childRoot, preDonePath), action: preDone.action, detail: preDone.detail, path: preDonePath }, false);
     written.push(...childSteps);
   }
 
@@ -679,11 +682,12 @@ program
     // The pre-commit guard lives in .git/hooks — invisible to git, so it is
     // planned outside the exposure/gitignore accounting above.
     const preCommitPlanned = installPreCommitHook(root, true);
+    const preCommitHookPath = join(hooksDirFor(root), "pre-commit");
     const preCommitStep = (r: { action: SetupStep["action"]; detail: string }): SetupStep => ({
-      file: ".git/hooks/pre-commit",
+      file: relative(root, preCommitHookPath),
       action: r.action,
       detail: r.detail,
-      path: join(root, ".git", "hooks", "pre-commit"),
+      path: preCommitHookPath,
     });
     const willChange = steps.some((s) => s.action !== "skip") || preCommitPlanned.action !== "skip";
 

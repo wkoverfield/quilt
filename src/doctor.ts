@@ -7,8 +7,9 @@
 // many edits have actually been captured. "0 edits recorded despite uncommitted
 // changes" is the tell that capture isn't flowing.
 import { spawn } from "node:child_process";
+import { relative } from "node:path";
 import { detect, codexHooksTrusted } from "./onboard.js";
-import { preCommitCurrent, preCommitInstalled } from "./gitguard.js";
+import { hooksDirFor, preCommitCurrent, preCommitInstalled } from "./gitguard.js";
 import { readAuthorship, readCheckpoint } from "./authorship.js";
 import { watcherRunning } from "./watch.js";
 import { changedPaths, gitVersionString } from "./git.js";
@@ -213,9 +214,10 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
           hint: "run `quilt setup` — without it, raw `git add/commit/reset` can race other actors' staging",
         },
   );
+  const hooksRel = relative(root, hooksDirFor(root)) || ".git/hooks";
   checks.push(
     preCommitCurrent(root)
-      ? { label: "Pre-commit guard", status: "ok", detail: "quilt shim in .git/hooks/pre-commit" }
+      ? { label: "Pre-commit guard", status: "ok", detail: `quilt shim in ${hooksRel}/pre-commit` }
       : preCommitInstalled(root)
         ? {
             label: "Pre-commit guard",
