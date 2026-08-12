@@ -8,6 +8,7 @@ import { Store } from "../src/state.js";
 import { initSymbols } from "../src/symbols.js";
 import { applyAndRecordEdit } from "../src/authorship.js";
 import { mergeHookSettings } from "../src/onboard.js";
+import { installPreCommitHook } from "../src/gitguard.js";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { diagnose, parseGitVersion, probeMcpServer, type DoctorReport } from "../src/doctor.js";
@@ -107,11 +108,27 @@ test("doctor is healthy when wired, identified, and capturing", () => {
   writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { quilt: { command: "quilt", args: ["mcp"] } } }));
   mkdirSync(join(dir, ".claude"), { recursive: true });
   writeFileSync(join(dir, ".claude", "settings.json"), mergeHookSettings(null).content);
+  installPreCommitHook(dir, false);
   try {
     applyAndRecordEdit(s, { actor: "alpha", path: "m.js", oldString: "x", newString: "y" });
     const r = diagnose(s, { actorEnv: "alpha" });
     assert.equal(r.verdict, "healthy");
     assert.equal(r.captureCount, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("doctor warns when the raw-git guard and pre-commit guard are missing", () => {
+  const dir = gitRepo();
+  const s = initStore(dir);
+  try {
+    const r = diagnose(s, {});
+    assert.equal(check(r, "Raw-git guard")?.status, "warn");
+    assert.equal(check(r, "Pre-commit guard")?.status, "warn");
+    installPreCommitHook(dir, false);
+    const r2 = diagnose(s, {});
+    assert.equal(check(r2, "Pre-commit guard")?.status, "ok");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

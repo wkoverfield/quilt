@@ -8,6 +8,7 @@
 // changes" is the tell that capture isn't flowing.
 import { spawn } from "node:child_process";
 import { detect, codexHooksTrusted } from "./onboard.js";
+import { preCommitCurrent, preCommitInstalled } from "./gitguard.js";
 import { readAuthorship, readCheckpoint } from "./authorship.js";
 import { watcherRunning } from "./watch.js";
 import { changedPaths, gitVersionString } from "./git.js";
@@ -197,6 +198,37 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
           detail: "not installed",
           hint: "run `quilt setup` — without them, native edits aren't captured",
         },
+  );
+
+  // The raw-git guard: without it, any agent's `git add/commit/reset` operates
+  // on the shared index across every actor's staging. Two layers, checked
+  // separately so a re-clone (which wipes .git/hooks) is called out precisely.
+  checks.push(
+    d.bashGuardWired
+      ? { label: "Raw-git guard", status: "ok", detail: "Bash hook in .claude/settings.json" }
+      : {
+          label: "Raw-git guard",
+          status: "warn",
+          detail: "not installed",
+          hint: "run `quilt setup` — without it, raw `git add/commit/reset` can race other actors' staging",
+        },
+  );
+  checks.push(
+    preCommitCurrent(root)
+      ? { label: "Pre-commit guard", status: "ok", detail: "quilt shim in .git/hooks/pre-commit" }
+      : preCommitInstalled(root)
+        ? {
+            label: "Pre-commit guard",
+            status: "warn",
+            detail: "an older quilt shim is installed",
+            hint: "run `quilt setup` — it updates the shim in place",
+          }
+        : {
+            label: "Pre-commit guard",
+            status: "warn",
+            detail: "not installed (re-clones wipe .git/hooks)",
+            hint: "run `quilt setup` — without it, a `git add -A` sweep can commit several actors' work under one message",
+          },
   );
 
   // Codex: the wiring lives user-globally and Codex SILENTLY SKIPS a newly

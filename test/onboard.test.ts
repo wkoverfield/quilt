@@ -14,6 +14,7 @@ import {
   mergeGitignore,
   newToGit,
   COORDINATION_MARKER,
+  HOOK_BASH_COMMAND,
   HOOK_PRE_COMMAND,
   HOOK_POST_COMMAND,
 } from "../src/onboard.js";
@@ -120,13 +121,15 @@ test("detect reports the orchestrator and wiring state", () => {
 
 // --- mergeHookSettings ---
 
-test("mergeHookSettings creates settings with both capture hooks", () => {
+test("mergeHookSettings creates settings with the capture hooks and the git guard", () => {
   const r = mergeHookSettings(null);
   assert.equal(r.changed, true);
   const parsed = JSON.parse(r.content);
   assert.equal(parsed.hooks.PreToolUse[0].hooks[0].command, HOOK_PRE_COMMAND);
   assert.equal(parsed.hooks.PreToolUse[0].matcher, "Edit|Write|MultiEdit");
   assert.equal(parsed.hooks.PostToolUse[0].hooks[0].command, HOOK_POST_COMMAND);
+  const guard = parsed.hooks.PreToolUse.find((g: { matcher: string }) => g.matcher === "Bash");
+  assert.equal(guard.hooks[0].command, HOOK_BASH_COMMAND);
 });
 
 test("mergeHookSettings preserves existing unrelated settings and hooks", () => {
@@ -138,8 +141,13 @@ test("mergeHookSettings preserves existing unrelated settings and hooks", () => 
   assert.equal(r.changed, true);
   const parsed = JSON.parse(r.content);
   assert.deepEqual(parsed.permissions.allow, ["Bash"], "unrelated settings kept");
-  assert.equal(parsed.hooks.PreToolUse.length, 2, "existing Bash hook kept, quilt appended");
+  assert.equal(parsed.hooks.PreToolUse.length, 3, "existing Bash hook kept, quilt edit + guard groups appended");
+  assert.ok(
+    parsed.hooks.PreToolUse.some((g: { hooks: { command: string }[] }) => g.hooks[0].command === "audit.sh"),
+    "the pre-existing Bash matcher group survives alongside the quilt guard's own Bash group",
+  );
   assert.ok(parsed.hooks.PreToolUse.some((g: { hooks: { command: string }[] }) => g.hooks[0].command === HOOK_PRE_COMMAND));
+  assert.ok(parsed.hooks.PreToolUse.some((g: { hooks: { command: string }[] }) => g.hooks[0].command === HOOK_BASH_COMMAND));
 });
 
 test("mergeHookSettings is a no-op when the quilt hooks are already present", () => {
