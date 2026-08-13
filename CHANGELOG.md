@@ -8,6 +8,30 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **The raw-git guard.** The git index is one shared file per checkout, so raw
+  `git add`/`git commit`/`git reset` from any actor operates on every other
+  actor's staging: staged work could be committed under the wrong message or
+  silently discarded, and nothing intercepted it. Now `quilt setup` wires a
+  `Bash`-matcher hook that denies index-mutating git in agent sessions while
+  two or more actors have uncommitted attributed work (a solo actor is never
+  blocked), and installs a `pre-commit` hook that refuses a staged set
+  spanning multiple actors' lines from any shell. Both layers fail open when
+  `quilt` is missing or outdated, a pre-existing pre-commit hook is preserved
+  and chained, and `quilt doctor` checks both wirings.
+- **`quilt git -- <args>`.** The deliberate escape hatch through the guard:
+  records a ledger event, snapshots the index when the command can destroy
+  staged state, then runs system git verbatim. Allowed `reset`/`stash` in a
+  solo-actor checkout are snapshotted the same way; `quilt snapshots` lists
+  the ring, and `git read-tree <tree>` restores a staging selection.
+- **Dark-capture detection.** The guard's dirty-actor census counts
+  attributed work, and bash-mediated writes are only attributed when the
+  files were claimed first, so a busy multi-agent checkout can look
+  single-actor to the guard. Instead of standing down silently, the guard
+  now warns (and records a ledger event) when it allows a mutating git
+  command in a checkout with multiple registered actors, a dirty tree, and
+  zero attribution, and `quilt doctor` reports the same condition as
+  "Attribution coverage".
+
 - **`quilt setup --gitignore`.** Keeps newly untracked config files Quilt wires
   in out of git. Entries are added per file, so ignoring
   `.claude/settings.json` never swallows the rest of a `.claude/` directory.

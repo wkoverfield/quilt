@@ -9,7 +9,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | Command | Purpose |
 | --- | --- |
 | `quilt init` | Initialize `.quilt/` in the repo. |
-| `quilt setup [--dry-run] [--gitignore]` | Wire Quilt into the repo's orchestrator (or, run from a non-repo directory that contains repos, wire that whole workspace: hooks + snippet at the root, full wiring in each child repo): the shared MCP server in `.mcp.json` (and `.cursor/mcp.json` when a `.cursor/` dir exists), the coordination snippet in `CLAUDE.md` (and an existing `AGENTS.md`), and the native-edit capture hooks in `.claude/settings.json` (idempotent). Setup then lists any of these files that git neither tracks nor ignores, since a later `git add -A` would sweep them into a commit; it says so more loudly when `gh` reports the repo public. Commit them to share the wiring (the default), or pass `--gitignore` to ignore newly untracked config. Existing tracked config remains tracked, and setup names any tracked files it changes. |
+| `quilt setup [--dry-run] [--gitignore]` | Wire Quilt into the repo's orchestrator (or, run from a non-repo directory that contains repos, wire that whole workspace: hooks + snippet at the root, full wiring in each child repo): the shared MCP server in `.mcp.json` (and `.cursor/mcp.json` when a `.cursor/` dir exists), the coordination snippet in `CLAUDE.md` (and an existing `AGENTS.md`), the native-edit capture hooks and the raw-git guard in `.claude/settings.json`, and the pre-commit guard in `.git/hooks/pre-commit` (all idempotent; the pre-commit hook is re-verified every run since re-clones wipe `.git/hooks`). Setup then lists any of these files that git neither tracks nor ignores, since a later `git add -A` would sweep them into a commit; it says so more loudly when `gh` reports the repo public. Commit them to share the wiring (the default), or pass `--gitignore` to ignore newly untracked config. Existing tracked config remains tracked, and setup names any tracked files it changes. |
 | `quilt config author.email [email]` | Read or set the repository-default Git author email. Actor names remain distinct. |
 | `quilt start --actor <id> [--type human\|agent\|bot] [--name <n>] [--email <e>]` | Start a session for an actor. Optional — agents are auto-named per session/connection, and `QUILT_ACTOR=<id>` pins a stable id without a session. Scopes only the CLI commands run in your terminal; it never binds other agents' captured edits (the pointer is checkout-global, capture identity is per-edit). |
 | `quilt watch` | Watch the tree: attribute edits live and catch collisions. |
@@ -27,6 +27,8 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt provenance [commit] [--json]` | Read the portable, versioned Quilt provenance embedded in a commit. Defaults to `HEAD` and works without local `.quilt/` state. |
 | `quilt claim [targets...] [--json] [--creating] [--wait [s]] [--queue]` | Reserve files (`src/auth.ts`), directories (`convex/_generated/`), or symbols (`file#symbol`) for editing, BEFORE you edit; the claim is what binds external edits to you. A symbol missing from the file is denied unless `--creating` (you are about to add it). `--wait` blocks until denied targets free up; `--queue` is the async alternative: register interest, return now, get auto-granted when it frees (surfaced in `quilt status` as "granted while you waited"). With no targets, lists claims. A conflicting claim whose holder shows no sign of life for 5+ minutes (or whose session ended) and has no uncommitted work in the target is reclaimed automatically; the grant reports `reclaimedFrom`. |
 | `quilt release [paths...]` | Release your claims (all of yours if no paths). Also cancels your queued interest in the released targets. |
+| `quilt git -- <args>` | Run raw git deliberately in a guarded checkout: records a ledger event, snapshots the index first when the command can destroy staged state (reset, stash, read-tree, `checkout -- <paths>`), then executes system git verbatim with the pre-commit guard stood down. Exit code mirrors git's. |
+| `quilt snapshots` | List index snapshots taken before destructive git commands. Each is a real tree object; `git read-tree <tree>` restores that staging selection without touching worktree files. |
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? Also checks the installed version against npm (cached daily, silent offline), the system git (2.18+ needed), and live-tests that the wired MCP server starts and lists its tools. |
 | `quilt update [--check]` | Update to the latest published version. Detects how Quilt was installed (npm/pnpm/bun) and runs the right command, or prints it when the installer can't be detected confidently. `--check` only reports (non-zero exit when behind). |
@@ -119,6 +121,57 @@ The same warnings appear in `quilt status` and in the `claim` and `get_conflicts
 MCP responses as `dependencyWarnings`. (v1 is advisory and name-based, including
 across files; import-resolution is a future refinement.)
 
+## The raw-git guard
+
+The git index (`.git/index`, the staging area) is one shared file per checkout.
+Every `git add`, `git reset`, and `git commit` operates on it regardless of
+which actor runs the command, so with several actors working, raw staging can
+commit one actor's staged files under another actor's message, or silently
+discard a staging selection. `quilt commit --mine` never touches the shared
+index (it builds each commit in a private temporary index), and the guard
+keeps the raw path from racing it. Two layers:
+
+- **In agent sessions** (wired by `quilt setup` as a `Bash`-matcher hook in
+  `.claude/settings.json`): index-mutating git commands (`add`, `commit`,
+  `reset`, `stash` except `list`/`show`, `rm`, `mv`, `update-index`,
+  `read-tree`, `restore --staged`, `apply --cached`, `checkout -- <paths>`)
+  are denied while two or more actors have uncommitted attributed work,
+  including when wrapped in `sh -c`, `xargs`, or backticks. With zero or one
+  such actor the command runs unguarded; before an allowed `reset`/`stash` the
+  index is snapshotted (see `quilt snapshots`). Read-only git, dry-run
+  previews, and branch switching are never touched.
+- **At commit time** (a `pre-commit` hook `quilt setup` installs into the
+  effective hooks directory, respecting `core.hooksPath` and worktrees, and
+  re-verifies on every run since re-clones wipe `.git/hooks`): a commit
+  whose staged set spans two or more actors' lines is refused. This catches a
+  `git add -A` sweep of a shared tree from any shell, agent or human. It
+  cannot attribute the person committing, so a commit that contains exactly
+  one actor's staged work always passes here; only the session-level guard
+  can see who is acting. A pre-existing `pre-commit` hook is preserved as
+  `pre-commit.local` and still runs after the check passes.
+
+Two limits, stated plainly because assuming otherwise is how staged work gets
+lost:
+
+- **Pure theft is stopped only by the session-level layer.** The canonical
+  race is a bare `git commit` that ships another actor's already-staged tree
+  under the committer's message. That staged set belongs to exactly one
+  actor, so the pre-commit check passes it; only the session hook, which
+  knows who is acting, refuses it. The pre-commit layer exists for the
+  sweep case, not this one.
+- **The dirty-actor census counts attributed work.** Attribution is
+  edit-time: writes made through bash (heredocs, `sed`, `patch`, codegen
+  scripts) are captured only when the files were claimed first. A checkout
+  can hold several actors' unattributed work and the census will see fewer
+  than two actors. The guard does not stand down silently in that state: it
+  warns when the tree is dirty, multiple actors are registered, and nothing
+  is attributed, and `quilt doctor` reports the same condition as
+  "Attribution coverage".
+
+Both layers fail open: if `quilt` is missing from `PATH`, or is an older
+version, commands and commits proceed rather than break. The deliberate
+override for both layers is `quilt git -- <args>`.
+
 ## How attribution works
 
 Quilt is conservative: a blocked commit beats a wrong one.
@@ -162,6 +215,7 @@ repos on Windows aren't handled yet.
   snapshots/                  # preserved pre-clobber file content
   watcher.pid                 # pidfile for a running `quilt watch`
   ledger.jsonl                # append-only event log (sessions, claims, clobbers)
+  index-snapshots.jsonl       # write-tree snapshots taken before destructive git commands
   authorship.log              # captured edits: who authored which lines
   authorship.checkpoint.json  # compacted fold of old authorship events
   hooks/                      # pre/post hook snapshots (pre-edit file content)

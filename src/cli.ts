@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import pc from "picocolors";
 import { Store } from "./state.js";
 import { changedPaths, repoRoot, shortHead, headSha, pathIsTracked } from "./git.js";
@@ -32,6 +32,25 @@ import { runMcpServer } from "./mcp.js";
 import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
 import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, parseCodexHookInput, codexActorId, runCodexHookPre, runCodexHookPost, type CodexHookInput } from "./hooks.js";
+import {
+  PASSTHROUGH_ENV,
+  REFUSAL_EXIT,
+  attributionCoverage,
+  captureLooksDark,
+  classifyCommand,
+  darkCaptureWarning,
+  hooksDirFor,
+  classifyTokens,
+  denyReason,
+  dirtyActors,
+  installPreCommitHook,
+  logGuardEvent,
+  parseBashHookInput,
+  preCommitRefusal,
+  readIndexSnapshots,
+  recordIndexSnapshot,
+  stagedActorSpan,
+} from "./gitguard.js";
 import {
   detect,
   planSetup,
@@ -338,7 +357,7 @@ function planWorkspaceRoot(wsRoot: string): SetupStep[] {
     steps.push({
       file: ".claude/settings.json",
       action: settingsExisting !== null ? "update" : "create",
-      detail: "add the Edit/Write capture hooks (loads for sessions started here)",
+      detail: "add the capture hooks and raw-git guard (loads for sessions started here)",
       content: hooks.content,
       path: settingsPath,
     });
@@ -398,6 +417,9 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
       exposed.push(...choice.exposed);
       tracked.push(...choice.tracked);
       for (const s of planned) printSetupStep(s, true);
+      const prePlanned = installPreCommitHook(childRoot, true);
+      const prePath = join(hooksDirFor(childRoot), "pre-commit");
+      printSetupStep({ file: relative(childRoot, prePath), action: prePlanned.action, detail: prePlanned.detail, path: prePath }, true);
       continue;
     }
     if (initNeeded) {
@@ -410,6 +432,9 @@ async function workspaceSetup(wsRoot: string, children: string[], dryRun: boolea
     tracked.push(...choice.tracked);
     applySetupAttributed(childRoot, childSteps);
     for (const s of childSteps) printSetupStep(s, false);
+    const preDone = installPreCommitHook(childRoot, false);
+    const preDonePath = join(hooksDirFor(childRoot), "pre-commit");
+    printSetupStep({ file: relative(childRoot, preDonePath), action: preDone.action, detail: preDone.detail, path: preDonePath }, false);
     written.push(...childSteps);
   }
 
@@ -657,7 +682,17 @@ program
     if (gitignore && steps.length === stepCount && gitChoice.tracked.length === 0) {
       process.stdout.write(pc.dim("Nothing to ignore — git already tracks or ignores the wired files.\n"));
     }
-    const willChange = steps.some((s) => s.action !== "skip");
+    // The pre-commit guard lives in .git/hooks — invisible to git, so it is
+    // planned outside the exposure/gitignore accounting above.
+    const preCommitPlanned = installPreCommitHook(root, true);
+    const preCommitHookPath = join(hooksDirFor(root), "pre-commit");
+    const preCommitStep = (r: { action: SetupStep["action"]; detail: string }): SetupStep => ({
+      file: relative(root, preCommitHookPath),
+      action: r.action,
+      detail: r.detail,
+      path: preCommitHookPath,
+    });
+    const willChange = steps.some((s) => s.action !== "skip") || preCommitPlanned.action !== "skip";
 
     if (d.orchestrator) {
       process.stdout.write(pc.dim(`Detected ${d.orchestrator}.\n`));
@@ -672,6 +707,7 @@ program
         process.stdout.write(pc.cyan("  would ") + "initialize Quilt (.quilt/)\n");
       }
       for (const s of steps) printSetupStep(s, true);
+      printSetupStep(preCommitStep(preCommitPlanned), true);
       if (exposed.length > 0) printExposureNotice(exposed, repoVisibility(root));
       printTrackedConfigNotice(gitChoice.tracked, true);
       process.stdout.write(
@@ -683,9 +719,11 @@ program
     const written = applySetupAttributed(root, steps);
     if (initNeeded) process.stdout.write(pc.green("✓ ") + "initialized Quilt (.quilt/)\n");
     for (const s of steps) printSetupStep(s, false);
+    const preCommitDone = installPreCommitHook(root, false);
+    printSetupStep(preCommitStep(preCommitDone), false);
     printTrackedConfigNotice(gitChoice.tracked, false);
 
-    if (written.length === 0 && !initNeeded) {
+    if (written.length === 0 && !initNeeded && preCommitDone.action === "skip") {
       process.stdout.write("\n" + pc.green("✓ ") + "Already wired up. Your fleet is ready.\n");
     } else {
       process.stdout.write(
@@ -1882,6 +1920,170 @@ program
     process.exit(0);
   });
 
+/**
+ * PreToolUse guard for the Bash tool. Fires on every Bash call in a wired
+ * session, so the order is strictly cheapest-first: classify the command text
+ * before touching git or the store, and only an index-mutating git invocation
+ * pays for the dirty-actor census. Denies only when 2+ actors have dirty
+ * attributed work — a solo actor's raw git endangers nobody else's staging.
+ * Fail-open like every quilt hook: an internal error must allow the command.
+ */
+async function runBashGuard(): Promise<void> {
+  try {
+    const raw = JSON.parse(await readStdin());
+    const input = parseBashHookInput(raw);
+    if (!input) return void process.exit(0);
+    const mutation = classifyCommand(input.command);
+    if (!mutation) return void process.exit(0);
+    const root = repoRoot(input.cwd ?? process.cwd());
+    if (!root) return void process.exit(0);
+    const store = new Store(root);
+    if (!store.initialized) return void process.exit(0);
+    const actors = dirtyActors(store);
+    if (actors.length >= 2) {
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: denyReason(mutation, actors),
+          },
+        }) + "\n",
+      );
+    } else {
+      if (mutation.destroysIndex) {
+        // Allowed through, but the command can discard staged state — leave a
+        // write-tree anchor so even a solo actor's reset is recoverable.
+        recordIndexSnapshot(store, `before allowed: git ${mutation.sub}`);
+      }
+      // The census counts ATTRIBUTED work. When the tree is dirty, several
+      // actors are registered, and nothing is attributed, the count above is
+      // blind, not clear — say so instead of standing down silently. Not a
+      // denial: with no attribution, `quilt commit --mine` would have nothing
+      // to commit either, so blocking here would only trap the actor.
+      const coverage = attributionCoverage(store);
+      if (captureLooksDark(coverage)) {
+        logGuardEvent(store, {
+          type: "guard.dark-capture",
+          command: `git ${mutation.sub}`,
+          dirty: coverage.dirty,
+          registeredActors: coverage.registeredActors,
+        });
+        process.stdout.write(JSON.stringify({ systemMessage: darkCaptureWarning(coverage) }) + "\n");
+      }
+    }
+  } catch {
+    /* fail-open: allow the command */
+  }
+  process.exit(0);
+}
+
+/**
+ * `quilt git -- <args>`: the deliberate raw-git escape hatch. Records a ledger
+ * event, snapshots the index when the command can destroy it, then runs real
+ * git verbatim with QUILT_GIT_PASSTHROUGH=1 so the pre-commit guard stands
+ * down. Exit code mirrors git's.
+ */
+function runGitPassthrough(rawArgs: string[]): void {
+  const args = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
+  if (args.length === 0) {
+    process.stderr.write("usage: quilt git -- <git arguments>\n");
+    process.exit(2);
+  }
+  const root = repoRoot(process.cwd());
+  const store = root ? new Store(root) : null;
+  if (store && store.initialized) {
+    const mutation = classifyTokens(["git", ...args]);
+    let snapshot: string | null = null;
+    if (mutation && mutation.destroysIndex) {
+      snapshot = recordIndexSnapshot(store, `quilt git -- ${args.join(" ")}`);
+    }
+    logGuardEvent(store, {
+      argv: args,
+      dirtyActors: dirtyActors(store).length,
+      indexSnapshot: snapshot,
+    });
+    process.stderr.write(
+      pc.dim(`quilt: recorded${snapshot ? `, index snapshot ${snapshot.slice(0, 12)}` : ""} — running git\n`),
+    );
+  }
+  const res = spawnSync("git", args, {
+    stdio: "inherit",
+    env: { ...process.env, [PASSTHROUGH_ENV]: "1" },
+  });
+  process.exit(res.status ?? 1);
+}
+
+/**
+ * `.git/hooks/pre-commit` entry: refuse a commit whose staged set spans 2+
+ * actors' uncommitted lines (the `git add -A` sweep on a shared tree). This is
+ * the backstop for commits made outside any agent hook; it cannot attribute
+ * the COMMITTER, so a commit of one actor's staged tree always passes here —
+ * the Bash-tool guard is the layer that knows who is acting. Fail-open.
+ */
+function runPreCommitGuard(): void {
+  try {
+    if (process.env[PASSTHROUGH_ENV] === "1") return void process.exit(0);
+    const root = repoRoot(process.cwd());
+    if (!root) return void process.exit(0);
+    const store = new Store(root);
+    if (!store.initialized) return void process.exit(0);
+    const span = stagedActorSpan(store);
+    if (span.size >= 2) {
+      // stdout, and the dedicated refusal code: the shim silences stderr (an
+      // older quilt prints "unknown command" there) and treats any exit other
+      // than REFUSAL_EXIT as no-verdict, so version skew can never fail closed.
+      process.stdout.write(preCommitRefusal(span));
+      process.exit(REFUSAL_EXIT);
+    }
+  } catch {
+    /* fail-open: allow the commit */
+  }
+  process.exit(0);
+}
+
+// Registered for --help only: the entry fast-path runs these before commander
+// ever parses (they need neither the grammars nor commander itself).
+program
+  .command("hook-bash")
+  .description("PreToolUse hook (matcher Bash): deny raw index-mutating git while 2+ actors have uncommitted work (reads JSON on stdin)")
+  .action(runBashGuard);
+
+program
+  .command("git")
+  .description("Run raw git deliberately: records it, snapshots the index if destructive, then execs git — the guard's escape hatch")
+  .argument("[args...]", "git arguments, after --")
+  .allowUnknownOption()
+  .action(() => {
+    // Reachable only when a global flag preceded `git` (e.g. `quilt --as x
+    // git ...`) — the entry fast-path handles the plain spelling. argv is no
+    // longer positionally aligned here, and the passthrough doesn't consult
+    // actor identity anyway, so refuse rather than exec misparsed arguments.
+    process.stderr.write("usage: quilt git -- <git arguments>   (global flags before `git` are not supported)\n");
+    process.exit(2);
+  });
+
+program
+  .command("hook-git-pre-commit")
+  .description("pre-commit hook: refuse a commit whose staged set spans multiple actors' uncommitted work")
+  .action(runPreCommitGuard);
+
+program
+  .command("snapshots")
+  .description("List index snapshots taken before destructive git commands (restore staging: git read-tree <tree>)")
+  .action(() => {
+    const store = requireStore();
+    const snaps = readIndexSnapshots(store);
+    if (snaps.length === 0) {
+      process.stdout.write(pc.dim("No index snapshots recorded.\n"));
+      return;
+    }
+    for (const s of [...snaps].reverse()) {
+      process.stdout.write(`${pc.bold(s.tree.slice(0, 12))}  ${pc.dim(s.ts)}  ${s.context}\n`);
+    }
+    process.stdout.write(pc.dim("Restore a staging selection: git read-tree <tree>   (worktree files are untouched)\n"));
+  });
+
 program
   .command("telemetry")
   .description("Show or change anonymous usage telemetry (off by default, opt-in)")
@@ -1965,11 +2167,23 @@ program
     process.stdout.write(pc.green("✓ ") + `Ended session ${session.id}.\n`);
   });
 
-// Load the tree-sitter grammars once up front (best-effort, ~20ms) so the
-// synchronous parseSymbols() used inside reconcile has them ready. If init
-// fails, symbol parsing degrades to whole-file claims rather than crashing.
-initSymbols()
-  .then(() => program.parseAsync(process.argv))
-  .catch((err) => {
-    fail(err instanceof Error ? err.message : String(err));
-  });
+// The git-guard commands short-circuit before commander and the grammars:
+// `hook-bash` fires on EVERY Bash tool call in a wired session, and none of the
+// three needs symbol parsing, so the hot path skips both entirely.
+const fastCommand = process.argv[2];
+if (fastCommand === "hook-bash") {
+  void runBashGuard();
+} else if (fastCommand === "git") {
+  runGitPassthrough(process.argv.slice(3));
+} else if (fastCommand === "hook-git-pre-commit") {
+  runPreCommitGuard();
+} else {
+  // Load the tree-sitter grammars once up front (best-effort, ~20ms) so the
+  // synchronous parseSymbols() used inside reconcile has them ready. If init
+  // fails, symbol parsing degrades to whole-file claims rather than crashing.
+  initSymbols()
+    .then(() => program.parseAsync(process.argv))
+    .catch((err) => {
+      fail(err instanceof Error ? err.message : String(err));
+    });
+}

@@ -17,6 +17,10 @@ export const QUILT_SERVER = { command: "quilt", args: ["mcp"] } as const;
 export const HOOK_MATCHER = "Edit|Write|MultiEdit";
 export const HOOK_PRE_COMMAND = "quilt hook-pre";
 export const HOOK_POST_COMMAND = "quilt hook-post";
+/** The git guard: a PreToolUse hook on the Bash tool that denies raw
+ * index-mutating git while multiple actors have uncommitted work. */
+export const HOOK_BASH_MATCHER = "Bash";
+export const HOOK_BASH_COMMAND = "quilt hook-bash";
 /** Codex CLI's edit tool — one matcher, since every Codex edit is a patch. */
 export const CODEX_HOOK_MATCHER = "apply_patch";
 
@@ -37,7 +41,7 @@ export function codexHooksPath(): string {
  * no-opped forever, freezing whatever framing it first shipped with.
  * Bump the version whenever COORDINATION_BLOCK's content changes.
  */
-export const COORDINATION_VERSION = 3;
+export const COORDINATION_VERSION = 4;
 export const COORDINATION_MARKER = `<!-- quilt:coordination v${COORDINATION_VERSION} -->`;
 /** Closes the block so a future refresh can replace exactly the marked region. */
 export const COORDINATION_END_MARKER = "<!-- /quilt:coordination -->";
@@ -65,6 +69,13 @@ automatically:
 - To commit only your lines, run \`quilt commit --mine -m "<message>"\` from
   the shell. It works with or without the MCP server, and it leaves everyone
   else's uncommitted work untouched. \`quilt status\` shows who owns what.
+- Do NOT use raw \`git add\`/\`git commit\`/\`git reset\`: the git index is
+  SHARED across every actor in this checkout, so raw staging can commit or
+  destroy other actors' in-flight work. While several actors have uncommitted
+  work, Quilt denies those commands and a pre-commit check refuses multi-actor
+  staged sets. \`quilt commit --mine\` needs no staging. If you deliberately
+  need raw git, \`quilt git -- <args>\` runs it recorded, snapshotting the
+  index first when the command can destroy staged state.
 - The quilt MCP tools (claim, commit_mine, get_status, ...) are an optional
   prevention layer, available when the quilt MCP server is connected and
   approved in your client. If the quilt tools are NOT in your MCP list you
@@ -132,6 +143,8 @@ export interface Detected {
   /** a coordination snippet from an OLDER Quilt is present (refresh available). */
   coordinationStale: boolean;
   hooksWired: boolean;
+  /** the git guard (Bash-matcher PreToolUse hook) is in settings. */
+  bashGuardWired: boolean;
   /** Codex CLI is installed on this machine (user-global ~/.codex exists). */
   codexPresent: boolean;
   /** the quilt apply_patch hooks are in ~/.codex/hooks.json. */
@@ -166,6 +179,7 @@ export function detect(root: string): Detected {
   const coordinationPresent = claudeMdContent.includes(COORDINATION_MARKER);
   const coordinationStale = coordinationIsStale(claudeMdContent);
   const hooksWired = hasSettings && settingsHasQuiltHooks(safeRead(settingsPath));
+  const bashGuardWired = hasSettings && settingsHasBashGuard(safeRead(settingsPath));
   const codexPresent = existsSync(codexDir());
   const codexWired = codexPresent && codexHooksWiredIn(safeRead(codexHooksPath()));
 
@@ -185,6 +199,7 @@ export function detect(root: string): Detected {
     coordinationPresent,
     coordinationStale,
     hooksWired,
+    bashGuardWired,
     codexPresent,
     codexWired,
   };
@@ -231,6 +246,19 @@ function settingsHasQuiltHooks(content: string | null): boolean {
     const hooks = isPlainObject(parsed) ? parsed.hooks : undefined;
     if (!isPlainObject(hooks)) return false;
     return hookGroupHas(hooks.PreToolUse, HOOK_PRE_COMMAND) && hookGroupHas(hooks.PostToolUse, HOOK_POST_COMMAND);
+  } catch {
+    return false;
+  }
+}
+
+/** Is the git guard (Bash-matcher PreToolUse hook) wired in settings content? */
+function settingsHasBashGuard(content: string | null): boolean {
+  if (!content) return false;
+  try {
+    const parsed = JSON.parse(content);
+    const hooks = isPlainObject(parsed) ? parsed.hooks : undefined;
+    if (!isPlainObject(hooks)) return false;
+    return hookGroupHas(hooks.PreToolUse, HOOK_BASH_COMMAND);
   } catch {
     return false;
   }
@@ -337,6 +365,7 @@ export function mergeHookSettings(existing: string | null): MergeResult {
   }
   let changed = ensureHookGroup(hooksObj, "PreToolUse", HOOK_PRE_COMMAND);
   changed = ensureHookGroup(hooksObj, "PostToolUse", HOOK_POST_COMMAND) || changed;
+  changed = ensureHookGroup(hooksObj, "PreToolUse", HOOK_BASH_COMMAND, HOOK_BASH_MATCHER) || changed;
   if (!changed) return { content: existing ?? "", changed: false };
   obj.hooks = hooksObj;
   return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };
@@ -547,7 +576,13 @@ export function planSetup(root: string): SetupStep[] {
     steps.push({
       file: ".claude/settings.json",
       action: d.hasSettings ? "update" : "create",
-      detail: d.hasSettings ? "add the Edit/Write capture hooks" : "create with the Edit/Write capture hooks",
+      detail: !d.hasSettings
+        ? "create with the Edit/Write capture hooks and the raw-git guard"
+        : d.hooksWired
+          ? "add the raw-git guard (capture hooks already present)"
+          : d.bashGuardWired
+            ? "add the Edit/Write capture hooks (raw-git guard already present)"
+            : "add the Edit/Write capture hooks and the raw-git guard",
       content: hooks.content,
       path: d.settingsPath,
     });
