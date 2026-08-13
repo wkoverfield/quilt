@@ -8,7 +8,10 @@ import { Store } from "../src/state.js";
 import { recordAuthorship } from "../src/authorship.js";
 import {
   CHAINED_HOOK_NAME,
+  attributionCoverage,
+  captureLooksDark,
   classifyCommand,
+  darkCaptureWarning,
   classifyTokens,
   dirtyActors,
   denyReason,
@@ -171,6 +174,38 @@ test("dirtyActors counts distinct actors on git-dirty paths only", () => {
   recordAuthorship(store, { actor: "actor-stale", path: "base.txt", oldText: "", newText: "base\n", whole: true });
   spawnSync("git", ["checkout", "--", "base.txt"], { cwd: dir });
   assert.deepEqual(dirtyActors(store), ["actor-a", "actor-b"]);
+});
+
+test("attributionCoverage distinguishes dark capture from a genuinely quiet tree", () => {
+  const { dir, store } = newRepo();
+  store.upsertActor({ id: "a1", type: "agent", displayName: "a1", createdAt: new Date().toISOString() });
+  store.upsertActor({ id: "a2", type: "agent", displayName: "a2", createdAt: new Date().toISOString() });
+  // Five dirty files written outside any capture path (the bash-write shape).
+  for (let i = 0; i < 5; i++) writeFileSync(join(dir, `dark-${i}.txt`), `x${i}\n`);
+  const dark = attributionCoverage(store);
+  assert.equal(dark.dirty, 5);
+  assert.equal(dark.attributed, 0);
+  assert.equal(captureLooksDark(dark), true);
+  const msg = darkCaptureWarning(dark);
+  assert.match(msg, /5 dirty files/);
+  assert.match(msg, /quilt doctor/);
+  // One attributed edit is enough to prove capture is flowing.
+  recordAuthorship(store, { actor: "a1", path: "dark-0.txt", oldText: "", newText: "x0\n", whole: true });
+  assert.equal(captureLooksDark(attributionCoverage(store)), false);
+});
+
+test("captureLooksDark stays quiet for solo checkouts and small trees", () => {
+  const { dir, store } = newRepo();
+  // Two actors but a barely-dirty tree: below the noise floor.
+  store.upsertActor({ id: "a1", type: "agent", displayName: "a1", createdAt: new Date().toISOString() });
+  store.upsertActor({ id: "a2", type: "agent", displayName: "a2", createdAt: new Date().toISOString() });
+  writeFileSync(join(dir, "one.txt"), "x\n");
+  assert.equal(captureLooksDark(attributionCoverage(store)), false);
+  // Dirty tree but a single registered actor: a human or solo agent, not a fleet.
+  const solo = newRepo();
+  solo.store.upsertActor({ id: "only", type: "agent", displayName: "only", createdAt: new Date().toISOString() });
+  for (let i = 0; i < 6; i++) writeFileSync(join(solo.dir, `f${i}.txt`), "y\n");
+  assert.equal(captureLooksDark(attributionCoverage(solo.store)), false);
 });
 
 test("denyReason names the actors, the safe path, and the escape hatch", () => {

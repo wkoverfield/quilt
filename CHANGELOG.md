@@ -23,6 +23,14 @@ All notable changes to Quilt are documented here. The format is based on
   staged state, then runs system git verbatim. Allowed `reset`/`stash` in a
   solo-actor checkout are snapshotted the same way; `quilt snapshots` lists
   the ring, and `git read-tree <tree>` restores a staging selection.
+- **Dark-capture detection.** The guard's dirty-actor census counts
+  attributed work, and bash-mediated writes are only attributed when the
+  files were claimed first, so a busy multi-agent checkout can look
+  single-actor to the guard. Instead of standing down silently, the guard
+  now warns (and records a ledger event) when it allows a mutating git
+  command in a checkout with multiple registered actors, a dirty tree, and
+  zero attribution, and `quilt doctor` reports the same condition as
+  "Attribution coverage".
 
 - **`quilt setup --gitignore`.** Keeps newly untracked config files Quilt wires
   in out of git. Entries are added per file, so ignoring

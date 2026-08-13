@@ -35,7 +35,10 @@ import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, 
 import {
   PASSTHROUGH_ENV,
   REFUSAL_EXIT,
+  attributionCoverage,
+  captureLooksDark,
   classifyCommand,
+  darkCaptureWarning,
   hooksDirFor,
   classifyTokens,
   denyReason,
@@ -1947,10 +1950,27 @@ async function runBashGuard(): Promise<void> {
           },
         }) + "\n",
       );
-    } else if (mutation.destroysIndex) {
-      // Allowed through, but the command can discard staged state — leave a
-      // write-tree anchor so even a solo actor's reset is recoverable.
-      recordIndexSnapshot(store, `before allowed: git ${mutation.sub}`);
+    } else {
+      if (mutation.destroysIndex) {
+        // Allowed through, but the command can discard staged state — leave a
+        // write-tree anchor so even a solo actor's reset is recoverable.
+        recordIndexSnapshot(store, `before allowed: git ${mutation.sub}`);
+      }
+      // The census counts ATTRIBUTED work. When the tree is dirty, several
+      // actors are registered, and nothing is attributed, the count above is
+      // blind, not clear — say so instead of standing down silently. Not a
+      // denial: with no attribution, `quilt commit --mine` would have nothing
+      // to commit either, so blocking here would only trap the actor.
+      const coverage = attributionCoverage(store);
+      if (captureLooksDark(coverage)) {
+        logGuardEvent(store, {
+          type: "guard.dark-capture",
+          command: `git ${mutation.sub}`,
+          dirty: coverage.dirty,
+          registeredActors: coverage.registeredActors,
+        });
+        process.stdout.write(JSON.stringify({ systemMessage: darkCaptureWarning(coverage) }) + "\n");
+      }
     }
   } catch {
     /* fail-open: allow the command */

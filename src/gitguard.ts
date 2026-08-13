@@ -287,6 +287,56 @@ export function dirtyActors(store: Store): string[] {
   return [...actors].sort();
 }
 
+/**
+ * How much of the currently git-dirty tree the attribution record can actually
+ * see. The census above counts ATTRIBUTED work, and attribution is edit-time:
+ * writes made through bash (heredocs, sed, patch, codegen scripts) are
+ * invisible unless the actor claimed the files first. A checkout can therefore
+ * be full of several actors' work while the census sees fewer than two actors
+ * — the guard would stand down exactly when it is needed. This measurement is
+ * what lets the hook and doctor say so out loud instead of passing silently.
+ */
+export interface AttributionCoverage {
+  /** paths git currently sees as dirty (excluding .quilt). */
+  dirty: number;
+  /** dirty paths carrying at least one attributed line. */
+  attributed: number;
+  /** registered actors — a proxy for "this checkout hosts agents". */
+  registeredActors: number;
+}
+
+export function attributionCoverage(store: Store): AttributionCoverage {
+  const dirtyPaths = changedPaths(store.paths.repoRoot);
+  const covered = new Set<string>();
+  const ownership = store.readOwnership();
+  for (const [path, file] of Object.entries(ownership.files)) {
+    if (Object.keys(file.added).length > 0 || Object.keys(file.removed).length > 0) covered.add(path);
+  }
+  for (const [path, byKey] of foldedAuthorship(store)) {
+    if (byKey.size > 0) covered.add(path);
+  }
+  const attributed = dirtyPaths.filter((p) => covered.has(p)).length;
+  return { dirty: dirtyPaths.length, attributed, registeredActors: store.readActors().length };
+}
+
+/** True when the checkout looks multi-agent but attribution is dark enough
+ * that the dirty-actor census cannot be trusted: several actors registered,
+ * a substantially dirty tree, and none of it attributed. */
+export function captureLooksDark(c: AttributionCoverage): boolean {
+  return c.registeredActors >= 2 && c.dirty >= 5 && c.attributed === 0;
+}
+
+/** The warning surfaced when a mutating git command is allowed only because
+ * capture is dark. Not a denial: with no attribution, `quilt commit --mine`
+ * has nothing to commit either, so blocking would trap the actor. */
+export function darkCaptureWarning(c: AttributionCoverage): string {
+  return (
+    `Quilt: ${c.dirty} dirty files carry no attribution while ${c.registeredActors} actors are registered here. ` +
+    `Capture may be dark (edits made via bash scripts are not captured unless the files were claimed first), ` +
+    `so Quilt cannot tell whose work raw git would sweep up. Run \`quilt doctor\`, and claim files before editing them outside the native edit tools.`
+  );
+}
+
 /** The PreToolUse denial text. CLI register: state the stakes, then the safe
  * path, then the deliberate override. */
 export function denyReason(mutation: GitMutation, actors: string[]): string {
@@ -555,7 +605,8 @@ export function installPreCommitHook(root: string, dryRun: boolean): PreCommitIn
   }
 }
 
-/** Append a passthrough/guard event to the ledger without throwing. */
+/** Append a guard event to the ledger without throwing. Defaults to the
+ * passthrough type; pass `type` in the event to record something else. */
 export function logGuardEvent(store: Store, event: Record<string, unknown>): void {
   try {
     store.appendLedger({ ts: new Date().toISOString(), type: "git.passthrough", ...event });

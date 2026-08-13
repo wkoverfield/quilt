@@ -150,6 +150,24 @@ keeps the raw path from racing it. Two layers:
   can see who is acting. A pre-existing `pre-commit` hook is preserved as
   `pre-commit.local` and still runs after the check passes.
 
+Two limits, stated plainly because assuming otherwise is how staged work gets
+lost:
+
+- **Pure theft is stopped only by the session-level layer.** The canonical
+  race is a bare `git commit` that ships another actor's already-staged tree
+  under the committer's message. That staged set belongs to exactly one
+  actor, so the pre-commit check passes it; only the session hook, which
+  knows who is acting, refuses it. The pre-commit layer exists for the
+  sweep case, not this one.
+- **The dirty-actor census counts attributed work.** Attribution is
+  edit-time: writes made through bash (heredocs, `sed`, `patch`, codegen
+  scripts) are captured only when the files were claimed first. A checkout
+  can hold several actors' unattributed work and the census will see fewer
+  than two actors. The guard does not stand down silently in that state: it
+  warns when the tree is dirty, multiple actors are registered, and nothing
+  is attributed, and `quilt doctor` reports the same condition as
+  "Attribution coverage".
+
 Both layers fail open: if `quilt` is missing from `PATH`, or is an older
 version, commands and commits proceed rather than break. The deliberate
 override for both layers is `quilt git -- <args>`.

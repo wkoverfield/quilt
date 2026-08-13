@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import { relative } from "node:path";
 import { detect, codexHooksTrusted } from "./onboard.js";
-import { hooksDirFor, preCommitCurrent, preCommitInstalled } from "./gitguard.js";
+import { attributionCoverage, captureLooksDark, hooksDirFor, preCommitCurrent, preCommitInstalled } from "./gitguard.js";
 import { readAuthorship, readCheckpoint } from "./authorship.js";
 import { watcherRunning } from "./watch.js";
 import { changedPaths, gitVersionString } from "./git.js";
@@ -333,6 +333,34 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
           }
         : { label: "Capture", status: "info", detail: "0 edits recorded yet" },
     );
+  }
+
+  // A LIFETIME capture total says nothing about NOW: a repo can hold 100+
+  // captured edits from last month while today's dirty tree has zero
+  // attribution (edits made via bash scripts are invisible to the capture
+  // hooks unless the files were claimed first). The guard's dirty-actor
+  // census and `commit --mine` both key on attribution, so dark coverage
+  // means both are blind — the one state this health check must never let
+  // read as healthy.
+  try {
+    const coverage = attributionCoverage(store);
+    if (captureLooksDark(coverage)) {
+      checks.push({
+        label: "Attribution coverage",
+        status: "warn",
+        detail: `${coverage.dirty} dirty files, none attributed, ${coverage.registeredActors} actors registered`,
+        hint: "capture may be dark — bash-mediated writes (heredocs, sed, scripts) are only attributed when the files were claimed first; the raw-git guard cannot count actors it cannot see",
+      });
+    } else if (coverage.dirty > 0 && coverage.attributed < coverage.dirty) {
+      checks.push({
+        label: "Attribution coverage",
+        status: "info",
+        detail: `${coverage.attributed} of ${coverage.dirty} dirty files carry attribution`,
+        hint: "unattributed files are usually human edits or unclaimed bash writes; claim files before editing them outside the native edit tools",
+      });
+    }
+  } catch {
+    /* not fatal for a health check */
   }
 
   const pid = watcherRunning(store);
