@@ -2054,7 +2054,14 @@ program
   .description("Run raw git deliberately: records it, snapshots the index if destructive, then execs git — the guard's escape hatch")
   .argument("[args...]", "git arguments, after --")
   .allowUnknownOption()
-  .action(() => runGitPassthrough(process.argv.slice(3)));
+  .action(() => {
+    // Reachable only when a global flag preceded `git` (e.g. `quilt --as x
+    // git ...`) — the entry fast-path handles the plain spelling. argv is no
+    // longer positionally aligned here, and the passthrough doesn't consult
+    // actor identity anyway, so refuse rather than exec misparsed arguments.
+    process.stderr.write("usage: quilt git -- <git arguments>   (global flags before `git` are not supported)\n");
+    process.exit(2);
+  });
 
 program
   .command("hook-git-pre-commit")
