@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { Store } from "../src/state.js";
-import { readAuthorship } from "../src/authorship.js";
-import { foldedAuthorship } from "../src/authorship.js";
+import { foldedAuthorship, readAuthorship, recordAuthorship } from "../src/authorship.js";
 import { dirtyActors } from "../src/gitguard.js";
 import {
   BASH_CAPTURE_MAX_FILES,
@@ -145,6 +144,44 @@ test("binary content is change-detected but never line-attributed", () => {
   writeFileSync(join(dir, "blob.bin"), Buffer.from([0x89, 0x50, 0x00, 0x47, 0x0d, 0x00, 0x1a]));
   const result = captureBashDelta(store, "a", "inv-8");
   assert.deepEqual(result.captured, []);
+  assert.equal(readAuthorship(store).length, 0);
+});
+
+test("a natively-captured edit during the call is not shadowed by the bash delta", () => {
+  const { dir, store } = newRepo();
+  writeBashBaseline(store, "bash-actor", "inv-shadow");
+  // Sibling's native Edit lands mid-call and is captured exactly.
+  writeFileSync(join(dir, "sibling.txt"), "native line\n");
+  recordAuthorship(store, { actor: "native-actor", path: "sibling.txt", oldText: "", newText: "native line\n", whole: true });
+  // The bash call itself writes a different file.
+  writeFileSync(join(dir, "bash-file.txt"), "bash line\n");
+  const result = captureBashDelta(store, "bash-actor", "inv-shadow");
+  assert.deepEqual(result.captured, ["bash-file.txt"], "the natively-captured path is skipped");
+  const fold = foldedAuthorship(store);
+  const siblingOwners = new Set(fold.get("sibling.txt")?.values());
+  assert.deepEqual([...siblingOwners], ["native-actor"], "exact attribution survives");
+});
+
+test("overlapping same-key baselines: first call wins, second goes dark instead of wrong", () => {
+  const { dir, store } = newRepo();
+  writeFileSync(join(dir, "tracked.txt"), "original line\ndirt before first call\n");
+  const first = writeBashBaseline(store, "a", "same-key");
+  // Second Pre with the identical fallback key must NOT overwrite the baseline.
+  writeFileSync(join(dir, "tracked.txt"), "original line\ndirt before first call\nfirst call wrote this\n");
+  const second = writeBashBaseline(store, "a", "same-key");
+  assert.deepEqual(second, first, "existing baseline is returned, not replaced");
+  const result = captureBashDelta(store, "a", "same-key");
+  assert.deepEqual(result.captured, ["tracked.txt"]);
+  const ev = readAuthorship(store)[0]!;
+  assert.deepEqual(ev.added, ["first call wrote this"], "diffed against the FIRST call's reference state");
+});
+
+test("unchanged dirty files are skipped via lstat without content comparison", () => {
+  const { dir, store } = newRepo();
+  writeFileSync(join(dir, "untouched.txt"), "dirty but stable\n");
+  writeBashBaseline(store, "a", "inv-lstat");
+  const result = captureBashDelta(store, "a", "inv-lstat");
+  assert.deepEqual(result.captured, [], "no-op call attributes nothing");
   assert.equal(readAuthorship(store).length, 0);
 });
 

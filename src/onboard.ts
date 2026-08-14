@@ -146,8 +146,11 @@ export interface Detected {
   /** a coordination snippet from an OLDER Quilt is present (refresh available). */
   coordinationStale: boolean;
   hooksWired: boolean;
-  /** the git guard (Bash-matcher PreToolUse hook) is in settings. */
+  /** the git guard pair (Bash Pre + Post hooks) is fully in settings. */
   bashGuardWired: boolean;
+  /** the Pre (deny) half alone — distinguishes a pre-capture-era wiring so
+   * setup can say "add the capture hook" instead of claiming the guard is new. */
+  bashPreWired: boolean;
   /** Codex CLI is installed on this machine (user-global ~/.codex exists). */
   codexPresent: boolean;
   /** the quilt apply_patch hooks are in ~/.codex/hooks.json. */
@@ -182,7 +185,9 @@ export function detect(root: string): Detected {
   const coordinationPresent = claudeMdContent.includes(COORDINATION_MARKER);
   const coordinationStale = coordinationIsStale(claudeMdContent);
   const hooksWired = hasSettings && settingsHasQuiltHooks(safeRead(settingsPath));
-  const bashGuardWired = hasSettings && settingsHasBashGuard(safeRead(settingsPath));
+  const bashGuard = hasSettings ? settingsHasBashGuard(safeRead(settingsPath)) : { pre: false, pair: false };
+  const bashGuardWired = bashGuard.pair;
+  const bashPreWired = bashGuard.pre;
   const codexPresent = existsSync(codexDir());
   const codexWired = codexPresent && codexHooksWiredIn(safeRead(codexHooksPath()));
 
@@ -203,6 +208,7 @@ export function detect(root: string): Detected {
     coordinationStale,
     hooksWired,
     bashGuardWired,
+    bashPreWired,
     codexPresent,
     codexWired,
   };
@@ -255,15 +261,16 @@ function settingsHasQuiltHooks(content: string | null): boolean {
 }
 
 /** Is the git guard (Bash-matcher PreToolUse hook) wired in settings content? */
-function settingsHasBashGuard(content: string | null): boolean {
-  if (!content) return false;
+function settingsHasBashGuard(content: string | null): { pre: boolean; pair: boolean } {
+  if (!content) return { pre: false, pair: false };
   try {
     const parsed = JSON.parse(content);
     const hooks = isPlainObject(parsed) ? parsed.hooks : undefined;
-    if (!isPlainObject(hooks)) return false;
-    return hookGroupHas(hooks.PreToolUse, HOOK_BASH_COMMAND) && hookGroupHas(hooks.PostToolUse, HOOK_BASH_POST_COMMAND);
+    if (!isPlainObject(hooks)) return { pre: false, pair: false };
+    const pre = hookGroupHas(hooks.PreToolUse, HOOK_BASH_COMMAND);
+    return { pre, pair: pre && hookGroupHas(hooks.PostToolUse, HOOK_BASH_POST_COMMAND) };
   } catch {
-    return false;
+    return { pre: false, pair: false };
   }
 }
 
@@ -582,11 +589,13 @@ export function planSetup(root: string): SetupStep[] {
       action: d.hasSettings ? "update" : "create",
       detail: !d.hasSettings
         ? "create with the Edit/Write capture hooks and the raw-git guard"
-        : d.hooksWired
-          ? "add the raw-git guard (capture hooks already present)"
-          : d.bashGuardWired
-            ? "add the Edit/Write capture hooks (raw-git guard already present)"
-            : "add the Edit/Write capture hooks and the raw-git guard",
+        : d.hooksWired && d.bashPreWired
+          ? "add the bash-write capture hook (guard and capture hooks already present)"
+          : d.hooksWired
+            ? "add the raw-git guard (capture hooks already present)"
+            : d.bashGuardWired
+              ? "add the Edit/Write capture hooks (raw-git guard already present)"
+              : "add the Edit/Write capture hooks and the raw-git guard",
       content: hooks.content,
       path: d.settingsPath,
     });
