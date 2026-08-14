@@ -68,3 +68,23 @@ The standard for a release:
   (dogfood waves, review fleets, agent counts, phase numbers). That material
   belongs in commit messages and pull request bodies.
 - No em dashes in prose. CLI output strings quoted verbatim are exempt.
+
+## Releasing
+
+Releases are published by CI, not from a laptop.
+
+1. On a branch: bump the version everywhere it lives (`npm version X.Y.Z
+   --no-git-tag-version` covers `package.json` and the lockfile; update the
+   two `version` fields in `server.json` by hand), stamp the `[Unreleased]`
+   changelog section to `[X.Y.Z] - date`, and confirm with
+   `npm run check:release`. Open a PR and merge it.
+2. Tag the merged commit on main: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. The `release` workflow verifies the tag matches the release metadata, runs
+   the full suite, then publishes to npm (OIDC trusted publishing, no tokens)
+   and to the MCP registry (GitHub Actions OIDC). Each publish step skips a
+   registry that already has the version, so a partially-shipped release can
+   be finished with the workflow's manual re-run.
+
+The npm side is authorized by the package's Trusted Publisher setting on
+npmjs.com (GitHub Actions, this repository, `release.yml`). No npm tokens
+exist in CI.
