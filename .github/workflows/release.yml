@@ -1,0 +1,71 @@
+# Publishes a tagged release to npm (OIDC trusted publishing, no tokens) and
+# the MCP registry (GitHub Actions OIDC for the io.github.* namespace).
+#
+# Trigger: push a version tag (v0.6.1) whose version matches package.json,
+# or run manually via workflow_dispatch to re-publish a partially-shipped
+# release (each publish step skips registries already carrying the version).
+#
+# npm side requires the package's trusted publisher to be configured on
+# npmjs.com: package settings -> Publishing access -> Trusted Publisher ->
+# GitHub Actions, repository wkoverfield/quilt, workflow release.yml.
+name: release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # OIDC for npm trusted publishing and the MCP registry
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # OIDC trusted publishing needs npm 11.5+; runners may bundle older.
+      - run: npm install -g npm@11
+
+      - name: Verify tag matches release metadata
+        if: github.event_name == 'push'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION" >&2
+            exit 1
+          fi
+
+      - run: npm ci
+
+      # Runs check:release (version alignment across package.json, lockfile,
+      # server.json), the build, and the full suite.
+      - run: npm test
+
+      - name: Publish to npm (skip if version already live)
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "@quilt-dev/cli@$VERSION" version >/dev/null 2>&1; then
+            echo "npm already has $VERSION; skipping"
+          else
+            npm publish
+          fi
+
+      - name: Publish to the MCP registry (skip if version already live)
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          LATEST=$(curl -s "https://registry.modelcontextprotocol.io/v0/servers?search=io.github.wkoverfield/quilt&version=latest" \
+            | node -p "try { JSON.parse(require('fs').readFileSync(0,'utf8')).servers[0].server.version } catch { '' }")
+          if [ "$LATEST" = "$VERSION" ]; then
+            echo "MCP registry already has $VERSION; skipping"
+            exit 0
+          fi
+          curl -sL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
