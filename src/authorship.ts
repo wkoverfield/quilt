@@ -72,6 +72,11 @@ export interface AuthorshipEvent {
   intent?: string;
   /** true for a whole-file write/create. */
   whole?: boolean;
+  /** How the edit was captured. Absent = native tool capture (the payload is
+   * replayed in memory, so the delta is exact). "bash" = inferred from a
+   * worktree diff around a Bash tool call: the before/after images are read
+   * from disk, so a sibling's concurrent write can ride into the delta. */
+  mode?: "bash";
   /** Ownership instances that landed in a commit and must no longer compete
    * with still-dirty identical occurrences. */
   settledKeys?: string[];
@@ -486,6 +491,8 @@ export function recordAuthorship(
     whole?: boolean;
     /** the stable line just BEFORE the edit region (survives the replacement), for replay. */
     anchor?: string | null;
+    /** capture mode; absent for exact native capture. */
+    mode?: "bash";
   },
 ): AuthorshipEvent {
   const { actor, path, oldText, newText, intent, whole } = args;
@@ -513,6 +520,7 @@ export function recordAuthorship(
       preHash: whole ? null : sha(oldText),
       intent: intent?.trim() ? intent.trim() : undefined,
       whole: whole || undefined,
+      mode: args.mode,
     };
     appendFileSync(store.paths.authorshipLog, JSON.stringify(ev) + "\n");
     // Keep the log bounded: once it's grown past the threshold, fold it into the

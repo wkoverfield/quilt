@@ -19,19 +19,23 @@
 //
 // Everything here fails open: a broken guard must never brick a shell or a
 // commit. Denials are loud; failures are silent allows.
+import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { foldedAuthorship } from "./authorship.js";
 import { changedPaths, git } from "./git.js";
 import type { Store } from "./state.js";
 
-/** A normalized PreToolUse payload for the Bash tool. */
+/** A normalized Pre/PostToolUse payload for the Bash tool. */
 export interface BashHookInput {
   command: string;
   cwd: string | null;
   sessionId: string | null;
   agentId: string | null;
   agentType: string | null;
+  /** Pairs one call's Pre and Post (tool_use_id when the payload carries it,
+   * else a content hash) so capture baselines are consumed by the right call. */
+  invocationId: string;
 }
 
 function str(v: unknown): string | null {
@@ -47,12 +51,18 @@ export function parseBashHookInput(raw: unknown): BashHookInput | null {
   const input = (o.tool_input ?? {}) as Record<string, unknown>;
   const command = str(input.command);
   if (!command) return null;
+  const invocationId =
+    str(o.tool_use_id) ??
+    str(o.tool_call_id) ??
+    str(o.hook_event_id) ??
+    createHash("sha256").update(command).digest("hex").slice(0, 16);
   return {
     command,
     cwd: str(o.cwd),
     sessionId: str(o.session_id),
     agentId: str(o.agent_id),
     agentType: str(o.agent_type),
+    invocationId,
   };
 }
 
