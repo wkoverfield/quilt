@@ -8,6 +8,16 @@ All notable changes to Quilt are documented here. The format is based on
 
 ### Added
 
+- **Bash-write capture.** Writes made through the Bash tool (heredocs, `sed`,
+  `patch`, codegen scripts) are now captured and attributed to the calling
+  session, closing the largest source of unattributed work: the Bash hook
+  pair snapshots the git-dirty set before each command and diffs it after.
+  Events carry `mode: "bash"` since the delta is inferred from disk rather
+  than replayed from a payload. Capture skips loudly (a `capture.skipped`
+  ledger event) when the pre-call dirty set exceeds 200 files or 5MB.
+  Claims are no longer required for bash edits to be attributed; they remain
+  the way to reserve code against other actors.
+
 - **The raw-git guard.** The git index is one shared file per checkout, so raw
   `git add`/`git commit`/`git reset` from any actor operates on every other
   actor's staging: staged work could be committed under the wrong message or

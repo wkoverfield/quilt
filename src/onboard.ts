@@ -21,6 +21,9 @@ export const HOOK_POST_COMMAND = "quilt hook-post";
  * index-mutating git while multiple actors have uncommitted work. */
 export const HOOK_BASH_MATCHER = "Bash";
 export const HOOK_BASH_COMMAND = "quilt hook-bash";
+/** Bash-write capture: the Post half of the pair — diffs the worktree against
+ * the Pre baseline and attributes the delta to the acting session. */
+export const HOOK_BASH_POST_COMMAND = "quilt hook-bash-post";
 /** Codex CLI's edit tool — one matcher, since every Codex edit is a patch. */
 export const CODEX_HOOK_MATCHER = "apply_patch";
 
@@ -41,7 +44,7 @@ export function codexHooksPath(): string {
  * no-opped forever, freezing whatever framing it first shipped with.
  * Bump the version whenever COORDINATION_BLOCK's content changes.
  */
-export const COORDINATION_VERSION = 4;
+export const COORDINATION_VERSION = 5;
 export const COORDINATION_MARKER = `<!-- quilt:coordination v${COORDINATION_VERSION} -->`;
 /** Closes the block so a future refresh can replace exactly the marked region. */
 export const COORDINATION_END_MARKER = "<!-- /quilt:coordination -->";
@@ -63,9 +66,10 @@ automatically:
 
 - Your edits are captured by the quilt hooks: nothing to call. Identity is
   automatic (each session gets its own id), and every line you edit is
-  attributed to you as you write it. Claude Code hooks also deny edits into
-  claimed code. Codex hooks are capture-only, so use claim-aware MCP tools when
-  you need prevention there.
+  attributed to you as you write it — native Edit/Write tools AND file writes
+  made through Bash (heredocs, sed, patch, codegen scripts) alike. Claude Code
+  hooks also deny edits into claimed code. Codex hooks are capture-only, so
+  use claim-aware MCP tools when you need prevention there.
 - To commit only your lines, run \`quilt commit --mine -m "<message>"\` from
   the shell. It works with or without the MCP server, and it leaves everyone
   else's uncommitted work untouched. \`quilt status\` shows who owns what.
@@ -89,11 +93,10 @@ parentheses):
   process or MCP connection, pick a stable id, your role or task name (e.g.
   \`auth-agent\`), and pass it as \`actor\` on every quilt call, since a
   shared connection cannot tell you apart automatically.
-- CLAIM before editing when either applies: (a) you are editing via bash,
-  scripts, or codegen (nothing captures those; a whole-file claim placed
-  BEFORE the edit is what binds them to you, and attribution is edit-time,
-  never retroactive), or (b) you want the code protected from other actors
-  while you work. Claim WHOLE FILES (\`src/auth.ts\`) or a directory for
+- CLAIM before editing when you want the code protected from other actors
+  while you work (bash-made writes are captured and attributed automatically,
+  but capture is attribution, not reservation: a claim is what makes other
+  actors stay off the code). Claim WHOLE FILES (\`src/auth.ts\`) or a directory for
   codegen (\`convex/_generated/\`); use \`path#symbol\` only to share one
   file with another actor (pass \`creating: true\` if the symbol does not
   exist yet). Always pass a short intent, the why (your ticket/task); it is
@@ -258,7 +261,7 @@ function settingsHasBashGuard(content: string | null): boolean {
     const parsed = JSON.parse(content);
     const hooks = isPlainObject(parsed) ? parsed.hooks : undefined;
     if (!isPlainObject(hooks)) return false;
-    return hookGroupHas(hooks.PreToolUse, HOOK_BASH_COMMAND);
+    return hookGroupHas(hooks.PreToolUse, HOOK_BASH_COMMAND) && hookGroupHas(hooks.PostToolUse, HOOK_BASH_POST_COMMAND);
   } catch {
     return false;
   }
@@ -366,6 +369,7 @@ export function mergeHookSettings(existing: string | null): MergeResult {
   let changed = ensureHookGroup(hooksObj, "PreToolUse", HOOK_PRE_COMMAND);
   changed = ensureHookGroup(hooksObj, "PostToolUse", HOOK_POST_COMMAND) || changed;
   changed = ensureHookGroup(hooksObj, "PreToolUse", HOOK_BASH_COMMAND, HOOK_BASH_MATCHER) || changed;
+  changed = ensureHookGroup(hooksObj, "PostToolUse", HOOK_BASH_POST_COMMAND, HOOK_BASH_MATCHER) || changed;
   if (!changed) return { content: existing ?? "", changed: false };
   obj.hooks = hooksObj;
   return { content: JSON.stringify(obj, null, 2) + "\n", changed: true };

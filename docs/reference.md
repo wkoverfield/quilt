@@ -159,11 +159,10 @@ lost:
   actor, so the pre-commit check passes it; only the session hook, which
   knows who is acting, refuses it. The pre-commit layer exists for the
   sweep case, not this one.
-- **The dirty-actor census counts attributed work.** Attribution is
-  edit-time: writes made through bash (heredocs, `sed`, `patch`, codegen
-  scripts) are captured only when the files were claimed first. A checkout
-  can hold several actors' unattributed work and the census will see fewer
-  than two actors. The guard does not stand down silently in that state: it
+- **The dirty-actor census counts attributed work.** Bash-write capture
+  (below) attributes most writes, so coverage is normally high; what remains
+  invisible is writes from outside any agent session (human terminals, cron,
+  editors). The guard does not stand down silently when coverage is dark: it
   warns when the tree is dirty, multiple actors are registered, and nothing
   is attributed, and `quilt doctor` reports the same condition as
   "Attribution coverage".
@@ -175,6 +174,24 @@ override for both layers is `quilt git -- <args>`.
 ## How attribution works
 
 Quilt is conservative: a blocked commit beats a wrong one.
+
+Capture runs at three tool boundaries, all wired by `quilt setup`:
+
+- **Native edits** (Claude Code Edit/Write/MultiEdit): the hook pair replays
+  the edit payload in memory, so the recorded delta is exact and a sibling's
+  concurrent write cannot leak into it.
+- **Bash writes** (heredocs, `sed`, `patch`, codegen scripts): the Bash hook
+  pair snapshots the git-dirty set before the command and diffs it after,
+  attributing the delta to the calling session. The before-image for a file
+  that was already dirty is its pre-call snapshot; for a clean file, its HEAD
+  blob; for a new file, empty. These events carry `mode: "bash"` because the
+  delta is inferred from disk: a write from another session landing during
+  the call can ride into it (the same trade-off as Codex capture). Capture
+  skips, with a `capture.skipped` ledger event, when the pre-call dirty set
+  exceeds 200 files or 5MB of content; binary files are change-detected but
+  never line-attributed.
+- **Codex `apply_patch`**: the envelope's file list drives the same
+  snapshot-and-diff core.
 
 Each `quilt` command runs a reconcile step:
 

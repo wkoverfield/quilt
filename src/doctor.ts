@@ -206,12 +206,12 @@ export function diagnose(store: Store, opts: DiagnoseOptions = {}): DoctorReport
   // separately so a re-clone (which wipes .git/hooks) is called out precisely.
   checks.push(
     d.bashGuardWired
-      ? { label: "Raw-git guard", status: "ok", detail: "Bash hook in .claude/settings.json" }
+      ? { label: "Raw-git guard", status: "ok", detail: "Bash hook pair (guard + write capture) in .claude/settings.json" }
       : {
           label: "Raw-git guard",
           status: "warn",
-          detail: "not installed",
-          hint: "run `quilt setup` — without it, raw `git add/commit/reset` can race other actors' staging",
+          detail: "not installed (or missing its capture half)",
+          hint: "run `quilt setup` — without the pair, raw `git add/commit/reset` can race other actors' staging, and bash-made writes go unattributed",
         },
   );
   const hooksRel = relative(root, hooksDirFor(root)) || ".git/hooks";

@@ -51,6 +51,7 @@ import {
   recordIndexSnapshot,
   stagedActorSpan,
 } from "./gitguard.js";
+import { captureBashDelta, writeBashBaseline } from "./bashcapture.js";
 import {
   detect,
   planSetup,
@@ -1933,12 +1934,19 @@ async function runBashGuard(): Promise<void> {
     const raw = JSON.parse(await readStdin());
     const input = parseBashHookInput(raw);
     if (!input) return void process.exit(0);
-    const mutation = classifyCommand(input.command);
-    if (!mutation) return void process.exit(0);
     const root = repoRoot(input.cwd ?? process.cwd());
     if (!root) return void process.exit(0);
     const store = new Store(root);
     if (!store.initialized) return void process.exit(0);
+    const actor = hookActor(store, input);
+    const mutation = classifyCommand(input.command);
+    if (!mutation) {
+      // Not a guarded git command, but the call may still WRITE files (heredoc,
+      // sed, a codegen script) — record the pre-call baseline so the Post hook
+      // can attribute whatever changes.
+      if (actor) writeBashBaseline(store, actor.id, input.invocationId);
+      return void process.exit(0);
+    }
     const actors = dirtyActors(store);
     if (actors.length >= 2) {
       process.stdout.write(
@@ -1956,6 +1964,9 @@ async function runBashGuard(): Promise<void> {
         // write-tree anchor so even a solo actor's reset is recoverable.
         recordIndexSnapshot(store, `before allowed: git ${mutation.sub}`);
       }
+      // Allowed git can also rewrite worktree files (checkout -- restores,
+      // stash pop applies) — capture those like any other bash write.
+      if (actor) writeBashBaseline(store, actor.id, input.invocationId);
       // The census counts ATTRIBUTED work. When the tree is dirty, several
       // actors are registered, and nothing is attributed, the count above is
       // blind, not clear — say so instead of standing down silently. Not a
@@ -1974,6 +1985,34 @@ async function runBashGuard(): Promise<void> {
     }
   } catch {
     /* fail-open: allow the command */
+  }
+  process.exit(0);
+}
+
+/**
+ * PostToolUse capture for the Bash tool: diff the worktree against the
+ * baseline the Pre hook recorded and attribute the delta to this call's
+ * actor. This is what makes heredoc/sed/script writes visible to
+ * `commit --mine` and the guard's census. A skipped baseline (dirty-set cap)
+ * is logged so sustained darkness has a trail. Fail-open like every hook.
+ */
+async function runBashCapture(): Promise<void> {
+  try {
+    const raw = JSON.parse(await readStdin());
+    const input = parseBashHookInput(raw);
+    if (!input) return void process.exit(0);
+    const root = repoRoot(input.cwd ?? process.cwd());
+    if (!root) return void process.exit(0);
+    const store = new Store(root);
+    if (!store.initialized) return void process.exit(0);
+    const actor = hookActor(store, input);
+    if (!actor) return void process.exit(0);
+    const result = captureBashDelta(store, actor.id, input.invocationId);
+    if (result.skipped) {
+      logGuardEvent(store, { type: "capture.skipped", actorId: actor.id, reason: result.skipped });
+    }
+  } catch {
+    /* fail-open: skip capture */
   }
   process.exit(0);
 }
@@ -2046,8 +2085,13 @@ function runPreCommitGuard(): void {
 // ever parses (they need neither the grammars nor commander itself).
 program
   .command("hook-bash")
-  .description("PreToolUse hook (matcher Bash): deny raw index-mutating git while 2+ actors have uncommitted work (reads JSON on stdin)")
+  .description("PreToolUse hook (matcher Bash): deny raw index-mutating git while 2+ actors have uncommitted work, and baseline the tree for capture (reads JSON on stdin)")
   .action(runBashGuard);
+
+program
+  .command("hook-bash-post")
+  .description("PostToolUse hook (matcher Bash): capture authorship of files the command changed, diffed against the Pre baseline (reads JSON on stdin)")
+  .action(runBashCapture);
 
 program
   .command("git")
@@ -2173,6 +2217,8 @@ program
 const fastCommand = process.argv[2];
 if (fastCommand === "hook-bash") {
   void runBashGuard();
+} else if (fastCommand === "hook-bash-post") {
+  void runBashCapture();
 } else if (fastCommand === "git") {
   runGitPassthrough(process.argv.slice(3));
 } else if (fastCommand === "hook-git-pre-commit") {
