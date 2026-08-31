@@ -38,7 +38,7 @@ interface TelemetryConfig {
 const POSTHOG_ENDPOINT = "https://us.i.posthog.com/i/v0/e/";
 // PostHog write-only project token: safe to ship in an OSS client by design
 // (it can only ingest events, never read anything back).
-const POSTHOG_KEY = "phc_QUILT_PROJECT_KEY_TBD";
+const POSTHOG_KEY = "phc_zFpsQAQHnLJHBqR2eD5aqnn88LuescfKUxoo92mT4kDK";
 /** Process-scoped fallback for a payload built before any id was persisted. */
 const ephemeralAnonymousId = randomUUID();
 
