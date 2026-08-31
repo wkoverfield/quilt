@@ -212,16 +212,24 @@ the difference between process-per-agent and many-agents-in-one-process setups.
 
 ## Telemetry
 
-Off by default, and opt-in for real: `quilt setup` asks once, on an
-interactive terminal only, and no answer means no. If you say yes, Quilt
-sends anonymous usage counts (which commands run, how many claims were
-granted/denied/queued, quilt version, OS) under a random id generated on
-your machine. It never sends code, file paths, repo names, actor names,
-branch names, or commit messages, and events are posted by a detached
-process so no command ever waits on the network. Change your mind any
-time with `quilt telemetry on|off`, or set `QUILT_TELEMETRY=0` to force
-it off for any process (useful in CI). The full event list is in
-[docs/reference.md](docs/reference.md).
+Quilt sends one anonymous heartbeat per day: the quilt version, your OS,
+the Node major version, and a random id generated on your machine. That is
+the entire payload, and it exists to answer one question: is anyone still
+using this. It is on by default, disclosed at `quilt setup`, and
+`quilt telemetry off` turns it off for good.
+
+Everything richer stays opt-in: `quilt setup` asks once, on an interactive
+terminal only, and no answer means no. If you say yes, Quilt also sends
+anonymous usage counts (which commands run, how many claims were
+granted/denied/queued). It never sends code, file paths, repo names, actor
+names, branch names, or commit messages, and payloads are posted by a
+detached process so no command ever waits on the network.
+
+Kill switches, any of which silences everything: `quilt telemetry off`,
+`QUILT_TELEMETRY=0` (per process, useful in CI), or the standard
+`DO_NOT_TRACK=1`. CI environments never send anything. The full event list
+is in [docs/reference.md](docs/reference.md), and the entire implementation
+is one file: [src/telemetry.ts](src/telemetry.ts).
 
 ## Contributing
 

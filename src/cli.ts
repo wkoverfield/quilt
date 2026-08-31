@@ -20,7 +20,9 @@ import { runWatch, watcherRunning } from "./watch.js";
 import { DEFAULT_UI_PORT, openInBrowser, startUiServer } from "./ui.js";
 import {
   TELEMETRY_DISCLOSURE,
+  heartbeatEnabled,
   maybePromptForTelemetry,
+  maybeSendHeartbeat,
   recordEvent,
   telemetryDecided,
   telemetryEnabled,
@@ -598,9 +600,16 @@ program
   // of the resolution already reads, so it composes with sessions and hooks
   // unchanged. An explicit env var still wins if both are set.
   .option("--as <id>", "act as this actor for this command (sets QUILT_ACTOR; an explicit QUILT_ACTOR env var wins)")
-  .hook("preAction", (thisCommand) => {
+  .hook("preAction", (thisCommand, actionCommand) => {
     const as = thisCommand.opts().as as string | undefined;
     if (as && !process.env.QUILT_ACTOR) process.env.QUILT_ACTOR = as;
+    // Daily heartbeat rides on ordinary command entries only. Every hook-*
+    // command is the hot per-edit path and must stay fast, offline, and
+    // uninstrumented. Setup sends its own heartbeat after printing the
+    // disclosure: on a fresh install the first send must not precede the
+    // first time the user could have read what is sent.
+    const name = actionCommand.name();
+    if (!name.startsWith("hook-") && name !== "setup") maybeSendHeartbeat();
   });
 
 program
@@ -792,14 +801,23 @@ program
       );
     }
 
-    // The one-time opt-in question (TTY only, never asked twice, never in CI).
+    // Heartbeat disclosure prints unconditionally (TTY or not): default-on
+    // telemetry that never announces itself is not disclosed telemetry.
+    process.stdout.write(
+      "\nTelemetry: a daily anonymous heartbeat (quilt version, OS, random id) is " +
+        (heartbeatEnabled() ? "on" : pc.dim("off")) + ".\n" +
+        pc.dim("  Everything else is opt-in. Turn it all off: quilt telemetry off\n"),
+    );
+    maybeSendHeartbeat();
+    // The one-time command-events opt-in question (TTY only, never asked
+    // twice, never in CI).
     const consented = await maybePromptForTelemetry();
     if (consented !== null) {
       process.stdout.write(
         pc.dim(
           consented
             ? "  Thanks. Anonymous counts only; opt out any time: quilt telemetry off\n"
-            : "  Telemetry stays off. Opt in any time: quilt telemetry on\n",
+            : "  Command events stay off. Opt in any time: quilt telemetry on\n",
         ),
       );
     }
@@ -2130,18 +2148,25 @@ program
 
 program
   .command("telemetry")
-  .description("Show or change anonymous usage telemetry (off by default, opt-in)")
+  .description("Show or change anonymous usage telemetry (daily heartbeat on by default; command events opt-in)")
   .argument("[state]", "on | off; omit to show the current state")
   .action((state?: string) => {
     if (state === undefined || state === "status") {
-      const effective = telemetryEnabled();
+      const heartbeat = heartbeatEnabled();
+      const events = telemetryEnabled();
+      const dnt = process.env.DO_NOT_TRACK;
       const source = process.env.QUILT_TELEMETRY !== undefined
         ? ` (forced by QUILT_TELEMETRY=${process.env.QUILT_TELEMETRY})`
-        : telemetryDecided()
-          ? ""
-          : " (never asked; `quilt setup` asks once)";
+        : dnt !== undefined && dnt !== "" && dnt !== "0" && dnt !== "false"
+          ? " (DO_NOT_TRACK is set)"
+          : process.env.CI
+            ? " (CI environment)"
+            : telemetryDecided()
+              ? " (your stored decision)"
+              : " (defaults; `quilt telemetry off` turns everything off)";
       process.stdout.write(
-        `Telemetry: ${effective ? pc.green("on") : pc.dim("off")}${pc.dim(source)}\n` +
+        `Heartbeat: ${heartbeat ? pc.green("on") : pc.dim("off")}   ` +
+          `Command events: ${events ? pc.green("on") : pc.dim("off")}${pc.dim(source)}\n` +
           pc.dim("  " + TELEMETRY_DISCLOSURE + "\n"),
       );
       return;
@@ -2149,7 +2174,7 @@ program
     if (state !== "on" && state !== "off") fail(`expected "on" or "off", got "${state}"`);
     writeTelemetryConfig(state === "on");
     process.stdout.write(
-      (state === "on" ? pc.green("✓ ") + "Telemetry on. " : pc.green("✓ ") + "Telemetry off. ") +
+      (state === "on" ? pc.green("✓ ") + "Telemetry on (heartbeat + command events). " : pc.green("✓ ") + "Telemetry off (heartbeat included). ") +
         pc.dim(state === "on" ? "Anonymous counts only; `quilt telemetry off` reverses this.\n" : "Nothing will be sent.\n"),
     );
     if (process.env.QUILT_TELEMETRY !== undefined) {
