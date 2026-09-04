@@ -32,7 +32,7 @@ agents, see [orchestrators.md](orchestrators.md).
 | `quilt mcp` | Run the MCP server (stdio) for agent integration. |
 | `quilt doctor [--json]` | Health check: is Quilt wired, is identity set, and is capture actually flowing? Also checks the installed version against npm (cached daily, silent offline), the system git (2.18+ needed), and live-tests that the wired MCP server starts and lists its tools. |
 | `quilt update [--check]` | Update to the latest published version. Detects how Quilt was installed (npm/pnpm/bun) and runs the right command, or prints it when the installer can't be detected confidently. `--check` only reports (non-zero exit when behind). |
-| `quilt telemetry [on\|off]` | Show or change anonymous usage telemetry. Off by default; `quilt setup` asks once on a TTY. See [Telemetry](#telemetry). |
+| `quilt telemetry [on\|off]` | Show or change anonymous usage telemetry. A daily heartbeat is on by default; command events are opt-in (`quilt setup` asks once on a TTY). `off` silences everything. See [Telemetry](#telemetry). |
 | `quilt whoami` | Show the active actor and session. |
 | `quilt end` | End the active session. |
 
@@ -242,12 +242,17 @@ repos on Windows aren't handled yet.
 
 ## Telemetry
 
-Anonymous usage telemetry is off by default and strictly opt-in: `quilt setup`
-asks once, on an interactive TTY only (never in CI, never over a pipe), and
-records the decision either way so it never asks twice. Toggle any time with
-`quilt telemetry on|off`; `quilt telemetry` shows the current state.
+Telemetry has two tiers. The daily heartbeat is on by default: at most once
+per 24 hours, the first ordinary quilt command of the day sends a single
+`quilt_heartbeat` event carrying only the shared envelope described below.
+Command events are strictly opt-in: `quilt setup` asks once, on an
+interactive TTY only (never in CI, never over a pipe), and records the
+decision either way so it never asks twice. Toggle everything with
+`quilt telemetry on|off`; `quilt telemetry` shows the state of both tiers
+and why. Saying no at the prompt, or running `quilt telemetry off`, turns
+off both tiers, including the heartbeat.
 
-What is sent when enabled, and only then:
+Command events, sent only after opt-in:
 
 | Event | When | Properties |
 | --- | --- | --- |
@@ -257,17 +262,20 @@ What is sent when enabled, and only then:
 | `quilt_commit_mine` | `quilt commit --mine` succeeds | count of files committed |
 | `quilt_escalation` | `quilt escalate` | none |
 
-Every event also carries the quilt version, the platform (`darwin`/`linux`),
-the Node major version, and a random anonymous id generated locally (stored in
-`~/.config/quilt/telemetry.json`, kept across on/off toggles). Nothing else:
-no code, file paths, repo names, actor ids, branch names, commit messages, or
-claim intents. The hot capture path (`hook-pre`/`hook-post`) is never
-instrumented.
+Every payload, heartbeat included, carries the same envelope and nothing
+else: the quilt version, the platform (`darwin`/`linux`), the Node major
+version, and a random anonymous id generated locally (stored in
+`~/.config/quilt/telemetry.json`, kept across on/off toggles, meaningless
+outside these events). No code, file paths, repo names, actor ids, branch
+names, commit messages, or claim intents. The hot capture path (every
+`hook-*` command) is never instrumented and never sends anything.
 
-Environment variables: `QUILT_TELEMETRY=0` forces telemetry off for a process
-regardless of the stored decision (set it in CI); `QUILT_TELEMETRY=1` forces
-it on the same way. Before a stored decision exists, forced telemetry uses an
-ephemeral id scoped to that CLI process and does not write consent state. Events
-are posted to PostHog by a short-lived detached
-process, so no quilt command ever waits on the network, and delivery failures
-are silent.
+Environment variables: `QUILT_TELEMETRY=0` forces everything off for a
+process regardless of the stored decision; `QUILT_TELEMETRY=1` forces
+everything on the same way and wins over the signals below. The standard
+`DO_NOT_TRACK=1` convention is honored and silences both tiers, and a set
+`CI` variable does the same, so pipelines never send anything. Before a
+stored decision exists, forced telemetry uses an ephemeral id scoped to
+that CLI process and does not write consent state. Payloads are posted to
+PostHog by a short-lived detached process, so no quilt command ever waits
+on the network, and delivery failures are silent.

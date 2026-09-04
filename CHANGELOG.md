@@ -4,6 +4,23 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-08-31
+
+### Changed
+
+- **Telemetry now has a default-on daily heartbeat.** Once per 24 hours, the
+  first ordinary quilt command of the day sends a single anonymous
+  `quilt_heartbeat` event: quilt version, OS, Node major, and a random
+  locally-generated id. Nothing else, ever. Command-level events remain
+  strictly opt-in exactly as before. Any opt-out silences everything,
+  including the heartbeat: `quilt telemetry off`, a "no" at the setup
+  prompt (past or future), `QUILT_TELEMETRY=0`, or the newly-honored
+  `DO_NOT_TRACK=1`. CI environments never send anything. `quilt setup`
+  discloses the heartbeat unconditionally, `quilt telemetry` now reports
+  both tiers and why, and the `hook-*` hot path stays uninstrumented.
+  Rationale and full payload list: the Telemetry section of
+  [docs/reference.md](docs/reference.md).
+
 ## [0.6.0] - 2026-08-14
 
 ### Added
