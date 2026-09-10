@@ -40,6 +40,12 @@ A global `--as <id>` sets your actor for any command (the per-command form of `Q
 
 Run `quilt --help` or `quilt <command> --help` for the full flag list.
 
+Any ordinary command also prints a one-line stderr notice, at most once a
+day, when the cached registry check shows a newer release. The foreground
+never waits on the network (a stale cache refreshes in a detached process),
+`hook-*` commands and `quilt mcp` never print it, and `QUILT_NO_UPDATE_CHECK=1`
+silences every version check.
+
 ## Provenance review: `quilt ui`
 
 In the **Who wrote what** table, select a changed file to expand its live
