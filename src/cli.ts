@@ -32,7 +32,7 @@ import { acquireClaims, acquireClaimsWait, releaseClaims, listClaims, claimLabel
 import { recordOutcome, takeOwnership } from "./outcomes.js";
 import { runMcpServer } from "./mcp.js";
 import { diagnose, probeMcpServer, type Check, type McpProbeResult } from "./doctor.js";
-import { checkLatestVersion, compareVersions, detectInstallManager, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
+import { checkLatestVersion, compareVersions, detectInstallManager, everydayNudge, versionStanding, NPM_UPDATE_COMMAND, MIN_SAFE_REASON } from "./update.js";
 import { parseHookInput, runHookPre, runHookPost, sessionActorId, agentActorId, parseCodexHookInput, codexActorId, runCodexHookPre, runCodexHookPost, type CodexHookInput } from "./hooks.js";
 import {
   PASSTHROUGH_ENV,
@@ -609,7 +609,15 @@ program
     // disclosure: on a fresh install the first send must not precede the
     // first time the user could have read what is sent.
     const name = actionCommand.name();
-    if (!name.startsWith("hook-") && name !== "setup") maybeSendHeartbeat();
+    if (name.startsWith("hook-")) return;
+    if (name !== "setup") maybeSendHeartbeat();
+    // The everyday staleness nudge rides the same entries, once a day, on
+    // stderr so stdout stays parseable. setup/doctor/update print their own
+    // richer check; the MCP server owns its stdio for the protocol.
+    if (!process.env.QUILT_NO_UPDATE_CHECK && !["setup", "doctor", "update", "mcp"].includes(name)) {
+      const line = everydayNudge(VERSION);
+      if (line) process.stderr.write(pc.yellow("⚠ ") + line + "\n");
+    }
   });
 
 program

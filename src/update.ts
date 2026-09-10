@@ -15,6 +15,7 @@
 //  - NEVER called from the hook path (hook-pre/hook-post) — those run on every
 //    edit and must stay fast and offline.
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -158,6 +159,80 @@ export async function checkLatestVersion(opts: CheckLatestOptions = {}): Promise
   }
   writeCache(cachePath, { latest, checkedAt: now });
   return latest;
+}
+
+/** The cached latest version without touching the network: null when there
+ * is no cache or the last check failed. Staleness is the caller's concern. */
+export function cachedLatestVersion(cachePath: string = versionCachePath()): { latest: string | null; stale: boolean } | null {
+  const cached = readCache(cachePath);
+  if (!cached) return null;
+  return { latest: cached.latest, stale: Date.now() - cached.checkedAt >= CHECK_TTL_MS };
+}
+
+/**
+ * Refresh the version cache from a detached child process so the foreground
+ * command never waits on the registry. The child writes the same cache shape
+ * checkLatestVersion writes (a failed fetch caches null), so an offline
+ * machine re-spawns at most once per TTL. Fail-silent.
+ */
+export function refreshCacheDetached(cachePath: string = versionCachePath()): void {
+  try {
+    mkdirSync(dirname(cachePath), { recursive: true });
+    const script =
+      "const fs=require('node:fs');" +
+      "fetch(process.env.QUILT_U_URL,{headers:{accept:'application/json'},signal:AbortSignal.timeout(4000)})" +
+      ".then(r=>r.ok?r.json():null).then(b=>b&&typeof b.version==='string'?b.version:null).catch(()=>null)" +
+      ".then(latest=>{try{fs.writeFileSync(process.env.QUILT_U_CACHE,JSON.stringify({latest,checkedAt:Date.now()}))}catch{}})" +
+      ".finally(()=>process.exit(0))";
+    const child = spawn(process.execPath, ["-e", script], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { QUILT_U_URL: REGISTRY_LATEST_URL, QUILT_U_CACHE: cachePath },
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    /* never in the way */
+  }
+}
+
+/** Where the once-a-day "you are behind" stamp lives. */
+export function nudgeStampPath(): string {
+  return join(dirname(versionCachePath()), "nudged.json");
+}
+
+/**
+ * The everyday staleness nudge: the one line to print (or null), computed
+ * from the cache alone. When the cache is missing or stale, a detached
+ * refresh is kicked off so a later command can answer. The line is rate
+ * limited to once per TTL via a stamp so a busy day sees it once, not on
+ * every command. Never blocks, never throws.
+ */
+export function everydayNudge(current: string, opts: { cachePath?: string; stampPath?: string; now?: number } = {}): string | null {
+  try {
+    const cachePath = opts.cachePath ?? versionCachePath();
+    const stampPath = opts.stampPath ?? nudgeStampPath();
+    const now = opts.now ?? Date.now();
+    const cached = cachedLatestVersion(cachePath);
+    if (!cached || cached.stale) refreshCacheDetached(cachePath);
+    if (!cached?.latest || versionStanding(current, cached.latest) === "current") return null;
+    try {
+      const stamp = JSON.parse(readFileSync(stampPath, "utf8")) as { nudgedAt?: number; latest?: string };
+      if (typeof stamp.nudgedAt === "number" && stamp.latest === cached.latest && now - stamp.nudgedAt < CHECK_TTL_MS) return null;
+    } catch {
+      /* no stamp yet, or unreadable: nudge */
+    }
+    try {
+      mkdirSync(dirname(stampPath), { recursive: true });
+      writeFileSync(stampPath, JSON.stringify({ nudgedAt: now, latest: cached.latest }));
+    } catch {
+      /* an unwritable stamp just means the nudge repeats; still correct */
+    }
+    return `quilt ${current} is behind the latest release (${cached.latest}). Update: quilt update`;
+  } catch {
+    return null;
+  }
 }
 
 export interface InstallManager {

@@ -4,6 +4,21 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.2] - 2026-09-10
+
+### Added
+
+- **Everyday update nudge.** Being behind the latest release used to surface
+  only in `quilt setup` and `quilt doctor`, which a wired-once install may
+  never run again. Now any ordinary command prints a one-line notice on
+  stderr, at most once per day, when the cached registry check says a newer
+  version exists: `quilt 0.6.1 is behind the latest release (0.6.2). Update:
+  quilt update`. The check itself never blocks: the foreground reads only
+  the daily cache, and a stale cache is refreshed by a detached process for
+  the next command to use. stdout stays untouched, the `hook-*` hot path and
+  the MCP server never print it, and `QUILT_NO_UPDATE_CHECK=1` silences it
+  along with every other version check.
+
 ## [0.6.1] - 2026-08-31
 
 ### Changed
