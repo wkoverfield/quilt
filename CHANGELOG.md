@@ -4,6 +4,15 @@ All notable changes to Quilt are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and the project aims to follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.3] - 2026-10-14
+
+### Security
+
+- Raised `@modelcontextprotocol/sdk` to `^1.32.1` (fixes a high-severity
+  advisory in versions below 1.31.0) and refreshed the packages beneath it to
+  patched versions, including `ip-address`. `npm audit` reports no known
+  vulnerabilities.
+
 ## [0.6.2] - 2026-09-10
 
 ### Added
