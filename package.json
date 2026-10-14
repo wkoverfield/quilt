@@ -47,7 +47,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "commander": "^15.0.0",
     "picocolors": "^1.1.1",
     "tree-sitter-wasms": "0.1.13",
